@@ -581,7 +581,6 @@ typedef struct RenderCommand {
             VkFence fence;
             int frame_index;
             bool deferred;
-            QemuEvent *submitted; /* signaled after vkQueueSubmit */
             VkSemaphore chain_semaphore;
             bool chain_wait;
             bool chain_signal;
@@ -976,6 +975,7 @@ typedef struct PGRAPHVkState {
     VkSemaphore frame_semaphores[NUM_SUBMIT_FRAMES];
     VkFence frame_fences[NUM_SUBMIT_FRAMES];
     bool frame_submitted[NUM_SUBMIT_FRAMES];
+    bool frame_enqueued[NUM_SUBMIT_FRAMES];
     VkSemaphore stall_chain_semaphore;
     bool stall_chain_pending;
     int current_frame;

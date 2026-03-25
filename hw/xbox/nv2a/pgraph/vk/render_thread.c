@@ -161,11 +161,6 @@ static void process_finish(PGRAPHVkState *r, RenderCommand *cmd)
     qatomic_set(&r->frame_submitted[cmd->finish.frame_index], true);
     qatomic_inc(&r->submit_count);
 
-    /* Signal that vkQueueSubmit is done — PFIFO can safely cycle frames */
-    if (cmd->finish.submitted) {
-        qemu_event_set(cmd->finish.submitted);
-    }
-
     if (!cmd->finish.deferred) {
         VK_CHECK(vkWaitForFences(r->device, 1, &cmd->finish.fence,
                                  VK_TRUE, UINT64_MAX));

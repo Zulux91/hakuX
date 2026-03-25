@@ -542,6 +542,7 @@ void pgraph_vk_finalize_pipelines(PGRAPHState *pg)
 
     pgraph_vk_render_thread_wait_idle(r);
     for (int i = 0; i < NUM_SUBMIT_FRAMES; i++) {
+        r->frame_enqueued[i] = false;
         if (r->frame_submitted[i]) {
             VK_CHECK(vkWaitForFences(r->device, 1, &r->frame_fences[i],
                                      VK_TRUE, UINT64_MAX));
@@ -2068,6 +2069,7 @@ void pgraph_vk_flush_all_frames(PGRAPHState *pg)
     PGRAPHVkState *r = pg->vk_renderer_state;
     pgraph_vk_render_thread_wait_idle(r);
     for (int i = 0; i < NUM_SUBMIT_FRAMES; i++) {
+        r->frame_enqueued[i] = false;
         if (r->frame_submitted[i]) {
             VK_CHECK(vkWaitForFences(r->device, 1, &r->frame_fences[i],
                                      VK_TRUE, UINT64_MAX));
@@ -2146,6 +2148,8 @@ void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
 
     assert(!r->in_draw);
     assert(r->debug_depth == 0);
+
+    int deferred_frame = -1;
 
     if (r->in_command_buffer) {
         nv2a_profile_inc_counter(finish_reason_to_counter_enum[finish_reason]);
@@ -2266,11 +2270,8 @@ void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
             gpu_ts_readback(r, r->current_frame);
         } else {
             QemuEvent finish_event;
-            QemuEvent submitted_event;
             if (!deferred) {
                 qemu_event_init(&finish_event, false);
-            } else {
-                qemu_event_init(&submitted_event, false);
             }
 
             RenderCommand *cmd = g_new0(RenderCommand, 1);
@@ -2302,17 +2303,22 @@ void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
             }
 
             cmd->finish.deferred = deferred;
-            cmd->finish.submitted = deferred ? &submitted_event : NULL;
             cmd->finish.completion = deferred ? NULL : &finish_event;
+
+            if (deferred) {
+                deferred_frame = r->current_frame;
+                r->frame_enqueued[r->current_frame] = true;
+            }
+
             pgraph_vk_render_thread_enqueue(r, cmd);
 
             if (deferred) {
-                /* Wait for render thread to complete vkQueueSubmit (fast)
-                 * but not for GPU completion (slow). This ensures
-                 * frame_submitted[] is set and fences are valid before
-                 * we cycle to the next frame slot. */
-                qemu_event_wait(&submitted_event);
-                qemu_event_destroy(&submitted_event);
+                /* Spin-wait for render thread to complete vkQueueSubmit.
+                 * Faster than QemuEvent (no futex/eventfd syscall overhead).
+                 * Typically completes in <100μs. */
+                while (!qatomic_read(&r->frame_submitted[deferred_frame])) {
+                    sched_yield();
+                }
             }
 
             if (!deferred) {
@@ -2355,6 +2361,18 @@ void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
             r->current_framebuffer = VK_NULL_HANDLE;
 
             int next_frame = (r->current_frame + 1) % r->num_active_frames;
+
+            /* If the next frame slot was enqueued for deferred submission
+             * but the render thread hasn't completed vkQueueSubmit yet,
+             * spin-wait until it does. With 3 frame slots this rarely
+             * triggers since there's 2 frames of pipeline headroom. */
+            if (r->frame_enqueued[next_frame] &&
+                !qatomic_read(&r->frame_submitted[next_frame])) {
+                while (!qatomic_read(&r->frame_submitted[next_frame])) {
+                    sched_yield();
+                }
+            }
+            r->frame_enqueued[next_frame] = false;
 
             if (qatomic_read(&r->frame_submitted[next_frame])) {
                 VK_CHECK(vkWaitForFences(r->device, 1,
@@ -2439,6 +2457,7 @@ void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
     }
 
     NV2AState *d = container_of(pg, NV2AState, pgraph);
+
     pgraph_vk_process_pending_reports_internal(d);
 
     NV2A_PHASE_TIMER_END(finish);
