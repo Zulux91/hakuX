@@ -112,11 +112,34 @@ void pgraph_vk_snapshot_state(PGRAPHState *pg, RenderCommandSnapshot *snap)
 
 static void process_finish(PGRAPHVkState *r, RenderCommand *cmd)
 {
+    /* Build aux CB submit info, optionally waiting on chain semaphore */
+    VkSemaphore aux_wait_sems[1];
+    VkPipelineStageFlags aux_wait_stages[1];
+    uint32_t aux_wait_count = 0;
+
+    if (cmd->finish.chain_wait) {
+        aux_wait_sems[0] = cmd->finish.chain_semaphore;
+        aux_wait_stages[0] = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+        aux_wait_count = 1;
+    }
+
+    /* Build main CB submit info, optionally signaling chain semaphore */
+    VkSemaphore main_signal_sems[1];
+    uint32_t main_signal_count = 0;
+
+    if (cmd->finish.chain_signal) {
+        main_signal_sems[0] = cmd->finish.chain_semaphore;
+        main_signal_count = 1;
+    }
+
     VkSubmitInfo submit_infos[] = {
         {
             .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
             .commandBufferCount = 1,
             .pCommandBuffers = &cmd->finish.aux_command_buffer,
+            .waitSemaphoreCount = aux_wait_count,
+            .pWaitSemaphores = aux_wait_sems,
+            .pWaitDstStageMask = aux_wait_stages,
             .signalSemaphoreCount = 1,
             .pSignalSemaphores = &cmd->finish.semaphore,
         },
@@ -127,6 +150,8 @@ static void process_finish(PGRAPHVkState *r, RenderCommand *cmd)
             .waitSemaphoreCount = 1,
             .pWaitSemaphores = &cmd->finish.semaphore,
             .pWaitDstStageMask = &cmd->finish.wait_stage,
+            .signalSemaphoreCount = main_signal_count,
+            .pSignalSemaphores = main_signal_sems,
         }
     };
 
@@ -135,6 +160,11 @@ static void process_finish(PGRAPHVkState *r, RenderCommand *cmd)
                            submit_infos, cmd->finish.fence));
     qatomic_set(&r->frame_submitted[cmd->finish.frame_index], true);
     qatomic_inc(&r->submit_count);
+
+    /* Signal that vkQueueSubmit is done — PFIFO can safely cycle frames */
+    if (cmd->finish.submitted) {
+        qemu_event_set(cmd->finish.submitted);
+    }
 
     if (!cmd->finish.deferred) {
         VK_CHECK(vkWaitForFences(r->device, 1, &cmd->finish.fence,
