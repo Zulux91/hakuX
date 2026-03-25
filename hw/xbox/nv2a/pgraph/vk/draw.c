@@ -32,7 +32,7 @@ static bool g_xemu_draw_merge = false;
 static bool g_xemu_bindless_textures = false;
 static bool g_xemu_async_compile = false;
 static bool g_xemu_frame_skip = false;
-static int g_xemu_submit_frames = 2;
+static int g_xemu_submit_frames = 3;
 
 struct OptBisectStats g_opt_stats;
 
@@ -137,7 +137,7 @@ static void opt_stats_log_and_reset(void)
                 g_opt_stats.draws_skipped_pending,
                 g_opt_stats.draws_skipped_frameskip);
         __android_log_print(ANDROID_LOG_INFO, "xemu-stall",
-                "RPBreaks:%d Finish:%d(vtx%d sc%d sd%d buf%d fb%d pres%d flip%d flu%d stl%d stlDef%d) InlClr:%d/%d PreDL:%d",
+                "RPBreaks:%d Finish:%d(vtx%d sc%d sd%d buf%d fb%d pres%d flip%d flu%d stl%d stlDef%d stlBat%d) InlClr:%d/%d PreDL:%d",
                 g_opt_stats.render_pass_breaks,
                 g_opt_stats.finish_calls,
                 g_opt_stats.finish_vtx_dirty,
@@ -150,6 +150,7 @@ static void opt_stats_log_and_reset(void)
                 g_opt_stats.finish_flush,
                 g_opt_stats.finish_stalled,
                 g_opt_stats.stall_deferred,
+                g_opt_stats.stall_batched,
                 g_opt_stats.inline_clear_hits,
                 g_opt_stats.inline_clear_misses,
                 g_opt_stats.predownload_hits);

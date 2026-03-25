@@ -182,6 +182,11 @@ void pgraph_vk_process_pending_reports(NV2AState *d)
     uint32_t *dma_put = &d->pfifo.regs[NV_PFIFO_CACHE1_DMA_PUT];
 
     if (*dma_get == *dma_put && r->in_command_buffer) {
-        pgraph_vk_finish(pg, VK_FINISH_REASON_STALLED);
+        if (pg->draw_time != r->last_stall_draw_time) {
+            pgraph_vk_finish(pg, VK_FINISH_REASON_STALLED);
+            r->last_stall_draw_time = pg->draw_time;
+        } else {
+            OPT_STAT_INC(stall_batched);
+        }
     }
 }

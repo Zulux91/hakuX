@@ -128,6 +128,7 @@ struct OptBisectStats {
     int finish_flush;
     int finish_stalled;
     int stall_deferred;
+    int stall_batched;
     int predownload_hits;
 };
 extern struct OptBisectStats g_opt_stats;
@@ -967,7 +968,7 @@ typedef struct PGRAPHVkState {
     VmaAllocator allocator;
     uint32_t allocator_last_submit_index;
 
-#define NUM_SUBMIT_FRAMES 2
+#define NUM_SUBMIT_FRAMES 3
     int num_active_frames;
     VkQueue queue;
     VkCommandPool command_pool;
@@ -983,6 +984,7 @@ typedef struct PGRAPHVkState {
     VkSemaphore command_buffer_semaphore;
     VkFence command_buffer_fence;
     unsigned int command_buffer_start_time;
+    unsigned int last_stall_draw_time;
     bool in_command_buffer;
 #if OPT_BINDLESS_TEXTURES
     bool bindless_set_bound;
