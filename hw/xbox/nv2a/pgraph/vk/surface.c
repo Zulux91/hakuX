@@ -989,6 +989,15 @@ static void download_surface(NV2AState *d, SurfaceBinding *surface, bool force)
         return;
     }
 
+    /* Skip if surface was already downloaded at current generation. This
+     * avoids redundant downloads when the deferred path has already synced
+     * the surface data to VRAM but pg_surface->draw_dirty hasn't been
+     * cleared yet. */
+    if (!surface->draw_dirty &&
+        surface->download_generation == surface->draw_generation) {
+        return;
+    }
+
     // FIXME: Respect write enable at last TOU?
 
     download_surface_to_buffer(d, surface, d->vram_ptr + surface->vram_addr);
