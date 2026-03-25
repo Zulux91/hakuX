@@ -564,8 +564,7 @@ static void download_surface_to_buffer(NV2AState *d, SurfaceBinding *surface,
         surface->host_fmt.vk_format == VK_FORMAT_D24_UNORM_S8_UINT ||
         surface->host_fmt.vk_format == VK_FORMAT_D32_SFLOAT_S8_UINT;
 
-    bool use_compute_to_swizzle = OPT_COMPUTE_SWIZZLE &&
-                                   surface->swizzle &&
+    bool use_compute_to_swizzle = surface->swizzle &&
                                    surface->fmt.bytes_per_pixel == 4 &&
                                    !use_compute_to_convert_depth_stencil_format;
 
@@ -1952,8 +1951,7 @@ void pgraph_vk_upload_surface_data(NV2AState *d, SurfaceBinding *surface,
         surface->host_fmt.vk_format == VK_FORMAT_D24_UNORM_S8_UINT ||
         surface->host_fmt.vk_format == VK_FORMAT_D32_SFLOAT_S8_UINT;
 
-    bool use_compute_to_unswizzle = OPT_COMPUTE_SWIZZLE &&
-                                     surface->swizzle &&
+    bool use_compute_to_unswizzle = surface->swizzle &&
                                      surface->fmt.bytes_per_pixel == 4 &&
                                      !use_compute_to_convert_depth_stencil_format;
 

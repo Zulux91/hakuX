@@ -541,12 +541,10 @@ void pgraph_vk_finalize_pipelines(PGRAPHState *pg)
                                      VK_TRUE, UINT64_MAX));
             r->frame_submitted[i] = false;
         }
-#if OPT_DEFERRED_FENCES && OPT_N_BUFFERED_SUBMIT
         for (int j = 0; j < r->deferred_framebuffer_count[i]; j++) {
             vkDestroyFramebuffer(r->device, r->deferred_framebuffers[i][j], NULL);
         }
         r->deferred_framebuffer_count[i] = 0;
-#endif
         vkDestroyFence(r->device, r->frame_fences[i], NULL);
         vkDestroySemaphore(r->device, r->frame_semaphores[i], NULL);
     }
@@ -1976,16 +1974,12 @@ static void begin_render_pass(PGRAPHState *pg)
 
     assert(r->current_framebuffer != VK_NULL_HANDLE);
 
-#if OPT_LOAD_OPS
     RenderPassState begin_state;
     init_render_pass_state(pg, &begin_state);
     begin_state.color_load_op = get_optimal_color_load_op(r);
     begin_state.zeta_load_op = get_optimal_zeta_load_op(r);
     begin_state.stencil_load_op = begin_state.zeta_load_op;
     r->begin_render_pass = get_render_pass(r, &begin_state);
-#else
-    r->begin_render_pass = r->render_pass;
-#endif
 
     VkRenderPassBeginInfo render_pass_begin_info = {
         .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
@@ -2342,7 +2336,6 @@ void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
          * submits and waits; PFIFO manages frame indices.
          */
         if (!r->is_render_thread_context) {
-#if OPT_DEFERRED_FENCES && OPT_N_BUFFERED_SUBMIT
         if (OPT_ALWAYS_DEFERRED_FENCES ||
             finish_reason == VK_FINISH_REASON_FLIP_STALL ||
             finish_reason == VK_FINISH_REASON_PRESENTING) {
@@ -2434,21 +2427,6 @@ void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
             r->command_buffer_fence = r->frame_fences[next_frame];
             destroy_framebuffers(pg);
         }
-#else
-        pgraph_vk_render_thread_wait_idle(r);
-        VK_CHECK(vkWaitForFences(r->device, 1, &r->command_buffer_fence,
-                                 VK_TRUE, UINT64_MAX));
-        gpu_ts_readback(r, r->current_frame);
-        r->frame_submitted[r->current_frame] = false;
-
-        int next_frame = (r->current_frame + 1) % r->num_active_frames;
-        r->current_frame = next_frame;
-        r->command_buffer = r->command_buffers[next_frame * 2];
-        r->aux_command_buffer = r->command_buffers[next_frame * 2 + 1];
-        r->command_buffer_semaphore = r->frame_semaphores[next_frame];
-        r->command_buffer_fence = r->frame_fences[next_frame];
-        destroy_framebuffers(pg);
-#endif
         } /* !is_render_thread_context */
 
 #if OPT_ALWAYS_DEFERRED_FENCES

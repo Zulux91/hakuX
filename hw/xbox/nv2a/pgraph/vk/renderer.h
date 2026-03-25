@@ -44,20 +44,13 @@
 
 #define HAVE_EXTERNAL_MEMORY 1
 
-#define OPT_DISPLAY_DOUBLE_BUFFER 1
-#define NUM_DISPLAY_IMAGES (OPT_DISPLAY_DOUBLE_BUFFER ? 2 : 1)
+#define NUM_DISPLAY_IMAGES 2
 
-#define OPT_N_BUFFERED_SUBMIT   1
-#define OPT_DEFERRED_FENCES     1
 #define OPT_DYNAMIC_STATES      1
 #define OPT_DYNAMIC_BLEND       1
-#define OPT_LOAD_OPS            1
-#define OPT_CLEAR_REFACTOR      1
-#define OPT_COMPUTE_SWIZZLE     1
 #define OPT_TEX_NONDRAW_CMD     1
 #define OPT_SURF_BATCH_CREATE   1
 #define OPT_SURF_BATCH_UPLOAD   1
-#define OPT_TRIPLE_BUFFERING    1
 #define OPT_LARGER_POOLS        1
 #define NUM_GFX_DESCRIPTOR_SETS (OPT_LARGER_POOLS ? 16384 : 1024)
 #define OPT_ALWAYS_DEFERRED_FENCES 1
@@ -173,10 +166,6 @@ extern struct OptBisectStats g_opt_stats;
  */
 #define OPT_SYNC_RANGE_SKIP     1
 
-#if OPT_ALWAYS_DEFERRED_FENCES
-_Static_assert(OPT_TRIPLE_BUFFERING && OPT_N_BUFFERED_SUBMIT && OPT_DEFERRED_FENCES,
-               "OPT_ALWAYS_DEFERRED_FENCES requires triple buffering and deferred fences");
-#endif
 
 typedef struct QueueFamilyIndices {
     int queue_family;
@@ -1005,7 +994,7 @@ typedef struct PGRAPHVkState {
     VmaAllocator allocator;
     uint32_t allocator_last_submit_index;
 
-#define NUM_SUBMIT_FRAMES (OPT_N_BUFFERED_SUBMIT ? (OPT_TRIPLE_BUFFERING ? 3 : 2) : 1)
+#define NUM_SUBMIT_FRAMES 2
     int num_active_frames;
     VkQueue queue;
     VkCommandPool command_pool;
@@ -1046,10 +1035,8 @@ typedef struct PGRAPHVkState {
     int fb_cache_count;
     VkFramebuffer current_framebuffer;
 
-#if OPT_DEFERRED_FENCES && OPT_N_BUFFERED_SUBMIT
     VkFramebuffer deferred_framebuffers[NUM_SUBMIT_FRAMES][MAX_FRAMEBUFFERS];
     int deferred_framebuffer_count[NUM_SUBMIT_FRAMES];
-#endif
 
     VkRenderPass render_pass;
     VkRenderPass begin_render_pass;

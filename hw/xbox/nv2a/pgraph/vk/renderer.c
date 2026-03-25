@@ -926,7 +926,6 @@ static int pgraph_vk_get_framebuffer_surface(NV2AState *d)
 
 #if HAVE_EXTERNAL_MEMORY
     if (r->display.use_external_memory) {
-#if OPT_DISPLAY_DOUBLE_BUFFER
         DisplayImage *ready = &r->display.images[r->display.display_idx];
         if (ready->valid) {
             if (ready->fence_submitted) {
@@ -942,13 +941,11 @@ static int pgraph_vk_get_framebuffer_surface(NV2AState *d)
             qemu_mutex_unlock(&d->pfifo.lock);
             return tex;
         }
-#endif
         qemu_event_reset(&d->pgraph.sync_complete);
         qatomic_set(&pg->sync_pending, true);
         pfifo_kick(d);
         qemu_mutex_unlock(&d->pfifo.lock);
         qemu_event_wait(&d->pgraph.sync_complete);
-#if OPT_DISPLAY_DOUBLE_BUFFER
         ready = &r->display.images[r->display.display_idx];
         if (ready->valid && ready->fence_submitted) {
             VK_CHECK(vkWaitForFences(r->device, 1, &ready->fence,
@@ -956,9 +953,6 @@ static int pgraph_vk_get_framebuffer_surface(NV2AState *d)
             ready->fence_submitted = false;
         }
         return ready->valid ? ready->gl_texture_id : 0;
-#else
-        return r->display.images[0].gl_texture_id;
-#endif
     }
     qemu_mutex_unlock(&d->pfifo.lock);
     pgraph_vk_wait_for_surface_download(surface);

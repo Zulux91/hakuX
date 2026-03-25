@@ -1087,7 +1087,6 @@ static bool create_single_display_image_resources(PGRAPHState *pg,
     };
     VK_CHECK(vkCreateFence(r->device, &fence_info, NULL, &img->fence));
 
-#if OPT_DISPLAY_DOUBLE_BUFFER
     {
         VkCommandBufferAllocateInfo cmd_alloc = {
             .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
@@ -1097,7 +1096,6 @@ static bool create_single_display_image_resources(PGRAPHState *pg,
         };
         VK_CHECK(vkAllocateCommandBuffers(r->device, &cmd_alloc, &img->cmd_buffer));
     }
-#endif
 
 #if HAVE_EXTERNAL_MEMORY && !defined(__ANDROID__)
     if (use_external_memory) {
@@ -1501,7 +1499,6 @@ static void render_display(PGRAPHState *pg, SurfaceBinding *surface)
     update_uniforms(pg, surface);
     update_descriptor_set(pg, surface);
 
-#if OPT_DISPLAY_DOUBLE_BUFFER
     if (img->fence_submitted) {
         VK_CHECK(vkWaitForFences(r->device, 1, &img->fence, VK_TRUE, UINT64_MAX));
         img->fence_submitted = false;
@@ -1513,9 +1510,6 @@ static void render_display(PGRAPHState *pg, SurfaceBinding *surface)
     };
     VK_CHECK(vkBeginCommandBuffer(img->cmd_buffer, &begin_info));
     VkCommandBuffer cmd = img->cmd_buffer;
-#else
-    VkCommandBuffer cmd = pgraph_vk_begin_single_time_commands(pg);
-#endif
 
     pgraph_vk_begin_debug_marker(r, cmd, RGBA_YELLOW,
         "Display Surface %08"HWADDR_PRIx, surface->vram_addr);
@@ -1610,7 +1604,6 @@ static void render_display(PGRAPHState *pg, SurfaceBinding *surface)
 
     pgraph_vk_end_debug_marker(r, cmd);
 
-#if OPT_DISPLAY_DOUBLE_BUFFER
     VK_CHECK(vkEndCommandBuffer(cmd));
 
     pgraph_vk_render_thread_wait_idle(r);
@@ -1638,9 +1631,6 @@ static void render_display(PGRAPHState *pg, SurfaceBinding *surface)
             render_count++;
         }
     }
-#endif
-#else
-    pgraph_vk_end_single_time_commands(pg, cmd);
 #endif
     nv2a_profile_inc_counter(NV2A_PROF_QUEUE_SUBMIT_5);
 
