@@ -500,10 +500,42 @@ static void download_surface_complete_deferred(NV2AState *d)
     }
 
     int64_t _t0 = nv2a_clock_ns();
-    pgraph_vk_finish(pg, VK_FINISH_REASON_SURFACE_DOWN);
+
+    if (r->display_predownload_pending) {
+        /*
+         * Downloads were pre-recorded into the flip stall's command buffer.
+         * Wait for that specific CB's fence instead of submitting a new one.
+         */
+        int fi = r->display_predownload_frame_index;
+        if (qatomic_read(&r->frame_submitted[fi])) {
+            VK_CHECK(vkWaitForFences(r->device, 1, &r->frame_fences[fi],
+                                     VK_TRUE, UINT64_MAX));
+        }
+    } else {
+        pgraph_vk_finish(pg, VK_FINISH_REASON_SURFACE_DOWN);
+    }
+
     int64_t _t1 = nv2a_clock_ns();
 
     complete_staged_downloads(r);
+
+    if (r->display_predownload_pending) {
+        SurfaceBinding *s = r->display_predownload_surface;
+        if (s) {
+            memory_region_set_client_dirty(d->vram, s->vram_addr,
+                                           s->pitch * s->height,
+                                           DIRTY_MEMORY_VGA);
+            memory_region_set_client_dirty(d->vram, s->vram_addr,
+                                           s->pitch * s->height,
+                                           DIRTY_MEMORY_NV2A_TEX);
+            s->download_pending = false;
+            s->download_row_count = 0;
+            s->draw_dirty = false;
+            s->download_generation = s->draw_generation;
+        }
+        r->display_predownload_pending = false;
+        r->display_predownload_surface = NULL;
+    }
 
     g_nv2a_stats.surf_working.df_flush_ns += _t1 - _t0;
     g_nv2a_stats.surf_working.df_read_ns += nv2a_clock_ns() - _t1;
@@ -977,6 +1009,46 @@ static void download_surface(NV2AState *d, SurfaceBinding *surface, bool force)
     surface->download_row_count = 0;
     surface->draw_dirty = false;
     surface->download_generation = surface->draw_generation;
+}
+
+bool pgraph_vk_prerecord_display_download(NV2AState *d)
+{
+    PGRAPHState *pg = &d->pgraph;
+    PGRAPHVkState *r = pg->vk_renderer_state;
+
+    if (r->display_predownload_pending) {
+        return false;
+    }
+
+    if (!r->in_command_buffer) {
+        return false;
+    }
+
+    VGADisplayParams vga_display_params;
+    d->vga.get_params(&d->vga, &vga_display_params);
+
+    SurfaceBinding *surface = pgraph_vk_surface_get_within(
+        d, d->pcrtc.start + vga_display_params.line_offset);
+
+    if (!surface || !surface->color || !surface->draw_dirty) {
+        return false;
+    }
+
+    if (r->num_deferred_downloads != 0) {
+        return false;
+    }
+
+    if (!download_surface_record_deferred(
+            d, surface, d->vram_ptr + surface->vram_addr)) {
+        return false;
+    }
+
+    r->display_predownload_pending = true;
+    r->display_predownload_frame_index = r->current_frame;
+    r->display_predownload_surface = surface;
+
+    OPT_STAT_INC(predownload_hits);
+    return true;
 }
 
 void pgraph_vk_wait_for_surface_download(SurfaceBinding *surface)

@@ -137,7 +137,7 @@ static void opt_stats_log_and_reset(void)
                 g_opt_stats.draws_skipped_pending,
                 g_opt_stats.draws_skipped_frameskip);
         __android_log_print(ANDROID_LOG_INFO, "xemu-stall",
-                "RPBreaks:%d Finish:%d(vtx%d sc%d sd%d buf%d fb%d pres%d flip%d flu%d stl%d) InlClr:%d/%d",
+                "RPBreaks:%d Finish:%d(vtx%d sc%d sd%d buf%d fb%d pres%d flip%d flu%d stl%d) InlClr:%d/%d PreDL:%d",
                 g_opt_stats.render_pass_breaks,
                 g_opt_stats.finish_calls,
                 g_opt_stats.finish_vtx_dirty,
@@ -150,7 +150,8 @@ static void opt_stats_log_and_reset(void)
                 g_opt_stats.finish_flush,
                 g_opt_stats.finish_stalled,
                 g_opt_stats.inline_clear_hits,
-                g_opt_stats.inline_clear_misses);
+                g_opt_stats.inline_clear_misses,
+                g_opt_stats.predownload_hits);
         {
             extern struct FPUProfileCounters {
                 int x87_arith, x87_load_store, x87_transcendental, x87_stack;

@@ -154,6 +154,7 @@ struct OptBisectStats {
     int finish_flip;
     int finish_flush;
     int finish_stalled;
+    int predownload_hits;
 };
 extern struct OptBisectStats g_opt_stats;
 #if NV2A_PERF_LOG
@@ -1187,6 +1188,10 @@ typedef struct PGRAPHVkState {
     int num_deferred_downloads;
     VkDeviceSize staging_dst_offset;
 
+    bool display_predownload_pending;
+    int display_predownload_frame_index;
+    SurfaceBinding *display_predownload_surface;
+
     Lru texture_cache;
     TextureBinding *texture_cache_entries;
     QTAILQ_HEAD(, TextureBinding) texture_active_list;
@@ -1439,6 +1444,7 @@ void pgraph_vk_process_pending_downloads(NV2AState *d);
 void pgraph_vk_surface_download_if_dirty(NV2AState *d, SurfaceBinding *surface);
 SurfaceBinding *pgraph_vk_surface_get_within(NV2AState *d, hwaddr addr);
 void pgraph_vk_wait_for_surface_download(SurfaceBinding *e);
+bool pgraph_vk_prerecord_display_download(NV2AState *d);
 void pgraph_vk_download_dirty_surfaces(NV2AState *d);
 bool pgraph_vk_download_surfaces_in_range_if_dirty(PGRAPHState *pg, hwaddr start, hwaddr size);
 void pgraph_vk_upload_surface_data(NV2AState *d, SurfaceBinding *surface,

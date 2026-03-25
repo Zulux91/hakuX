@@ -810,6 +810,14 @@ static void pgraph_vk_flip_stall(NV2AState *d)
             dbg_flip++;
         }
     }
+    /*
+     * Pre-record framebuffer download into the current command buffer before
+     * the flip stall finish submits it. This piggybacks the surface-to-staging
+     * copy onto the same GPU submission as the frame's draws, eliminating a
+     * separate SURFACE_DOWN finish (one fewer vkQueueSubmit + fence cycle).
+     */
+    pgraph_vk_prerecord_display_download(d);
+
     pgraph_vk_finish(&d->pgraph, VK_FINISH_REASON_FLIP_STALL);
 
     {
