@@ -277,7 +277,7 @@ typedef struct SurfaceBinding {
     int invalidation_frame;
 } SurfaceBinding;
 
-#define MAX_DEFERRED_DOWNLOADS 16
+#define MAX_DEFERRED_DOWNLOADS 64
 
 typedef struct DeferredSurfaceDownload {
     VkDeviceSize staging_offset;
