@@ -1909,10 +1909,13 @@ void pgraph_vk_upload_surface_data(NV2AState *d, SurfaceBinding *surface,
 
     nv2a_profile_inc_counter(NV2A_PROF_SURF_UPLOAD);
 
-    if (r->in_command_buffer &&
-        surface->draw_time >= r->command_buffer_start_time) {
-        pgraph_vk_finish(pg, VK_FINISH_REASON_SURFACE_CREATE);
-    }
+    /*
+     * Previously did a full pgraph_vk_finish here when the surface was drawn
+     * to in the current command buffer. That's unnecessary: ending the render
+     * pass (done by begin_nondraw_commands below) flushes tile memory on tiled
+     * GPUs, and the image layout transition from ATTACHMENT → TRANSFER_DST
+     * provides the required pipeline barrier for synchronization.
+     */
 
     trace_nv2a_pgraph_surface_upload(
                  surface->color ? "COLOR" : "ZETA",
