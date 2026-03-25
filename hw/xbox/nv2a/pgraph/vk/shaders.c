@@ -604,8 +604,12 @@ void pgraph_vk_update_descriptor_sets(PGRAPHState *pg)
     if (push_desc && r->texture_bindings_changed) {
         for (int i = 0; i < NV2A_MAX_TEXTURES; i++) {
             r->push_tex_infos[i] = (VkDescriptorImageInfo){
-                .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                .imageView = r->texture_bindings[i]->image_view,
+                .imageLayout = r->tex_surface_direct[i]
+                    ? VK_IMAGE_LAYOUT_GENERAL
+                    : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                .imageView = r->tex_surface_direct[i]
+                    ? r->tex_surface_direct_views[i]
+                    : r->texture_bindings[i]->image_view,
                 .sampler = r->texture_bindings[i]->sampler,
             };
         }
@@ -719,8 +723,12 @@ void pgraph_vk_update_descriptor_sets(PGRAPHState *pg)
                              (void *)r->texture_bindings[i]->image);
             }
             image_infos[i] = (VkDescriptorImageInfo){
-                .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                .imageView = r->texture_bindings[i]->image_view,
+                .imageLayout = r->tex_surface_direct[i]
+                    ? VK_IMAGE_LAYOUT_GENERAL
+                    : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                .imageView = r->tex_surface_direct[i]
+                    ? r->tex_surface_direct_views[i]
+                    : r->texture_bindings[i]->image_view,
                 .sampler = r->texture_bindings[i]->sampler,
             };
             descriptor_writes[2 + i] = (VkWriteDescriptorSet){

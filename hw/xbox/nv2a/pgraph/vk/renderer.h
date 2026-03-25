@@ -1165,6 +1165,9 @@ typedef struct PGRAPHVkState {
         TextureBinding *binding;
     } tex_binding_cache[NV2A_MAX_TEXTURES];
 
+    bool tex_surface_direct[NV2A_MAX_TEXTURES];
+    VkImageView tex_surface_direct_views[NV2A_MAX_TEXTURES];
+
     struct {
         uint32_t regs[8];
         uint32_t shaderprog_bits;

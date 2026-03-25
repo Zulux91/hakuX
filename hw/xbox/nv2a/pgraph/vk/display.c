@@ -1512,7 +1512,7 @@ static void render_display(PGRAPHState *pg, SurfaceBinding *surface)
 
     pgraph_vk_transition_image_layout(pg, cmd, surface->image,
                                       surface->host_fmt.vk_format,
-                                      VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                      VK_IMAGE_LAYOUT_GENERAL,
                                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     pgraph_vk_transition_image_layout(
         pg, cmd, img->image, VK_FORMAT_R8G8B8A8_UNORM,
@@ -1560,7 +1560,7 @@ static void render_display(PGRAPHState *pg, SurfaceBinding *surface)
     pgraph_vk_transition_image_layout(pg, cmd, surface->image,
                                       surface->host_fmt.vk_format,
                                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                      VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+                                      VK_IMAGE_LAYOUT_GENERAL);
 
     if (!disp->blend_active && disp->blend_prev_image) {
         pgraph_vk_transition_image_layout(pg, cmd, img->image,
