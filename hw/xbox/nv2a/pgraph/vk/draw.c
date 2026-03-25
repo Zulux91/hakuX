@@ -1045,8 +1045,7 @@ static void init_pipeline_key(PGRAPHState *pg, PipelineKey *key)
         key->regs[i] = pgraph_vk_reg_r(pg, regs[i]);
     }
 #if OPT_DYNAMIC_STATES
-    bool use_dyn_ds = OPT_DYNAMIC_DEPTH_STENCIL &&
-                      r->extended_dynamic_state_supported;
+    bool use_dyn_ds = r->extended_dynamic_state_supported;
     if (use_dyn_ds) {
         key->regs[1] &= ~(NV_PGRAPH_CONTROL_0_ZENABLE |
                            NV_PGRAPH_CONTROL_0_ZWRITEENABLE |
@@ -1098,7 +1097,6 @@ static void create_pipeline(PGRAPHState *pg)
     NV2AState *d = container_of(pg, NV2AState, pgraph);
     PGRAPHVkState *r = pg->vk_renderer_state;
 
-#if OPT_PIPELINE_EARLY_EXIT
     if (r->pipeline_binding &&
         !r->shader_bindings_changed &&
         !r->pipeline_state_dirty &&
@@ -1113,7 +1111,6 @@ static void create_pipeline(PGRAPHState *pg)
         return;
     }
     OPT_STAT_INC(pipeline_early_misses);
-#endif
 
     NV2A_PHASE_TIMER_BEGIN(pipe_bind_tex);
     if (pg->texture_state_gen != r->last_texture_state_gen ||
@@ -1218,7 +1215,7 @@ static void create_pipeline(PGRAPHState *pg)
 
     memcpy(&snode->key, &key, sizeof(key));
 
-    bool use_dyn_ds = OPT_DYNAMIC_STATES && OPT_DYNAMIC_DEPTH_STENCIL &&
+    bool use_dyn_ds = OPT_DYNAMIC_STATES &&
                       r->extended_dynamic_state_supported;
 #if OPT_DYNAMIC_BLEND
     bool use_eds3_blend = OPT_DYNAMIC_STATES && r->eds3_blend_supported;
@@ -2089,12 +2086,8 @@ void pgraph_vk_flush_all_frames(PGRAPHState *pg)
     pgraph_vk_reclaim_descriptor_overflow(r);
 }
 
-#if OPT_REORDER_SAFE_WINDOWS
 static void flush_reorder_window_internal(NV2AState *d);
-#endif
-#if OPT_DRAW_MERGING
 static void flush_draw_queue_internal(NV2AState *d);
-#endif
 
 void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
 {
@@ -2110,7 +2103,6 @@ void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
     case VK_FINISH_REASON_FLUSH: OPT_STAT_INC(finish_flush); break;
     case VK_FINISH_REASON_STALLED: OPT_STAT_INC(finish_stalled); break;
     }
-#if OPT_REORDER_SAFE_WINDOWS
     {
         PGRAPHVkState *r_rw = pg->vk_renderer_state;
         if (r_rw->reorder_window.count > 0) {
@@ -2119,15 +2111,12 @@ void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
         }
         r_rw->reorder_window.active = false;
     }
-#endif
-#if OPT_DRAW_MERGING
     PGRAPHVkState *r_pre = pg->vk_renderer_state;
     if (r_pre->draw_queue.count > 0) {
         NV2AState *d = container_of(pg, NV2AState, pgraph);
         flush_draw_queue_internal(d);
     }
     r_pre->draw_queue.active = false;
-#endif
 
     NV2A_PHASE_TIMER_BEGIN(finish);
     PGRAPHVkState *r = pg->vk_renderer_state;
@@ -2486,7 +2475,6 @@ static void begin_pre_draw(PGRAPHState *pg)
     assert(!r->color_binding || r->color_binding->initialized);
     assert(!r->zeta_binding || r->zeta_binding->initialized);
 
-#if OPT_SUPER_FAST_PATH
     {
         bool sfp_ok = true;
         if (pg->clearing)                { OPT_STAT_INC(sfp_miss_clearing); sfp_ok = false; }
@@ -2520,11 +2508,7 @@ static void begin_pre_draw(PGRAPHState *pg)
         else if (!r->push_descriptors_supported &&
                  pg->texture_state_gen != r->last_texture_state_gen) { OPT_STAT_INC(sfp_miss_tex_gen); sfp_ok = false; }
 #endif
-#if OPT_DYNAMIC_REG_FILTER
         else if (pg->non_dynamic_reg_gen != r->last_non_dynamic_reg_gen) { OPT_STAT_INC(sfp_miss_reg_gen); sfp_ok = false; }
-#else
-        else if (pg->any_reg_gen != r->last_any_reg_gen) { OPT_STAT_INC(sfp_miss_reg_gen); sfp_ok = false; }
-#endif
         else if (pg->primitive_mode != r->shader_binding->state.geom.primitive_mode) { OPT_STAT_INC(sfp_miss_prim_mode); sfp_ok = false; }
         else if (pg->program_data_dirty) { OPT_STAT_INC(sfp_miss_prog_dirty); sfp_ok = false; }
 
@@ -2698,9 +2682,8 @@ static void begin_pre_draw(PGRAPHState *pg)
         }
     }
     OPT_STAT_INC(super_fast_misses);
-#endif
 
-#if OPT_BINDLESS_TEXTURES && OPT_SUPER_FAST_PATH
+#if OPT_BINDLESS_TEXTURES
     if (r->bindless_textures_supported &&
         !pg->clearing &&
         r->pipeline_binding &&
@@ -2766,7 +2749,6 @@ static void begin_pre_draw(PGRAPHState *pg)
     }
 #endif
 
-#if OPT_MEDIUM_FAST_PATH
     if (!pg->clearing &&
         r->pipeline_binding &&
         r->pipeline_binding->pipeline != VK_NULL_HANDLE &&
@@ -2863,7 +2845,6 @@ static void begin_pre_draw(PGRAPHState *pg)
         return;
     }
 mfp_miss: (void)0;
-#endif
 
     r->pre_draw_skipped = false;
 
@@ -3070,8 +3051,7 @@ static void begin_draw(PGRAPHState *pg)
             }
         }
 
-        if (OPT_DYNAMIC_DEPTH_STENCIL &&
-            r->extended_dynamic_state_supported) {
+        if (r->extended_dynamic_state_supported) {
             uint32_t control_0 = pgraph_vk_reg_r(pg, NV_PGRAPH_CONTROL_0);
             if (!r->dyn_state.valid ||
                 control_0 != r->dyn_state.control_0) {
@@ -3268,7 +3248,6 @@ static void copy_remapped_attributes_to_inline_buffer(PGRAPHState *pg,
 static void bind_vertex_buffer(PGRAPHState *pg, uint16_t inline_map,
                                VkDeviceSize offset);
 
-#if OPT_DRAW_MERGING || OPT_REORDER_SAFE_WINDOWS
 static bool check_rt_as_texture_hazard(PGRAPHState *pg)
 {
     PGRAPHVkState *r = pg->vk_renderer_state;
@@ -3297,9 +3276,7 @@ static bool check_rt_as_texture_hazard(PGRAPHState *pg)
     }
     return false;
 }
-#endif
 
-#if OPT_REORDER_SAFE_WINDOWS
 static bool classify_draw_safe(PGRAPHState *pg)
 {
     PGRAPHVkState *r = pg->vk_renderer_state;
@@ -3378,7 +3355,6 @@ static bool classify_draw_safe(PGRAPHState *pg)
     }
     return true;
 }
-#endif
 
 static bool upload_draw_uniforms(PGRAPHState *pg, size_t offsets_out[2])
 {
@@ -3417,7 +3393,6 @@ static bool upload_draw_uniforms(PGRAPHState *pg, size_t offsets_out[2])
     return true;
 }
 
-#if OPT_DRAW_MERGING
 static bool check_draw_mergeable(PGRAPHState *pg, DrawQueue *q)
 {
     PGRAPHVkState *r = pg->vk_renderer_state;
@@ -3517,7 +3492,6 @@ static bool try_enqueue_draw_arrays(PGRAPHState *pg, DrawQueue *q)
     return true;
 }
 
-#if OPT_INDEXED_DRAW_MERGING
 static bool try_enqueue_draw_indexed(PGRAPHState *pg, DrawQueue *q)
 {
     PGRAPHVkState *r = pg->vk_renderer_state;
@@ -3630,7 +3604,6 @@ static bool try_enqueue_draw_indexed(PGRAPHState *pg, DrawQueue *q)
     q->count++;
     return true;
 }
-#endif
 
 static void rebind_ubo_dynamic_offsets(PGRAPHState *pg, uint32_t off0,
                                        uint32_t off1)
@@ -4024,21 +3997,16 @@ flush_dq_restore:
     r->dyn_state = saved_dyn_state;
 #endif
 }
-#endif
 
 void pgraph_vk_flush_draw_queue(NV2AState *d)
 {
-#if OPT_DRAW_MERGING
     PGRAPHState *pg = &d->pgraph;
     PGRAPHVkState *r = pg->vk_renderer_state;
     if (r->draw_queue.count > 0) {
         flush_draw_queue_internal(d);
     }
     r->draw_queue.active = false;
-#endif
 }
-
-#if OPT_REORDER_SAFE_WINDOWS
 
 static void snapshot_vertex_buffers(PGRAPHState *pg, ReorderWindowEntry *e,
                                     uint16_t inline_map, VkDeviceSize offset)
@@ -4474,7 +4442,7 @@ static void emit_reorder_entry(PGRAPHState *pg, ReorderWindowEntry *e,
         vkCmdSetBlendConstants(r->command_buffer, blend_constant);
     }
 
-    if (OPT_DYNAMIC_DEPTH_STENCIL && r->extended_dynamic_state_supported) {
+    if (r->extended_dynamic_state_supported) {
         if (pipeline_changed ||
             e->dyn_control_0 != prev->dyn_control_0) {
             vkCmdSetDepthTestEnable(r->command_buffer,
@@ -4772,17 +4740,13 @@ static void flush_reorder_window_internal(NV2AState *d)
     w->next_group = 0;
 }
 
-#endif
-
 void pgraph_vk_flush_reorder_window(NV2AState *d)
 {
-#if OPT_REORDER_SAFE_WINDOWS
     PGRAPHVkState *r = d->pgraph.vk_renderer_state;
     if (r->reorder_window.count > 0) {
         flush_reorder_window_internal(d);
     }
     r->reorder_window.active = false;
-#endif
 }
 
 void pgraph_vk_draw_end(NV2AState *d)
@@ -4813,7 +4777,6 @@ void pgraph_vk_draw_end(NV2AState *d)
         return;
     }
 
-#if OPT_REORDER_SAFE_WINDOWS
     if (g_xemu_draw_reorder &&
         (pg->draw_arrays_length || pg->inline_elements_length) && !pg->clearing) {
         ReorderWindow *w = &r->reorder_window;
@@ -4871,9 +4834,7 @@ void pgraph_vk_draw_end(NV2AState *d)
         flush_reorder_window_internal(d);
         r->reorder_window.active = false;
     }
-#endif
 
-#if OPT_DRAW_MERGING
     if (g_xemu_draw_merge && pg->draw_arrays_length && !pg->clearing) {
         DrawQueue *q = &r->draw_queue;
 
@@ -4930,7 +4891,6 @@ void pgraph_vk_draw_end(NV2AState *d)
         goto post_draw;
     }
 
-#if OPT_INDEXED_DRAW_MERGING
     if (g_xemu_draw_merge && pg->inline_elements_length && !pg->clearing) {
         DrawQueue *q = &r->draw_queue;
 
@@ -4989,19 +4949,15 @@ void pgraph_vk_draw_end(NV2AState *d)
 
         goto post_draw;
     }
-#endif
 
     if (r->draw_queue.count > 0) {
         flush_draw_queue_internal(d);
     }
     r->draw_queue.active = false;
-#endif
 
     pgraph_vk_flush_draw(d);
 
-#if OPT_DRAW_MERGING
 post_draw:
-#endif
     pg->draw_time++;
     if (r->color_binding && pgraph_color_write_enabled(pg)) {
         r->color_binding->draw_time = pg->draw_time;
@@ -5034,7 +4990,6 @@ static void sync_vertex_ram_buffer(PGRAPHState *pg)
         return;
     }
 
-#if OPT_SYNC_EARLY_EXIT
     {
         unsigned long *bmp = get_uploaded_bitmap(r);
         bool all_uploaded = true;
@@ -5056,7 +5011,6 @@ static void sync_vertex_ram_buffer(PGRAPHState *pg)
             return;
         }
     }
-#endif
 
     vw->calls++;
     vw->reqs += r->num_vertex_ram_buffer_syncs;
@@ -5163,18 +5117,14 @@ void pgraph_vk_clear_surface(NV2AState *d, uint32_t parameter)
     PGRAPHState *pg = &d->pgraph;
     PGRAPHVkState *r = pg->vk_renderer_state;
 
-#if OPT_REORDER_SAFE_WINDOWS
     if (r->reorder_window.count > 0) {
         flush_reorder_window_internal(d);
     }
     r->reorder_window.active = false;
-#endif
-#if OPT_DRAW_MERGING
     if (r->draw_queue.count > 0) {
         flush_draw_queue_internal(d);
     }
     r->draw_queue.active = false;
-#endif
 
     nv2a_profile_inc_counter(NV2A_PROF_CLEAR);
 
@@ -5725,12 +5675,10 @@ void pgraph_vk_flush_draw(NV2AState *d)
             size_t rewrite_size =
                 prim_rw.num_indices * sizeof(uint32_t);
             ensure_buffer_space(pg, BUFFER_INDEX_STAGING, rewrite_size);
-#if OPT_MULTI_DRAW
         } else if (pg->draw_arrays_length > 1) {
             size_t indirect_size =
                 pg->draw_arrays_length * sizeof(VkDrawIndirectCommand);
             ensure_buffer_space(pg, BUFFER_INDEX_STAGING, indirect_size);
-#endif
         }
         NV2A_PHASE_TIMER_END(draw_prim_rw);
 
@@ -5756,7 +5704,6 @@ void pgraph_vk_flush_draw(NV2AState *d)
                                  buffer_offset, VK_INDEX_TYPE_UINT32);
             vkCmdDrawIndexed(r->command_buffer, prim_rw.num_indices, 1, 0, 0,
                              0);
-#if OPT_MULTI_DRAW
         } else if (pg->draw_arrays_length > 1) {
             OPT_STAT_INC(multi_draw_indirect);
             VkDrawIndirectCommand cmds[pg->draw_arrays_length];
@@ -5776,7 +5723,6 @@ void pgraph_vk_flush_draw(NV2AState *d)
                               r->storage_buffers[BUFFER_INDEX].buffer,
                               buffer_offset, pg->draw_arrays_length,
                               sizeof(VkDrawIndirectCommand));
-#endif
         } else {
             OPT_STAT_INC(multi_draw_loop);
             for (int i = 0; i < pg->draw_arrays_length; i++) {

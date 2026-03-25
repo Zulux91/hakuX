@@ -629,7 +629,6 @@ void pgraph_vk_update_descriptor_sets(PGRAPHState *pg)
         return;
     }
 
-#if OPT_DESC_REBIND_SKIP
     if (need_new_descriptor_set &&
         !r->shader_bindings_changed && !r->texture_bindings_changed &&
         *ds_index_ptr > 0) {
@@ -638,7 +637,6 @@ void pgraph_vk_update_descriptor_sets(PGRAPHState *pg)
         return;
     }
     OPT_STAT_INC(desc_rebind_full);
-#endif
 
     if (*ds_index_ptr >= *ds_count_ptr) {
         pgraph_vk_finish(pg, VK_FINISH_REASON_NEED_BUFFER_SPACE);
@@ -1298,12 +1296,10 @@ void pgraph_vk_update_shader_uniforms(PGRAPHState *pg)
     ShaderUniformLayout *vsh_layout = &binding->vsh.module_info->uniforms;
     ShaderUniformLayout *psh_layout = &binding->psh.module_info->uniforms;
 
-#if OPT_UNIFORM_SKIP
     uint64_t vsh_hash_before = fast_hash(vsh_layout->allocation,
                                          vsh_layout->total_size);
     uint64_t psh_hash_before = fast_hash(psh_layout->allocation,
                                          psh_layout->total_size);
-#endif
 
     VshUniformValues vsh_values;
     pgraph_glsl_set_vsh_uniform_values(pg, &binding->state.vsh,
@@ -1333,7 +1329,6 @@ void pgraph_vk_update_shader_uniforms(PGRAPHState *pg)
                           binding->psh.uniform_locs, &psh_values,
                           PshUniform__COUNT);
 
-#if OPT_UNIFORM_SKIP
     uint64_t vsh_hash_after = fast_hash(vsh_layout->allocation,
                                         vsh_layout->total_size);
     uint64_t psh_hash_after = fast_hash(psh_layout->allocation,
@@ -1342,9 +1337,6 @@ void pgraph_vk_update_shader_uniforms(PGRAPHState *pg)
         psh_hash_before != psh_hash_after) {
         r->uniforms_changed = true;
     }
-#else
-    r->uniforms_changed = true;
-#endif
 
     NV2A_VK_DGROUP_END();
 }

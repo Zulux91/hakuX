@@ -475,9 +475,7 @@ bool pgraph_vk_init_buffers(NV2AState *d, Error **errp)
 
     pgraph_prim_rewrite_init(&r->prim_rewrite_buf);
 
-#if OPT_DRAW_MERGING
     r->draw_queue.index_buf = g_malloc0(INDEX_QUEUE_MAX * sizeof(uint32_t));
-#endif
 
     return true;
 
@@ -541,10 +539,8 @@ void pgraph_vk_finalize_buffers(NV2AState *d)
 
     pgraph_prim_rewrite_finalize(&r->prim_rewrite_buf);
 
-#if OPT_DRAW_MERGING
     g_free(r->draw_queue.index_buf);
     r->draw_queue.index_buf = NULL;
-#endif
 
     g_free(r->uploaded_bitmap);
     r->uploaded_bitmap = NULL;

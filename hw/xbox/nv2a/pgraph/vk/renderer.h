@@ -49,24 +49,9 @@
 #define OPT_DYNAMIC_STATES      1
 #define OPT_DYNAMIC_BLEND       1
 #define NUM_GFX_DESCRIPTOR_SETS 16384
-#define OPT_PRECISE_BARRIERS    1
-#define OPT_SYNC_EARLY_EXIT     1
-#define OPT_UNIFORM_SKIP        1
-#define OPT_MULTI_DRAW          1
-#define OPT_SUPER_FAST_PATH     1
-#define OPT_LARGER_STAGING      1
-#define OPT_VTX_ATTR_CACHE      1
-#define OPT_DYNAMIC_DEPTH_STENCIL 1
-#define OPT_DESC_REBIND_SKIP    1
-#define OPT_PIPELINE_EARLY_EXIT 1
-#define OPT_MEDIUM_FAST_PATH    1
-#define OPT_DRAW_MERGING        1
-#define OPT_INDEXED_DRAW_MERGING 1
 #define OPT_DRAW_MERGE_MAX      128
 #define OPT_VALIDATE_GEN_COUNTERS 0
-#define OPT_REORDER_SAFE_WINDOWS 1
 #define REORDER_WINDOW_MAX       64
-#define OPT_DYNAMIC_REG_FILTER   1
 #define OPT_BINDLESS_TEXTURES    1
 #define MAX_BINDLESS_TEXTURES    1024
 #define OPT_ASYNC_COMPILE        1
@@ -821,7 +806,6 @@ typedef struct PGRAPHVkComputeState {
     ComputePipeline *pipeline_cache_entries;
 } PGRAPHVkComputeState;
 
-#if OPT_DRAW_MERGING
 #define DRAW_QUEUE_MAX 128
 #define INDEX_QUEUE_MAX (64 * 1024)
 
@@ -867,9 +851,6 @@ typedef struct DrawQueue {
 
     VertexAttribute saved_vertex_attrs[NV2A_VERTEXSHADER_ATTRIBUTES];
 } DrawQueue;
-#endif
-
-#if OPT_REORDER_SAFE_WINDOWS
 
 typedef enum ReorderDrawMode {
     RW_DRAW_INDEXED,
@@ -941,8 +922,6 @@ typedef struct ReorderWindow {
     int num_seen_pipelines;
     int next_group;
 } ReorderWindow;
-
-#endif
 
 typedef struct PGRAPHVkState {
     NV2AState *nv2a;
@@ -1092,13 +1071,9 @@ typedef struct PGRAPHVkState {
     StorageBuffer storage_buffers[BUFFER_COUNT];
     PrimRewriteBuf prim_rewrite_buf;
 
-#if OPT_DRAW_MERGING
     DrawQueue draw_queue;
-#endif
 
-#if OPT_REORDER_SAFE_WINDOWS
     ReorderWindow reorder_window;
-#endif
 
     FrameStagingState frame_staging[NUM_SUBMIT_FRAMES];
 
@@ -1125,7 +1100,6 @@ typedef struct PGRAPHVkState {
         size_t stride;
     } cached_attr_layout[NV2A_VERTEXSHADER_ATTRIBUTES];
 
-#if OPT_VTX_ATTR_CACHE
     VkVertexInputAttributeDescription cached_attr_descs[NV2A_VERTEXSHADER_ATTRIBUTES];
     VkVertexInputBindingDescription cached_bind_descs[NV2A_VERTEXSHADER_ATTRIBUTES];
     int cached_attr_to_desc_loc[NV2A_VERTEXSHADER_ATTRIBUTES];
@@ -1133,7 +1107,6 @@ typedef struct PGRAPHVkState {
     uint32_t cached_compressed_attrs;
     uint32_t cached_uniform_attrs;
     uint32_t cached_swizzle_attrs;
-#endif
 
     ram_addr_t vram_ram_addr;
     VkDeviceSize vertex_ram_flush_min;
