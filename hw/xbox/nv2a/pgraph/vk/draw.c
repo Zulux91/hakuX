@@ -86,7 +86,7 @@ static void opt_stats_log_and_reset(void)
     if (++frame_counter % 60 == 0) {
 #ifdef __ANDROID__
         __android_log_print(ANDROID_LOG_INFO, "xemu-sfp",
-                "SFP:%d/%d BLtx:%d PTx:%d VAF:%d TxPool:%d/%d SRS:%d SEE:%d miss: clr%d noPl%d noCb%d noRp%d noFb%d fbD%d shC%d piD%d dsR%d uni%d noDs%d tG%d ndG%d pmM%d prD%d vG%d tV%d",
+                "SFP:%d/%d BLtx:%d PTx:%d VAF:%d TxPool:%d/%d SRS:%d SEE:%d InlClr:%d/%d miss: clr%d noPl%d noCb%d noRp%d noFb%d fbD%d shC%d piD%d dsR%d uni%d noDs%d tG%d ndG%d pmM%d prD%d vG%d tV%d",
                 g_opt_stats.super_fast_hits,
                 g_opt_stats.super_fast_misses,
                 g_opt_stats.bindless_tex_fast,
@@ -96,6 +96,8 @@ static void opt_stats_log_and_reset(void)
                 g_opt_stats.tex_pool_misses,
                 g_opt_stats.sync_range_skip,
                 g_opt_stats.sync_early_exit,
+                g_opt_stats.inline_clear_hits,
+                g_opt_stats.inline_clear_misses,
                 g_opt_stats.sfp_miss_clearing,
                 g_opt_stats.sfp_miss_no_pipeline,
                 g_opt_stats.sfp_miss_no_cmdbuf,
@@ -134,6 +136,21 @@ static void opt_stats_log_and_reset(void)
                 g_opt_stats.reorder_reject_zpass,
                 g_opt_stats.draws_skipped_pending,
                 g_opt_stats.draws_skipped_frameskip);
+        __android_log_print(ANDROID_LOG_INFO, "xemu-stall",
+                "RPBreaks:%d Finish:%d(vtx%d sc%d sd%d buf%d fb%d pres%d flip%d flu%d stl%d) InlClr:%d/%d",
+                g_opt_stats.render_pass_breaks,
+                g_opt_stats.finish_calls,
+                g_opt_stats.finish_vtx_dirty,
+                g_opt_stats.finish_surf_create,
+                g_opt_stats.finish_surf_down,
+                g_opt_stats.finish_buf_space,
+                g_opt_stats.finish_fb_dirty,
+                g_opt_stats.finish_present,
+                g_opt_stats.finish_flip,
+                g_opt_stats.finish_flush,
+                g_opt_stats.finish_stalled,
+                g_opt_stats.inline_clear_hits,
+                g_opt_stats.inline_clear_misses);
         {
             extern struct FPUProfileCounters {
                 int x87_arith, x87_load_store, x87_transcendental, x87_stack;
@@ -1995,6 +2012,7 @@ static void begin_render_pass(PGRAPHState *pg)
 static void end_render_pass(PGRAPHVkState *r)
 {
     if (r->in_render_pass) {
+        OPT_STAT_INC(render_pass_breaks);
         if (r->gpu_ts_supported &&
             r->gpu_ts_rp_index < GPU_TS_MAX_RENDER_PASSES) {
             uint32_t base = r->current_frame * GPU_TS_QUERIES_PER_CB;
@@ -2103,6 +2121,18 @@ static void flush_draw_queue_internal(NV2AState *d);
 
 void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
 {
+    OPT_STAT_INC(finish_calls);
+    switch (finish_reason) {
+    case VK_FINISH_REASON_VERTEX_BUFFER_DIRTY: OPT_STAT_INC(finish_vtx_dirty); break;
+    case VK_FINISH_REASON_SURFACE_CREATE: OPT_STAT_INC(finish_surf_create); break;
+    case VK_FINISH_REASON_SURFACE_DOWN: OPT_STAT_INC(finish_surf_down); break;
+    case VK_FINISH_REASON_NEED_BUFFER_SPACE: OPT_STAT_INC(finish_buf_space); break;
+    case VK_FINISH_REASON_FRAMEBUFFER_DIRTY: OPT_STAT_INC(finish_fb_dirty); break;
+    case VK_FINISH_REASON_PRESENTING: OPT_STAT_INC(finish_present); break;
+    case VK_FINISH_REASON_FLIP_STALL: OPT_STAT_INC(finish_flip); break;
+    case VK_FINISH_REASON_FLUSH: OPT_STAT_INC(finish_flush); break;
+    case VK_FINISH_REASON_STALLED: OPT_STAT_INC(finish_stalled); break;
+    }
 #if OPT_REORDER_SAFE_WINDOWS
     {
         PGRAPHVkState *r_rw = pg->vk_renderer_state;
@@ -5264,6 +5294,102 @@ void pgraph_vk_clear_surface(NV2AState *d, uint32_t parameter)
                          ymax, write_color ? " color" : "",
                          write_zeta ? " zeta" : "");
 
+    /*
+     * Inline clear: when already in a render pass with the correct framebuffer,
+     * use vkCmdClearAttachments directly without breaking the render pass.
+     * This avoids costly tile resolve+load cycles on tiled GPUs (Adreno).
+     *
+     * Only used for full-channel clears — partial color clears need the
+     * pipeline-based quad draw below.
+     */
+    {
+        const bool clear_all_color_channels =
+            (parameter & NV097_CLEAR_SURFACE_COLOR) ==
+            (NV097_CLEAR_SURFACE_R | NV097_CLEAR_SURFACE_G |
+             NV097_CLEAR_SURFACE_B | NV097_CLEAR_SURFACE_A);
+        bool partial_color_clear = write_color && !clear_all_color_channels;
+
+        if (!partial_color_clear &&
+            r->in_render_pass && r->in_command_buffer &&
+            !r->framebuffer_dirty) {
+            OPT_STAT_INC(inline_clear_hits);
+
+            xmin = MIN(xmin, binding->width - 1);
+            ymin = MIN(ymin, binding->height - 1);
+            xmax = MAX(xmin, MIN(xmax, binding->width - 1));
+            ymax = MAX(ymin, MIN(ymax, binding->height - 1));
+
+            unsigned int scissor_width = MAX(0, xmax - xmin + 1);
+            unsigned int scissor_height = MAX(0, ymax - ymin + 1);
+
+            pgraph_apply_anti_aliasing_factor(pg, &xmin, &ymin);
+            pgraph_apply_anti_aliasing_factor(pg, &scissor_width,
+                                              &scissor_height);
+            pgraph_apply_scaling_factor(pg, &xmin, &ymin);
+            pgraph_apply_scaling_factor(pg, &scissor_width, &scissor_height);
+
+            VkClearRect clear_rect = {
+                .rect = {
+                    .offset = { .x = xmin, .y = ymin },
+                    .extent = { .width = scissor_width,
+                                .height = scissor_height },
+                },
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            };
+
+            int num_attachments = 0;
+            VkClearAttachment clear_attachments[2];
+
+            if (write_color && r->color_binding) {
+                clear_attachments[num_attachments] = (VkClearAttachment){
+                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .colorAttachment = 0,
+                };
+                pgraph_get_clear_color(
+                    pg,
+                    clear_attachments[num_attachments].clearValue.color.float32);
+                num_attachments++;
+            }
+
+            if (write_zeta && r->zeta_binding) {
+                int stencil_value = 0;
+                float depth_value = 1.0;
+                pgraph_get_clear_depth_stencil_value(pg, &depth_value,
+                                                     &stencil_value);
+
+                VkImageAspectFlags aspect = 0;
+                if (parameter & NV097_CLEAR_SURFACE_Z) {
+                    aspect |= VK_IMAGE_ASPECT_DEPTH_BIT;
+                }
+                if ((parameter & NV097_CLEAR_SURFACE_STENCIL) &&
+                    (r->zeta_binding->host_fmt.aspect &
+                     VK_IMAGE_ASPECT_STENCIL_BIT)) {
+                    aspect |= VK_IMAGE_ASPECT_STENCIL_BIT;
+                }
+
+                clear_attachments[num_attachments++] = (VkClearAttachment){
+                    .aspectMask = aspect,
+                    .clearValue.depthStencil.depth = depth_value,
+                    .clearValue.depthStencil.stencil = stencil_value,
+                };
+            }
+
+            if (num_attachments) {
+                vkCmdClearAttachments(r->command_buffer, num_attachments,
+                                      clear_attachments, 1, &clear_rect);
+            }
+
+            pg->clearing = false;
+            pgraph_vk_set_surface_dirty(pg, write_color, write_zeta);
+            NV2A_VK_DGROUP_END();
+            return;
+        }
+    }
+
+    /* Fall through: partial color clear or not in a suitable render pass.
+     * Uses the full pipeline-based clear with render pass breaks. */
+    OPT_STAT_INC(inline_clear_misses);
     begin_pre_draw(pg);
     pgraph_vk_begin_debug_marker(r, r->command_buffer,
         RGBA_BLUE, "Clear %08" HWADDR_PRIx,

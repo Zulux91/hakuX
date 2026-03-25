@@ -141,6 +141,19 @@ struct OptBisectStats {
     int draw_merge_flushed;
     int draw_merge_break_compat;
     int draw_merge_break_full;
+    int inline_clear_hits;
+    int inline_clear_misses;
+    int render_pass_breaks;
+    int finish_calls;
+    int finish_vtx_dirty;
+    int finish_surf_create;
+    int finish_surf_down;
+    int finish_buf_space;
+    int finish_fb_dirty;
+    int finish_present;
+    int finish_flip;
+    int finish_flush;
+    int finish_stalled;
 };
 extern struct OptBisectStats g_opt_stats;
 #if NV2A_PERF_LOG
