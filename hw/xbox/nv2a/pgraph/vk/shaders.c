@@ -579,9 +579,7 @@ void pgraph_vk_update_descriptor_sets(PGRAPHState *pg)
 
     if (need_new_descriptor_set && *ds_index_ptr >= *ds_count_ptr) {
         pgraph_vk_finish(pg, VK_FINISH_REASON_NEED_BUFFER_SPACE);
-#if OPT_ALWAYS_DEFERRED_FENCES
         pgraph_vk_flush_all_frames(pg);
-#endif
         *ds_index_ptr = 0;
     }
 
@@ -644,9 +642,7 @@ void pgraph_vk_update_descriptor_sets(PGRAPHState *pg)
 
     if (*ds_index_ptr >= *ds_count_ptr) {
         pgraph_vk_finish(pg, VK_FINISH_REASON_NEED_BUFFER_SPACE);
-#if OPT_ALWAYS_DEFERRED_FENCES
         pgraph_vk_flush_all_frames(pg);
-#endif
         *ds_index_ptr = 0;
     }
 
@@ -718,14 +714,12 @@ void pgraph_vk_update_descriptor_sets(PGRAPHState *pg)
 
         VkDescriptorImageInfo image_infos[NV2A_MAX_TEXTURES];
         for (int i = 0; i < NV2A_MAX_TEXTURES; i++) {
-#if OPT_ALWAYS_DEFERRED_FENCES
             if (r->texture_bindings[i]->image_view == VK_NULL_HANDLE) {
                 VK_LOG_ERROR("DIAG: descriptor set %d binding tex[%d] "
                              "has NULL image_view! image=%p",
                              *ds_index_ptr, i,
                              (void *)r->texture_bindings[i]->image);
             }
-#endif
             image_infos[i] = (VkDescriptorImageInfo){
                 .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                 .imageView = r->texture_bindings[i]->image_view,

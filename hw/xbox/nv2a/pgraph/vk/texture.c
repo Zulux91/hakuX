@@ -501,11 +501,9 @@ static void upload_texture_image(PGRAPHState *pg, int texture_idx,
         }
     }
 
-#if OPT_TEX_NONDRAW_CMD
     VkDeviceSize staging_base = pgraph_vk_staging_alloc(pg, texture_data_size);
     if (staging_base == VK_WHOLE_SIZE) {
         pgraph_vk_finish(pg, VK_FINISH_REASON_NEED_BUFFER_SPACE);
-#if OPT_ALWAYS_DEFERRED_FENCES
         staging_base = pgraph_vk_staging_alloc(pg, texture_data_size);
         if (staging_base == VK_WHOLE_SIZE) {
             if (pgraph_vk_staging_reclaim_any(pg)) {
@@ -519,17 +517,7 @@ static void upload_texture_image(PGRAPHState *pg, int texture_idx,
                 assert(staging_base != VK_WHOLE_SIZE);
             }
         }
-#else
-        pgraph_vk_staging_reset(pg);
-        staging_base = pgraph_vk_staging_alloc(pg, texture_data_size);
-        assert(staging_base != VK_WHOLE_SIZE);
-#endif
     }
-#else
-    assert(texture_data_size <=
-           get_staging_buffer(r, BUFFER_STAGING_SRC)->buffer_size);
-    VkDeviceSize staging_base = 0;
-#endif
     StorageBuffer *staging = get_staging_buffer(r, BUFFER_STAGING_SRC);
     uint8_t *mapped_memory_ptr = (uint8_t *)staging->mapped;
 
@@ -571,11 +559,7 @@ static void upload_texture_image(PGRAPHState *pg, int texture_idx,
     vmaFlushAllocation(r->allocator, staging->allocation,
                        staging_base, buffer_offset - staging_base);
 
-#if OPT_TEX_NONDRAW_CMD
     VkCommandBuffer cmd = pgraph_vk_begin_nondraw_commands(pg);
-#else
-    VkCommandBuffer cmd = pgraph_vk_begin_single_time_commands(pg);
-#endif
     pgraph_vk_begin_debug_marker(r, cmd, RGBA_GREEN, __func__);
 
     VkBufferMemoryBarrier host_barrier = {
@@ -608,11 +592,7 @@ static void upload_texture_image(PGRAPHState *pg, int texture_idx,
 
     nv2a_profile_inc_counter(NV2A_PROF_QUEUE_SUBMIT_4);
     pgraph_vk_end_debug_marker(r, cmd);
-#if OPT_TEX_NONDRAW_CMD
     pgraph_vk_end_nondraw_commands(pg, cmd);
-#else
-    pgraph_vk_end_single_time_commands(pg, cmd);
-#endif
 
     // Release decoded texture data
     for (int layer_idx = 0; layer_idx < num_layers; layer_idx++) {
@@ -654,10 +634,8 @@ static void copy_zeta_surface_to_texture(PGRAPHState *pg, SurfaceBinding *surfac
                                 pgraph_vk_compute_needs_finish(r);
     if (compute_needs_finish) {
         pgraph_vk_finish(pg, VK_FINISH_REASON_NEED_BUFFER_SPACE);
-#if OPT_ALWAYS_DEFERRED_FENCES
         pgraph_vk_flush_all_frames(pg);
         r->compute.descriptor_set_index = 0;
-#endif
     }
 
     nv2a_profile_inc_counter(NV2A_PROF_SURF_TO_TEX);
@@ -1359,21 +1337,17 @@ static void create_texture(PGRAPHState *pg, int texture_idx)
         bool did_upload = false;
         if (surface_to_texture) {
             if (surface->draw_time != snode->draw_time) {
-#if OPT_ALWAYS_DEFERRED_FENCES
                 if (snode->submit_time + r->num_active_frames > r->submit_count) {
                     pgraph_vk_flush_all_frames(pg);
                 }
-#endif
                 copy_surface_to_texture(pg, surface, snode);
                 did_s2t_copy = true;
             }
         } else {
             if (possibly_dirty && content_hash != snode->hash) {
-#if OPT_ALWAYS_DEFERRED_FENCES
                 if (snode->submit_time + r->num_active_frames > r->submit_count) {
                     pgraph_vk_flush_all_frames(pg);
                 }
-#endif
                 upload_texture_image(pg, texture_idx, snode);
                 snode->hash = content_hash;
                 did_upload = true;
@@ -1941,15 +1915,9 @@ static bool texture_cache_entry_pre_evict(Lru *lru, LruNode *node)
         }
     }
 
-#if OPT_ALWAYS_DEFERRED_FENCES
     if (snode->submit_time + r->num_active_frames > r->submit_count) {
         return false;
     }
-#else
-    if (r->in_command_buffer && snode->submit_time == r->submit_count) {
-        return false;
-    }
-#endif
 
     return true;
 }
@@ -1958,14 +1926,12 @@ static void texture_cache_entry_post_evict(Lru *lru, LruNode *node)
 {
     PGRAPHVkState *r = container_of(lru, PGRAPHVkState, texture_cache);
     TextureBinding *snode = container_of(node, TextureBinding, node);
-#if OPT_ALWAYS_DEFERRED_FENCES
     if (snode->submit_time + r->num_active_frames > r->submit_count) {
         VK_LOG_ERROR("DIAG: texture EVICTED while in-flight! "
                      "image=%p st=%u sc=%u",
                      (void *)snode->image,
                      snode->submit_time, r->submit_count);
     }
-#endif
     if (snode->in_active_list) {
         QTAILQ_REMOVE(&r->texture_active_list, snode, active_entry);
         snode->in_active_list = false;

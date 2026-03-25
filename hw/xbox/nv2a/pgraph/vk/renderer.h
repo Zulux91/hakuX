@@ -48,12 +48,7 @@
 
 #define OPT_DYNAMIC_STATES      1
 #define OPT_DYNAMIC_BLEND       1
-#define OPT_TEX_NONDRAW_CMD     1
-#define OPT_SURF_BATCH_CREATE   1
-#define OPT_SURF_BATCH_UPLOAD   1
-#define OPT_LARGER_POOLS        1
-#define NUM_GFX_DESCRIPTOR_SETS (OPT_LARGER_POOLS ? 16384 : 1024)
-#define OPT_ALWAYS_DEFERRED_FENCES 1
+#define NUM_GFX_DESCRIPTOR_SETS 16384
 #define OPT_PRECISE_BARRIERS    1
 #define OPT_SYNC_EARLY_EXIT     1
 #define OPT_UNIFORM_SKIP        1
@@ -236,7 +231,6 @@ typedef struct StorageBuffer {
     uint8_t *mapped;
 } StorageBuffer;
 
-#if OPT_ALWAYS_DEFERRED_FENCES
 typedef struct FrameStagingState {
     StorageBuffer index_staging;
     StorageBuffer vertex_inline_staging;
@@ -250,7 +244,6 @@ typedef struct FrameStagingState {
     bool vertex_ram_initialized;
     unsigned long *uploaded_bitmap;
 } FrameStagingState;
-#endif
 
 typedef struct SurfaceBinding {
     QTAILQ_ENTRY(SurfaceBinding) entry;
@@ -821,11 +814,7 @@ typedef struct ComputePipeline {
 typedef struct PGRAPHVkComputeState {
     VkDescriptorPool descriptor_pool;
     VkDescriptorSetLayout descriptor_set_layout;
-#if OPT_LARGER_POOLS
     VkDescriptorSet descriptor_sets[4096];
-#else
-    VkDescriptorSet descriptor_sets[1024];
-#endif
     int descriptor_set_index;
     VkPipelineLayout pipeline_layout;
     Lru pipeline_cache;
@@ -1111,9 +1100,7 @@ typedef struct PGRAPHVkState {
     ReorderWindow reorder_window;
 #endif
 
-#if OPT_ALWAYS_DEFERRED_FENCES
     FrameStagingState frame_staging[NUM_SUBMIT_FRAMES];
-#endif
 
     MemorySyncRequirement vertex_ram_buffer_syncs[NV2A_VERTEXSHADER_ATTRIBUTES];
     size_t num_vertex_ram_buffer_syncs;
@@ -1299,7 +1286,6 @@ typedef struct PGRAPHVkState {
 
 static inline StorageBuffer *get_staging_buffer(PGRAPHVkState *r, int buffer_id)
 {
-#if OPT_ALWAYS_DEFERRED_FENCES
     switch (buffer_id) {
     case BUFFER_INDEX_STAGING:
         return &r->frame_staging[r->current_frame].index_staging;
@@ -1314,18 +1300,11 @@ static inline StorageBuffer *get_staging_buffer(PGRAPHVkState *r, int buffer_id)
     default:
         return &r->storage_buffers[buffer_id];
     }
-#else
-    return &r->storage_buffers[buffer_id];
-#endif
 }
 
 static inline unsigned long *get_uploaded_bitmap(PGRAPHVkState *r)
 {
-#if OPT_ALWAYS_DEFERRED_FENCES
     return r->frame_staging[r->current_frame].uploaded_bitmap;
-#else
-    return r->uploaded_bitmap;
-#endif
 }
 
 /*
@@ -1520,9 +1499,7 @@ void pgraph_vk_clear_surface(NV2AState *d, uint32_t parameter);
 void pgraph_vk_draw_begin(NV2AState *d);
 void pgraph_vk_draw_end(NV2AState *d);
 void pgraph_vk_finish(PGRAPHState *pg, FinishReason why);
-#if OPT_ALWAYS_DEFERRED_FENCES
 void pgraph_vk_flush_all_frames(PGRAPHState *pg);
-#endif
 void pgraph_vk_flush_draw(NV2AState *d);
 void pgraph_vk_flush_draw_queue(NV2AState *d);
 void pgraph_vk_flush_reorder_window(NV2AState *d);

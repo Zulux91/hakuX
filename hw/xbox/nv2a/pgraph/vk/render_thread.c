@@ -162,7 +162,6 @@ static void process_vertex_ram_update(PGRAPHVkState *r, RenderCommand *cmd)
     StorageBuffer *vram = get_staging_buffer(r, BUFFER_VERTEX_RAM);
     memcpy(vram->mapped + offset, data, size);
 
-#if OPT_ALWAYS_DEFERRED_FENCES
     FrameStagingState *fs = &r->frame_staging[r->current_frame];
     if (offset < fs->vertex_ram_flush_min) {
         fs->vertex_ram_flush_min = offset;
@@ -171,15 +170,6 @@ static void process_vertex_ram_update(PGRAPHVkState *r, RenderCommand *cmd)
     if (end > fs->vertex_ram_flush_max) {
         fs->vertex_ram_flush_max = end;
     }
-#else
-    if (offset < r->vertex_ram_flush_min) {
-        r->vertex_ram_flush_min = offset;
-    }
-    VkDeviceSize end = offset + size;
-    if (end > r->vertex_ram_flush_max) {
-        r->vertex_ram_flush_max = end;
-    }
-#endif
 
     size_t start_bit = offset / TARGET_PAGE_SIZE;
     size_t end_bit = TARGET_PAGE_ALIGN(offset + size) / TARGET_PAGE_SIZE;

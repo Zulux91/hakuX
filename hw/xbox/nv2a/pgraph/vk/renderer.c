@@ -237,9 +237,7 @@ static void pgraph_vk_init(NV2AState *d, Error **errp)
     pgraph_vk_update_vertex_ram_buffer(&d->pgraph, 0, d->vram_ptr,
                                    memory_region_size(d->vram));
 
-#if OPT_ALWAYS_DEFERRED_FENCES
     pg->vk_renderer_state->frame_staging[0].vertex_ram_initialized = true;
-#endif
 
     VK_LOG_ERROR("init: renderer_ready");
 

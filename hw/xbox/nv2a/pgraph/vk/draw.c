@@ -1883,7 +1883,6 @@ static void flush_memory_buffer(PGRAPHState *pg, VkCommandBuffer cmd)
 {
     PGRAPHVkState *r = pg->vk_renderer_state;
 
-#if OPT_ALWAYS_DEFERRED_FENCES
     FrameStagingState *fs = &r->frame_staging[r->current_frame];
     if (fs->vertex_ram_flush_min >= fs->vertex_ram_flush_max) {
         return;
@@ -1893,16 +1892,6 @@ static void flush_memory_buffer(PGRAPHState *pg, VkCommandBuffer cmd)
     VkDeviceSize size = fs->vertex_ram_flush_max - fs->vertex_ram_flush_min;
 
     StorageBuffer *vram = &fs->vertex_ram;
-#else
-    if (r->vertex_ram_flush_min >= r->vertex_ram_flush_max) {
-        return;
-    }
-
-    VkDeviceSize offset = r->vertex_ram_flush_min;
-    VkDeviceSize size = r->vertex_ram_flush_max - r->vertex_ram_flush_min;
-
-    StorageBuffer *vram = get_staging_buffer(r, BUFFER_VERTEX_RAM);
-#endif
 
     VK_CHECK(vmaFlushAllocation(
         r->allocator, vram->allocation, offset, size));
@@ -1922,13 +1911,8 @@ static void flush_memory_buffer(PGRAPHState *pg, VkCommandBuffer cmd)
                          VK_PIPELINE_STAGE_VERTEX_INPUT_BIT, 0, 0, NULL, 1,
                          &barrier, 0, NULL);
 
-#if OPT_ALWAYS_DEFERRED_FENCES
     fs->vertex_ram_flush_min = VK_WHOLE_SIZE;
     fs->vertex_ram_flush_max = 0;
-#else
-    r->vertex_ram_flush_min = VK_WHOLE_SIZE;
-    r->vertex_ram_flush_max = 0;
-#endif
 }
 
 static VkAttachmentLoadOp get_optimal_color_load_op(PGRAPHVkState *r)
@@ -2075,7 +2059,6 @@ const enum NV2A_PROF_COUNTERS_ENUM finish_reason_to_counter_enum[] = {
     [VK_FINISH_REASON_STALLED] = NV2A_PROF_FINISH_STALLED,
 };
 
-#if OPT_ALWAYS_DEFERRED_FENCES
 void pgraph_vk_flush_all_frames(PGRAPHState *pg)
 {
     PGRAPHVkState *r = pg->vk_renderer_state;
@@ -2105,7 +2088,6 @@ void pgraph_vk_flush_all_frames(PGRAPHState *pg)
     }
     pgraph_vk_reclaim_descriptor_overflow(r);
 }
-#endif
 
 #if OPT_REORDER_SAFE_WINDOWS
 static void flush_reorder_window_internal(NV2AState *d);
@@ -2189,7 +2171,6 @@ void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
 
         VkCommandBuffer cmd = pgraph_vk_ensure_nondraw_commands(pg);
 
-#if OPT_ALWAYS_DEFERRED_FENCES
         /* WAR barrier: previous submissions may still be reading from shared
          * destination buffers (UNIFORM, INDEX, VERTEX_INLINE, VERTEX_RAM).
          * The staging sync below overwrites these from offset 0. Ensure all
@@ -2206,16 +2187,11 @@ void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
             VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
             VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
             0, 1, &war_barrier, 0, NULL, 0, NULL);
-#endif
 
         sync_staging_buffer(pg, cmd, BUFFER_INDEX_STAGING, BUFFER_INDEX);
         sync_staging_buffer(pg, cmd, BUFFER_VERTEX_INLINE_STAGING,
                                 BUFFER_VERTEX_INLINE);
         sync_staging_buffer(pg, cmd, BUFFER_UNIFORM_STAGING, BUFFER_UNIFORM);
-#if OPT_ALWAYS_DEFERRED_FENCES
-#else
-        bitmap_clear(get_uploaded_bitmap(r), 0, r->bitmap_size);
-#endif
 #if OPT_SYNC_RANGE_SKIP
         r->sync_range_attr_gen = 0;
         r->sync_range_min = UINT32_MAX;
@@ -2314,9 +2290,7 @@ void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
 
         NV2A_PHASE_TIMER_BEGIN(finish_fence);
 
-#if OPT_TEX_NONDRAW_CMD
         pgraph_vk_staging_reset(pg);
-#endif
 
         bool check_budget = false;
 
@@ -2336,9 +2310,6 @@ void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
          * submits and waits; PFIFO manages frame indices.
          */
         if (!r->is_render_thread_context) {
-        if (OPT_ALWAYS_DEFERRED_FENCES ||
-            finish_reason == VK_FINISH_REASON_FLIP_STALL ||
-            finish_reason == VK_FINISH_REASON_PRESENTING) {
             memcpy(r->deferred_framebuffers[r->current_frame],
                    r->framebuffers,
                    r->framebuffer_index * sizeof(VkFramebuffer));
@@ -2361,15 +2332,12 @@ void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
                                          NULL);
                 }
                 r->deferred_framebuffer_count[next_frame] = 0;
-#if OPT_ALWAYS_DEFERRED_FENCES
                 r->frame_staging[next_frame].index_staging.buffer_offset = 0;
                 r->frame_staging[next_frame].vertex_inline_staging.buffer_offset = 0;
                 r->frame_staging[next_frame].uniform_staging.buffer_offset = 0;
                 r->frame_staging[next_frame].staging_src.buffer_offset = 0;
-#endif
             }
 
-#if OPT_ALWAYS_DEFERRED_FENCES
             {
                 FrameStagingState *cur_fs =
                     &r->frame_staging[r->current_frame];
@@ -2405,41 +2373,17 @@ void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
                 cur_fs->vertex_ram_propagate_min = VK_WHOLE_SIZE;
                 cur_fs->vertex_ram_propagate_max = 0;
             }
-#endif
 
             r->current_frame = next_frame;
             r->command_buffer = r->command_buffers[next_frame * 2];
             r->aux_command_buffer = r->command_buffers[next_frame * 2 + 1];
             r->command_buffer_semaphore = r->frame_semaphores[next_frame];
             r->command_buffer_fence = r->frame_fences[next_frame];
-        } else {
-            pgraph_vk_render_thread_wait_idle(r);
-            VK_CHECK(vkWaitForFences(r->device, 1, &r->command_buffer_fence,
-                                     VK_TRUE, UINT64_MAX));
-            gpu_ts_readback(r, r->current_frame);
-            r->frame_submitted[r->current_frame] = false;
-
-            int next_frame = (r->current_frame + 1) % r->num_active_frames;
-            r->current_frame = next_frame;
-            r->command_buffer = r->command_buffers[next_frame * 2];
-            r->aux_command_buffer = r->command_buffers[next_frame * 2 + 1];
-            r->command_buffer_semaphore = r->frame_semaphores[next_frame];
-            r->command_buffer_fence = r->frame_fences[next_frame];
-            destroy_framebuffers(pg);
-        }
         } /* !is_render_thread_context */
 
-#if OPT_ALWAYS_DEFERRED_FENCES
         /* Descriptor sets are still in use by in-flight GPU frames.
          * Don't reset indices; they'll be reset when pools are exhausted
          * after flushing all frames. */
-#else
-        r->descriptor_set_index = 0;
-#if OPT_BINDLESS_TEXTURES
-        r->ubo_descriptor_set_index = 0;
-#endif
-        r->push_ubo_set_index = 0;
-#endif
         r->need_descriptor_rebind = true;
         r->push_tex_dirty = true;
         r->uniforms_changed = true;
@@ -2461,9 +2405,6 @@ void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
     NV2AState *d = container_of(pg, NV2AState, pgraph);
     pgraph_vk_process_pending_reports_internal(d);
 
-#if !OPT_ALWAYS_DEFERRED_FENCES
-    pgraph_vk_compute_finish_complete(r);
-#endif
     NV2A_PHASE_TIMER_END(finish);
 }
 

@@ -254,7 +254,6 @@ static void upload_pvideo_image(PGRAPHState *pg, PvideoState state)
 
     size_t display_data_size = state.in_width * state.in_height * 4;
 
-#if OPT_ALWAYS_DEFERRED_FENCES
     VkDeviceSize staging_base = pgraph_vk_staging_alloc(pg, display_data_size);
     if (staging_base == VK_WHOLE_SIZE) {
         if (pgraph_vk_staging_reclaim_any(pg)) {
@@ -268,9 +267,6 @@ static void upload_pvideo_image(PGRAPHState *pg, PvideoState state)
             assert(staging_base != VK_WHOLE_SIZE);
         }
     }
-#else
-    VkDeviceSize staging_base = 0;
-#endif
 
     StorageBuffer *disp_staging = get_staging_buffer(r, BUFFER_STAGING_SRC);
     uint8_t *mapped_memory_ptr =

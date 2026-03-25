@@ -581,10 +581,8 @@ static void download_surface_to_buffer(NV2AState *d, SurfaceBinding *surface,
 #if OPT_SURF_TO_TEX_INLINE
     if (compute_needs_finish) {
         pgraph_vk_finish(pg, VK_FINISH_REASON_NEED_BUFFER_SPACE);
-#if OPT_ALWAYS_DEFERRED_FENCES
         pgraph_vk_flush_all_frames(pg);
         r->compute.descriptor_set_index = 0;
-#endif
     }
 #else
     if (r->in_command_buffer &&
@@ -592,10 +590,8 @@ static void download_surface_to_buffer(NV2AState *d, SurfaceBinding *surface,
         pgraph_vk_finish(pg, VK_FINISH_REASON_SURFACE_DOWN);
     } else if (compute_needs_finish) {
         pgraph_vk_finish(pg, VK_FINISH_REASON_NEED_BUFFER_SPACE);
-#if OPT_ALWAYS_DEFERRED_FENCES
         pgraph_vk_flush_all_frames(pg);
         r->compute.descriptor_set_index = 0;
-#endif
     }
 #endif
 
@@ -1727,11 +1723,7 @@ static void create_surface_image(PGRAPHState *pg, SurfaceBinding *surface)
     VK_CHECK(vkCreateImageView(r->device, &image_view_create_info, NULL,
                                &surface->image_view));
 
-#if OPT_SURF_BATCH_CREATE
     VkCommandBuffer cmd = pgraph_vk_begin_nondraw_commands(pg);
-#else
-    VkCommandBuffer cmd = pgraph_vk_begin_single_time_commands(pg);
-#endif
     pgraph_vk_begin_debug_marker(r, cmd, RGBA_RED, __func__);
 
     pgraph_vk_transition_image_layout(
@@ -1742,11 +1734,7 @@ static void create_surface_image(PGRAPHState *pg, SurfaceBinding *surface)
 
     nv2a_profile_inc_counter(NV2A_PROF_QUEUE_SUBMIT_3);
     pgraph_vk_end_debug_marker(r, cmd);
-#if OPT_SURF_BATCH_CREATE
     pgraph_vk_end_nondraw_commands(pg, cmd);
-#else
-    pgraph_vk_end_single_time_commands(pg, cmd);
-#endif
     nv2a_profile_inc_counter(NV2A_PROF_SURF_CREATE);
 }
 
@@ -1921,14 +1909,10 @@ void pgraph_vk_upload_surface_data(NV2AState *d, SurfaceBinding *surface,
 
     nv2a_profile_inc_counter(NV2A_PROF_SURF_UPLOAD);
 
-#if OPT_SURF_BATCH_UPLOAD
     if (r->in_command_buffer &&
         surface->draw_time >= r->command_buffer_start_time) {
         pgraph_vk_finish(pg, VK_FINISH_REASON_SURFACE_CREATE);
     }
-#else
-    pgraph_vk_finish(pg, VK_FINISH_REASON_SURFACE_CREATE);
-#endif
 
     trace_nv2a_pgraph_surface_upload(
                  surface->color ? "COLOR" : "ZETA",
@@ -1983,11 +1967,9 @@ void pgraph_vk_upload_surface_data(NV2AState *d, SurfaceBinding *surface,
     size_t uploaded_image_size = surface->height * surface->width *
                                  surface->fmt.bytes_per_pixel;
 
-#if OPT_SURF_BATCH_UPLOAD
     VkDeviceSize staging_base = pgraph_vk_staging_alloc(pg, uploaded_image_size);
     if (staging_base == VK_WHOLE_SIZE) {
         pgraph_vk_finish(pg, VK_FINISH_REASON_NEED_BUFFER_SPACE);
-#if OPT_ALWAYS_DEFERRED_FENCES
         staging_base = pgraph_vk_staging_alloc(pg, uploaded_image_size);
         if (staging_base == VK_WHOLE_SIZE) {
             if (pgraph_vk_staging_reclaim_any(pg)) {
@@ -2001,20 +1983,9 @@ void pgraph_vk_upload_surface_data(NV2AState *d, SurfaceBinding *surface,
                 assert(staging_base != VK_WHOLE_SIZE);
             }
         }
-#else
-        pgraph_vk_staging_reset(pg);
-        staging_base = pgraph_vk_staging_alloc(pg, uploaded_image_size);
-        assert(staging_base != VK_WHOLE_SIZE);
-#endif
     }
     StorageBuffer *copy_buffer = get_staging_buffer(r, BUFFER_STAGING_SRC);
     void *mapped_memory_ptr = copy_buffer->mapped + staging_base;
-#else
-    StorageBuffer *copy_buffer = get_staging_buffer(r, BUFFER_STAGING_SRC);
-    assert(uploaded_image_size <= copy_buffer->buffer_size);
-    VkDeviceSize staging_base = 0;
-    void *mapped_memory_ptr = copy_buffer->mapped;
-#endif
 
     if (use_compute_to_unswizzle) {
         memcpy(mapped_memory_ptr, buf, uploaded_image_size);
@@ -2027,11 +1998,7 @@ void pgraph_vk_upload_surface_data(NV2AState *d, SurfaceBinding *surface,
     vmaFlushAllocation(r->allocator, copy_buffer->allocation, staging_base,
                        uploaded_image_size);
 
-#if OPT_SURF_BATCH_UPLOAD
     VkCommandBuffer cmd = pgraph_vk_begin_nondraw_commands(pg);
-#else
-    VkCommandBuffer cmd = pgraph_vk_begin_single_time_commands(pg);
-#endif
     pgraph_vk_begin_debug_marker(r, cmd, RGBA_RED, __func__);
 
     VkBufferMemoryBarrier host_barrier = {
@@ -2340,11 +2307,7 @@ void pgraph_vk_upload_surface_data(NV2AState *d, SurfaceBinding *surface,
 
     nv2a_profile_inc_counter(NV2A_PROF_QUEUE_SUBMIT_2);
     pgraph_vk_end_debug_marker(r, cmd);
-#if OPT_SURF_BATCH_UPLOAD
     pgraph_vk_end_nondraw_commands(pg, cmd);
-#else
-    pgraph_vk_end_single_time_commands(pg, cmd);
-#endif
 
     surface->initialized = true;
 }

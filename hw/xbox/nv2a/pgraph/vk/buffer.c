@@ -371,7 +371,6 @@ bool pgraph_vk_init_buffers(NV2AState *d, Error **errp)
         }
     }
 
-#if OPT_ALWAYS_DEFERRED_FENCES
     size_t idx_max, vtx_max, uni_max, stg_max;
     if (nframes >= 3) {
         idx_max = 32 * mib;
@@ -473,7 +472,6 @@ bool pgraph_vk_init_buffers(NV2AState *d, Error **errp)
                  "idx=%zuMB vtx=%zuMB uni=%zuMB stg=%zuMB per-frame)",
                  nframes, idx_max >> 20, vtx_max >> 20, uni_max >> 20,
                  stg_max >> 20);
-#endif
 
     pgraph_prim_rewrite_init(&r->prim_rewrite_buf);
 
@@ -484,7 +482,6 @@ bool pgraph_vk_init_buffers(NV2AState *d, Error **errp)
     return true;
 
 fail:
-#if OPT_ALWAYS_DEFERRED_FENCES
     for (int i = 0; i < NUM_SUBMIT_FRAMES; i++) {
         FrameStagingState *fs = &r->frame_staging[i];
         StorageBuffer *bufs[] = {
@@ -501,7 +498,6 @@ fail:
         g_free(fs->uploaded_bitmap);
         fs->uploaded_bitmap = NULL;
     }
-#endif
     for (int i = 0; i < BUFFER_COUNT; i++) {
         if (r->storage_buffers[i].mapped) {
             vmaUnmapMemory(r->allocator, r->storage_buffers[i].allocation);
@@ -520,7 +516,6 @@ void pgraph_vk_finalize_buffers(NV2AState *d)
     PGRAPHState *pg = &d->pgraph;
     PGRAPHVkState *r = pg->vk_renderer_state;
 
-#if OPT_ALWAYS_DEFERRED_FENCES
     for (int i = 0; i < NUM_SUBMIT_FRAMES; i++) {
         FrameStagingState *fs = &r->frame_staging[i];
         StorageBuffer *bufs[] = {
@@ -536,7 +531,6 @@ void pgraph_vk_finalize_buffers(NV2AState *d)
         g_free(fs->uploaded_bitmap);
         fs->uploaded_bitmap = NULL;
     }
-#endif
 
     for (int i = 0; i < BUFFER_COUNT; i++) {
         if (r->storage_buffers[i].mapped) {
@@ -609,7 +603,6 @@ void pgraph_vk_staging_reset(PGRAPHState *pg)
     get_staging_buffer(r, BUFFER_STAGING_SRC)->buffer_offset = 0;
 }
 
-#if OPT_ALWAYS_DEFERRED_FENCES
 bool pgraph_vk_staging_reclaim_any(PGRAPHState *pg)
 {
     PGRAPHVkState *r = pg->vk_renderer_state;
@@ -632,4 +625,3 @@ bool pgraph_vk_staging_reclaim_any(PGRAPHState *pg)
     }
     return false;
 }
-#endif
