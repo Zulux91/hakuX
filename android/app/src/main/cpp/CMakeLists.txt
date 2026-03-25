@@ -9,7 +9,7 @@ include(FetchContent)
 include(ExternalProject)
 
 get_filename_component(REPO_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../../../.." ABSOLUTE)
-find_program(PYTHON_EXECUTABLE python)
+find_program(PYTHON_EXECUTABLE NAMES python python3)
 if(NOT PYTHON_EXECUTABLE)
   message(FATAL_ERROR "python not found in PATH; required for QAPI/trace generation")
 endif()

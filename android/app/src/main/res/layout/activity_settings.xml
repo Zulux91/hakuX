@@ -30,7 +30,7 @@
         android:layout_height="wrap_content"
         app:cardBackgroundColor="@color/xemu_surface"
         app:cardCornerRadius="28dp"
-        app:cardElevation="8dp"
+        app:cardElevation="0dp"
         app:strokeColor="@color/xemu_outline_variant"
         app:strokeWidth="1dp">
 
@@ -75,7 +75,7 @@
         android:layout_marginTop="16dp"
         app:cardBackgroundColor="@color/xemu_surface"
         app:cardCornerRadius="28dp"
-        app:cardElevation="8dp"
+        app:cardElevation="0dp"
         app:strokeColor="@color/xemu_outline_variant"
         app:strokeWidth="1dp">
 
@@ -170,7 +170,7 @@
         android:layout_marginTop="16dp"
         app:cardBackgroundColor="@color/xemu_surface"
         app:cardCornerRadius="28dp"
-        app:cardElevation="8dp"
+        app:cardElevation="0dp"
         app:strokeColor="@color/xemu_outline_variant"
         app:strokeWidth="1dp">
 
@@ -230,7 +230,7 @@
         android:layout_marginTop="16dp"
         app:cardBackgroundColor="@color/xemu_surface"
         app:cardCornerRadius="28dp"
-        app:cardElevation="8dp"
+        app:cardElevation="0dp"
         app:strokeColor="@color/xemu_outline_variant"
         app:strokeWidth="1dp">
 
@@ -299,7 +299,7 @@
         android:layout_marginTop="16dp"
         app:cardBackgroundColor="@color/xemu_surface"
         app:cardCornerRadius="28dp"
-        app:cardElevation="8dp"
+        app:cardElevation="0dp"
         app:strokeColor="@color/xemu_outline_variant"
         app:strokeWidth="1dp">
 
