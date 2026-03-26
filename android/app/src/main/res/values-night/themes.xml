@@ -17,8 +17,8 @@
     <item name="colorOutline">@color/xemu_outline</item>
     <item name="colorOutlineVariant">@color/xemu_outline_variant</item>
 
-    <item name="android:statusBarColor">#FFFFFF</item>
-    <item name="android:windowLightStatusBar">true</item>
-    <item name="android:navigationBarColor">#FFFFFF</item>
+    <item name="android:statusBarColor">@color/xemu_black</item>
+    <item name="android:windowLightStatusBar">false</item>
+    <item name="android:navigationBarColor">@color/xemu_black</item>
   </style>
 </resources>

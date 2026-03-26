@@ -1,0 +1,11 @@
+<resources>
+  <color name="xemu_black">#121212</color>
+  <color name="xemu_surface">#1E1E1E</color>
+  <color name="xemu_surface_variant">#2C2C2C</color>
+  <color name="xemu_text">#E3E3E3</color>
+  <color name="xemu_text_muted">#9E9E9E</color>
+  <color name="xemu_green">#66BB6A</color>
+  <color name="xemu_green_dark">#388E3C</color>
+  <color name="xemu_outline">#3C3C3C</color>
+  <color name="xemu_outline_variant">#333333</color>
+</resources>
