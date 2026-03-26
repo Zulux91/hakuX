@@ -67,7 +67,6 @@ class GameLibraryActivity : AppCompatActivity() {
   private lateinit var gamesListContainer: LinearLayout
   private lateinit var gamesGridContainer: LinearLayout
   private lateinit var btnChangeFolder: MaterialButton
-  private lateinit var btnConvertIso: MaterialButton
   private lateinit var btnSettings: ImageButton
   private lateinit var btnAbout: ImageButton
   private lateinit var viewModeToggle: MaterialButtonToggleGroup
@@ -103,7 +102,6 @@ class GameLibraryActivity : AppCompatActivity() {
     gamesListContainer = findViewById(R.id.library_games_container)
     gamesGridContainer = findViewById(R.id.library_games_grid_container)
     btnChangeFolder = findViewById(R.id.btn_change_games_folder)
-    btnConvertIso = findViewById(R.id.btn_convert_iso)
     btnSettings = findViewById(R.id.btn_library_settings)
     btnAbout = findViewById(R.id.btn_library_about)
     viewModeToggle = findViewById(R.id.library_view_mode_toggle)
@@ -123,9 +121,6 @@ class GameLibraryActivity : AppCompatActivity() {
         return@setOnClickListener
       }
       pickGamesFolder.launch(gamesFolderUri)
-    }
-    btnConvertIso.setOnClickListener {
-      showIsoConversionPicker()
     }
     btnSettings.setOnClickListener {
       startActivity(Intent(this, SettingsActivity::class.java))
@@ -153,8 +148,6 @@ class GameLibraryActivity : AppCompatActivity() {
         renderGames()
       }
     }
-    updateConvertButtonState()
-
     if (!isFolderReady(gamesFolderUri)) {
       folderText.text = getString(R.string.library_no_folder)
       Toast.makeText(this, getString(R.string.setup_pick_disc), Toast.LENGTH_SHORT).show()
@@ -209,7 +202,6 @@ class GameLibraryActivity : AppCompatActivity() {
   private fun renderGames() {
     val games = currentGames
     syncDisplayModeUi()
-    updateConvertButtonState(games)
     gamesListContainer.removeAllViews()
     gamesGridContainer.removeAllViews()
     emptyText.visibility = if (games.isEmpty()) View.VISIBLE else View.GONE
@@ -224,11 +216,6 @@ class GameLibraryActivity : AppCompatActivity() {
     }
   }
 
-  private fun updateConvertButtonState(games: List<GameEntry> = currentGames) {
-    btnConvertIso.isEnabled = XisoConverterNative.isAvailable() &&
-      !isConvertingIso &&
-      games.any { game -> isConvertibleIso(game) }
-  }
 
   private fun renderList(games: List<GameEntry>) {
     val inflater = LayoutInflater.from(this)
@@ -546,120 +533,7 @@ class GameLibraryActivity : AppCompatActivity() {
     return score
   }
 
-  private fun showIsoConversionPicker() {
-    if (isConvertingIso) {
-      Toast.makeText(this, getString(R.string.library_convert_busy), Toast.LENGTH_SHORT).show()
-      return
-    }
 
-    val isoGames = currentGames.filter { game -> isConvertibleIso(game) }
-    if (isoGames.isEmpty()) {
-      Toast.makeText(this, getString(R.string.library_convert_none), Toast.LENGTH_SHORT).show()
-      return
-    }
-
-    val labels = isoGames.map { game ->
-      "${game.title}\n${game.relativePath}"
-    }.toTypedArray()
-
-    MaterialAlertDialogBuilder(this)
-      .setTitle(R.string.library_convert_pick_title)
-      .setItems(labels) { _, which ->
-        confirmIsoConversion(isoGames[which])
-      }
-      .setNegativeButton(android.R.string.cancel, null)
-      .show()
-  }
-
-  private fun confirmIsoConversion(game: GameEntry) {
-    val folderUri = gamesFolderUri
-    if (folderUri == null) {
-      Toast.makeText(this, getString(R.string.library_no_folder), Toast.LENGTH_SHORT).show()
-      return
-    }
-    if (!hasPersistedWritePermission(folderUri)) {
-      Toast.makeText(
-        this,
-        getString(R.string.library_convert_write_permission),
-        Toast.LENGTH_LONG
-      ).show()
-      pickGamesFolder.launch(folderUri)
-      return
-    }
-
-    val root = DocumentFile.fromTreeUri(this, folderUri)
-    val parent = root?.let { resolveParentDirectory(it, game.relativePath) }
-    if (parent == null) {
-      Toast.makeText(this, getString(R.string.library_convert_resolve_failed), Toast.LENGTH_LONG).show()
-      return
-    }
-
-    val sourceName = game.relativePath.substringAfterLast('/')
-    val outputName = buildXisoFileName(sourceName)
-    val existing = parent.findFile(outputName)
-    if (existing != null && existing.isDirectory) {
-      Toast.makeText(this, getString(R.string.library_convert_create_output_failed), Toast.LENGTH_LONG).show()
-      return
-    }
-
-    MaterialAlertDialogBuilder(this)
-      .setTitle(R.string.library_convert_confirm_title)
-      .setMessage(getString(R.string.library_convert_confirm_message, outputName))
-      .setPositiveButton(R.string.library_convert_action) { _, _ ->
-        if (existing != null) {
-          MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.library_convert_overwrite_title)
-            .setMessage(getString(R.string.library_convert_overwrite_message, outputName))
-            .setPositiveButton(R.string.library_convert_action) { _, _ ->
-              startIsoConversion(game, outputName, overwrite = true)
-            }
-            .setNegativeButton(android.R.string.cancel, null)
-            .show()
-        } else {
-          startIsoConversion(game, outputName, overwrite = false)
-        }
-      }
-      .setNegativeButton(android.R.string.cancel, null)
-      .show()
-  }
-
-  private fun startIsoConversion(game: GameEntry, outputName: String, overwrite: Boolean) {
-    if (isConvertingIso) {
-      Toast.makeText(this, getString(R.string.library_convert_busy), Toast.LENGTH_SHORT).show()
-      return
-    }
-    if (!XisoConverterNative.isAvailable()) {
-      Toast.makeText(this, getString(R.string.library_convert_unavailable), Toast.LENGTH_LONG).show()
-      return
-    }
-
-    isConvertingIso = true
-    updateConvertButtonState()
-    setLoading(true, getString(R.string.library_converting_game, game.title))
-
-    Thread {
-      val error = convertIsoToXisoInFolder(game, outputName, overwrite)
-      runOnUiThread {
-        isConvertingIso = false
-        setLoading(false, getString(R.string.library_loading_games))
-        updateConvertButtonState()
-        if (error == null) {
-          Toast.makeText(
-            this,
-            getString(R.string.library_convert_success, outputName),
-            Toast.LENGTH_LONG
-          ).show()
-          loadGames()
-        } else {
-          Toast.makeText(
-            this,
-            getString(R.string.library_convert_failed, error),
-            Toast.LENGTH_LONG
-          ).show()
-        }
-      }
-    }.start()
-  }
 
   private fun convertIsoToXisoInFolder(
     game: GameEntry,
@@ -783,15 +657,122 @@ class GameLibraryActivity : AppCompatActivity() {
   }
 
   private fun launchGame(game: GameEntry) {
-    persistUriPermission(game.uri)
+    if (isConvertibleIso(game) && XisoConverterNative.isAvailable()) {
+      // Check if a .xiso.iso version already exists alongside the original
+      val xisoGame = findExistingXiso(game)
+      if (xisoGame != null) {
+        launchGameDirectly(xisoGame.uri)
+        return
+      }
+
+      // Check if the file content is already in XISO format
+      if (isXisoContent(game.uri)) {
+        launchGameDirectly(game.uri)
+        return
+      }
+
+      // Needs conversion — show dialog and convert in background
+      launchGameWithAutoConvert(game)
+    } else {
+      launchGameDirectly(game.uri)
+    }
+  }
+
+  private fun launchGameDirectly(uri: Uri) {
+    persistUriPermission(uri)
     prefs.edit()
-      .putString("dvdUri", game.uri.toString())
+      .putString("dvdUri", uri.toString())
       .remove("dvdPath")
       .putBoolean("skip_game_picker", false)
       .apply()
 
     startActivity(Intent(this, MainActivity::class.java))
     finish()
+  }
+
+  private fun launchGameWithAutoConvert(game: GameEntry) {
+    val dialog = MaterialAlertDialogBuilder(this)
+      .setTitle(R.string.library_autoconvert_title)
+      .setMessage(getString(R.string.library_autoconvert_message, game.title))
+      .setCancelable(false)
+      .setView(ProgressBar(this).apply {
+        isIndeterminate = true
+        val pad = (24 * resources.displayMetrics.density).toInt()
+        setPadding(pad, pad, pad, pad)
+      })
+      .show()
+
+    Thread {
+      val outputName = buildXisoFileName(
+        game.relativePath.substringAfterLast('/')
+      )
+      val result = convertIsoToXisoInFolder(game, outputName, overwrite = false)
+      val xisoGame = if (result == null) findExistingXiso(game) else null
+
+      // Delete original ISO after successful conversion
+      if (xisoGame != null) {
+        try {
+          val origDoc = DocumentFile.fromSingleUri(this, game.uri)
+          origDoc?.delete()
+        } catch (_: Exception) { }
+      }
+
+      runOnUiThread {
+        dialog.dismiss()
+        if (xisoGame != null) {
+          launchGameDirectly(xisoGame.uri)
+        } else {
+          // Conversion failed — warn and launch original
+          Toast.makeText(
+            this,
+            getString(R.string.library_autoconvert_failed, result ?: "unknown"),
+            Toast.LENGTH_LONG
+          ).show()
+          launchGameDirectly(game.uri)
+        }
+      }
+    }.start()
+  }
+
+  /**
+   * Check if the file content is already XISO (XDVDFS) format by reading the
+   * volume descriptor magic at sector 32 (offset 0x10000).
+   */
+  private fun isXisoContent(uri: Uri): Boolean {
+    val magic = "MICROSOFT*XBOX*MEDIA".toByteArray(Charsets.US_ASCII)
+    return try {
+      contentResolver.openInputStream(uri)?.use { stream ->
+        val skipped = stream.skip(0x10000L)
+        if (skipped < 0x10000L) return false
+        val buf = ByteArray(magic.size)
+        val read = stream.read(buf)
+        read == magic.size && buf.contentEquals(magic)
+      } ?: false
+    } catch (_: Exception) {
+      false
+    }
+  }
+
+  /**
+   * Look for an existing .xiso.iso file next to the original game file.
+   */
+  private fun findExistingXiso(game: GameEntry): GameEntry? {
+    val folderUri = gamesFolderUri ?: return null
+    val root = DocumentFile.fromTreeUri(this, folderUri) ?: return null
+    val parent = resolveParentDirectory(root, game.relativePath) ?: return null
+    val xisoName = buildXisoFileName(game.relativePath.substringAfterLast('/'))
+    val xisoDoc = parent.findFile(xisoName)
+    if (xisoDoc != null && xisoDoc.isFile && xisoDoc.length() > 0) {
+      return GameEntry(
+        title = game.title,
+        uri = xisoDoc.uri,
+        relativePath = game.relativePath.substringBeforeLast('/').let {
+          if (it.isEmpty()) xisoName else "$it/$xisoName"
+        },
+        sizeBytes = xisoDoc.length()
+      )
+    }
+    return null
   }
 
   private fun scanFolderForGames(folderUri: Uri): List<GameEntry> {
