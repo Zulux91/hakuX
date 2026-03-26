@@ -604,10 +604,14 @@ static void upload_texture_image(PGRAPHState *pg, int texture_idx,
     NV2A_PHASE_TIMER_END(texture_upload);
 }
 
+// Direct depth-stencil to texture: samples depth from the surface image
+// directly in a compute shader (eliminating the depth image→buffer copy),
+// copies only the stencil aspect to a buffer, and packs the result.
 static void copy_zeta_surface_to_texture(PGRAPHState *pg, SurfaceBinding *surface,
                                          TextureBinding *texture)
 {
     assert(!surface->color);
+    assert(surface->host_fmt.aspect & VK_IMAGE_ASPECT_STENCIL_BIT);
 
     PGRAPHVkState *r = pg->vk_renderer_state;
 
@@ -619,20 +623,15 @@ static void copy_zeta_surface_to_texture(PGRAPHState *pg, SurfaceBinding *surfac
         NV2AState *d = container_of(pg, NV2AState, pgraph);
         pgraph_vk_flush_draw_queue(d);
     }
-    TextureShape *state = &texture->key.state;
-    VkColorFormatInfo vkf = kelvin_color_format_vk_map[state->color_format];
 
-    bool use_compute_to_convert_depth_stencil =
-        surface->host_fmt.vk_format == VK_FORMAT_D24_UNORM_S8_UINT ||
-        surface->host_fmt.vk_format == VK_FORMAT_D32_SFLOAT_S8_UINT;
-
-    bool compute_needs_finish = use_compute_to_convert_depth_stencil &&
-                                pgraph_vk_compute_needs_finish(r);
-    if (compute_needs_finish) {
+    if (pgraph_vk_compute_needs_finish(r)) {
         pgraph_vk_finish(pg, VK_FINISH_REASON_NEED_BUFFER_SPACE);
         pgraph_vk_flush_all_frames(pg);
-        r->compute.descriptor_set_index = 0;
+        pgraph_vk_compute_finish_complete(r);
     }
+
+    TextureShape *state = &texture->key.state;
+    VkColorFormatInfo vkf = kelvin_color_format_vk_map[state->color_format];
 
     nv2a_profile_inc_counter(NV2A_PROF_SURF_TO_TEX);
 
@@ -651,18 +650,18 @@ static void copy_zeta_surface_to_texture(PGRAPHState *pg, SurfaceBinding *surfac
                  scaled_height = surface->height;
     pgraph_apply_scaling_factor(pg, &scaled_width, &scaled_height);
 
-    size_t copied_image_size =
-        scaled_width * scaled_height * surface->host_fmt.host_bytes_per_pixel;
-    size_t stencil_buffer_offset = 0;
-    size_t stencil_buffer_size = 0;
+    // Step 1: Copy only the stencil aspect to buffer (1 byte/pixel)
+    StorageBuffer *stencil_buffer = &r->storage_buffers[BUFFER_COMPUTE_DST];
+    size_t stencil_buffer_offset =
+        ROUND_UP(scaled_width * scaled_height * 4,
+                 r->device_props.limits.minStorageBufferOffsetAlignment);
+    size_t stencil_size = scaled_width * scaled_height;
 
-    int num_regions = 0;
-    VkBufferImageCopy regions[2];
-    regions[num_regions++] = (VkBufferImageCopy){
-        .bufferOffset = 0,
-        .bufferRowLength = 0, // Tightly packed
-        .bufferImageHeight = 0, // Tightly packed
-        .imageSubresource.aspectMask = surface->color ? VK_IMAGE_ASPECT_COLOR_BIT : VK_IMAGE_ASPECT_DEPTH_BIT,
+    VkBufferImageCopy stencil_region = {
+        .bufferOffset = stencil_buffer_offset,
+        .bufferRowLength = 0,
+        .bufferImageHeight = 0,
+        .imageSubresource.aspectMask = VK_IMAGE_ASPECT_STENCIL_BIT,
         .imageSubresource.mipLevel = 0,
         .imageSubresource.baseArrayLayer = 0,
         .imageSubresource.layerCount = 1,
@@ -670,129 +669,93 @@ static void copy_zeta_surface_to_texture(PGRAPHState *pg, SurfaceBinding *surfac
         .imageExtent = (VkExtent3D){scaled_width, scaled_height, 1},
     };
 
-    if (surface->host_fmt.aspect & VK_IMAGE_ASPECT_STENCIL_BIT) {
-        stencil_buffer_offset =
-            ROUND_UP(scaled_width * scaled_height * 4,
-                     r->device_props.limits.minStorageBufferOffsetAlignment);
-        stencil_buffer_size = scaled_width * scaled_height;
-        copied_image_size += stencil_buffer_size;
-
-        regions[num_regions++] = (VkBufferImageCopy){
-            .bufferOffset = stencil_buffer_offset,
-            .bufferRowLength = 0, // Tightly packed
-            .bufferImageHeight = 0, // Tightly packed
-            .imageSubresource.aspectMask = VK_IMAGE_ASPECT_STENCIL_BIT,
-            .imageSubresource.mipLevel = 0,
-            .imageSubresource.baseArrayLayer = 0,
-            .imageSubresource.layerCount = 1,
-            .imageOffset = (VkOffset3D){0, 0, 0},
-            .imageExtent = (VkExtent3D){scaled_width, scaled_height, 1},
-        };
-    }
-    StorageBuffer *dst_storage_buffer = &r->storage_buffers[BUFFER_COMPUTE_DST];
-    assert(dst_storage_buffer->buffer_size >= copied_image_size);
-
     pgraph_vk_transition_image_layout(
         pg, cmd, surface->image, surface->host_fmt.vk_format,
-        VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        surface->image_layout,
         VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
 
     vkCmdCopyImageToBuffer(
         cmd, surface->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-        dst_storage_buffer->buffer,
-        num_regions, regions);
+        stencil_buffer->buffer, 1, &stencil_region);
 
+    // Step 2: Transition depth surface to read-only for compute sampling
     pgraph_vk_transition_image_layout(
         pg, cmd, surface->image, surface->host_fmt.vk_format,
         VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-        VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+        VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
+    surface->image_layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
 
-    VkBuffer texture_source_buffer;
-    size_t packed_image_size = scaled_width * scaled_height * 4;
+    // Create depth-only image view for compute sampling
+    VkImageViewCreateInfo depth_view_info = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+        .image = surface->image,
+        .viewType = VK_IMAGE_VIEW_TYPE_2D,
+        .format = surface->host_fmt.vk_format,
+        .subresourceRange = {
+            .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
+            .baseMipLevel = 0,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = 1,
+        },
+    };
+    VkImageView depth_view;
+    VK_CHECK(vkCreateImageView(r->device, &depth_view_info, NULL,
+                               &depth_view));
 
-    if (use_compute_to_convert_depth_stencil) {
+    // Step 3: Barrier for stencil buffer availability
+    VkBufferMemoryBarrier stencil_barrier = {
+        .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+        .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+        .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .buffer = stencil_buffer->buffer,
+        .offset = stencil_buffer_offset,
+        .size = stencil_size,
+    };
+    VkBufferMemoryBarrier output_pre_barrier = {
+        .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+        .srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
+        .dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .buffer = r->storage_buffers[BUFFER_COMPUTE_SRC].buffer,
+        .size = scaled_width * scaled_height * 4,
+    };
+    VkBufferMemoryBarrier pre_barriers[] = { stencil_barrier, output_pre_barrier };
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, NULL,
+                         ARRAY_SIZE(pre_barriers), pre_barriers, 0, NULL);
 
-        VkBufferMemoryBarrier pre_pack_src_barrier = {
-            .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
-            .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
-            .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
-            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .buffer = r->storage_buffers[BUFFER_COMPUTE_DST].buffer,
-            .size = packed_image_size
-        };
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, NULL,
-                             1, &pre_pack_src_barrier, 0, NULL);
+    // Step 4: Compute shader samples depth + reads stencil → packs output
+    pgraph_vk_pack_depth_stencil_direct(
+        pg, surface, cmd, depth_view,
+        stencil_buffer->buffer, stencil_buffer_offset, stencil_size,
+        r->storage_buffers[BUFFER_COMPUTE_SRC].buffer, false);
 
-        VkBufferMemoryBarrier pre_pack_dst_barrier = {
-            .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
-            .srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
-            .dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
-            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .buffer = r->storage_buffers[BUFFER_COMPUTE_SRC].buffer,
-            .size = packed_image_size
-        };
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, NULL,
-                             1, &pre_pack_dst_barrier, 0, NULL);
+    // Step 5: Barrier for packed output buffer → transfer read
+    size_t packed_size = scaled_width * scaled_height * 4;
+    VkBufferMemoryBarrier post_compute_barrier = {
+        .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+        .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
+        .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .buffer = r->storage_buffers[BUFFER_COMPUTE_SRC].buffer,
+        .size = packed_size,
+    };
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL,
+                         1, &post_compute_barrier, 0, NULL);
 
-        pgraph_vk_pack_depth_stencil(
-            pg, surface, cmd,
-            r->storage_buffers[BUFFER_COMPUTE_DST].buffer,
-            r->storage_buffers[BUFFER_COMPUTE_SRC].buffer, false);
-
-        VkBufferMemoryBarrier post_pack_src_barrier = {
-            .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
-            .srcAccessMask = VK_ACCESS_SHADER_READ_BIT,
-            .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
-            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .buffer = r->storage_buffers[BUFFER_COMPUTE_DST].buffer,
-            .size = packed_image_size
-        };
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 1,
-                             &post_pack_src_barrier, 0, NULL);
-
-        VkBufferMemoryBarrier post_pack_dst_barrier = {
-            .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
-            .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
-            .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
-            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .buffer = r->storage_buffers[BUFFER_COMPUTE_SRC].buffer,
-            .size = packed_image_size
-        };
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 1,
-                             &post_pack_dst_barrier, 0, NULL);
-
-        texture_source_buffer = r->storage_buffers[BUFFER_COMPUTE_SRC].buffer;
-    } else {
-        VkBufferMemoryBarrier barrier = {
-            .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
-            .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
-            .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
-            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .buffer = dst_storage_buffer->buffer,
-            .size = copied_image_size
-        };
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL,
-                             1, &barrier, 0, NULL);
-
-        texture_source_buffer = dst_storage_buffer->buffer;
-    }
-
+    // Step 6: Copy packed buffer → texture image
     pgraph_vk_transition_image_layout(pg, cmd, texture->image, vkf.vk_format,
                                       texture->current_layout,
                                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
     texture->current_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
 
-    regions[0] = (VkBufferImageCopy){
+    VkBufferImageCopy output_region = {
         .bufferOffset = 0,
         .bufferRowLength = 0,
         .bufferImageHeight = 0,
@@ -804,19 +767,17 @@ static void copy_zeta_surface_to_texture(PGRAPHState *pg, SurfaceBinding *surfac
         .imageExtent = (VkExtent3D){ scaled_width, scaled_height, 1 },
     };
     vkCmdCopyBufferToImage(
-        cmd, texture_source_buffer, texture->image,
-        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, regions);
+        cmd, r->storage_buffers[BUFFER_COMPUTE_SRC].buffer, texture->image,
+        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &output_region);
 
-    size_t texture_data_max_size = use_compute_to_convert_depth_stencil ?
-        packed_image_size : copied_image_size;
     VkBufferMemoryBarrier post_copy_barrier = {
         .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
         .srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
         .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
         .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
         .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-        .buffer = texture_source_buffer,
-        .size = texture_data_max_size
+        .buffer = r->storage_buffers[BUFFER_COMPUTE_SRC].buffer,
+        .size = packed_size,
     };
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
                          VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 1,
@@ -826,6 +787,8 @@ static void copy_zeta_surface_to_texture(PGRAPHState *pg, SurfaceBinding *surfac
                                       texture->current_layout,
                                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     texture->current_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    vkDestroyImageView(r->device, depth_view, NULL);
 
     pgraph_vk_end_debug_marker(r, cmd);
 #if OPT_SURF_TO_TEX_INLINE
@@ -887,6 +850,61 @@ static void bind_surface_as_texture(PGRAPHState *pg, SurfaceBinding *surface,
     texture->draw_time = surface->draw_time;
 }
 
+// Direct zeta surface sampling: transition the depth image to a read-only
+// layout so it can be sampled as a texture without copying. Only valid for
+// depth-only surfaces (D16) where the depth float value matches the expected
+// texture format (R16_UNORM).
+static void bind_zeta_surface_as_texture(PGRAPHState *pg,
+                                         SurfaceBinding *surface,
+                                         TextureBinding *texture)
+{
+    PGRAPHVkState *r = pg->vk_renderer_state;
+
+    assert(!surface->color);
+    assert(!(surface->host_fmt.aspect & VK_IMAGE_ASPECT_STENCIL_BIT));
+
+    if (r->reorder_window.count > 0) {
+        NV2AState *d = container_of(pg, NV2AState, pgraph);
+        pgraph_vk_flush_reorder_window(d);
+    }
+    if (r->draw_queue.count > 0) {
+        NV2AState *d = container_of(pg, NV2AState, pgraph);
+        pgraph_vk_flush_draw_queue(d);
+    }
+
+    nv2a_profile_inc_counter(NV2A_PROF_SURF_TO_TEX);
+
+    VkCommandBuffer cmd = pgraph_vk_begin_nondraw_commands(pg);
+
+    VkImageMemoryBarrier barrier = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .oldLayout = surface->image_layout,
+        .newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .image = surface->image,
+        .subresourceRange = {
+            .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
+            .baseMipLevel = 0,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = 1,
+        },
+        .srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+        .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
+    };
+    vkCmdPipelineBarrier(cmd,
+        VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        0, 0, NULL, 0, NULL, 1, &barrier);
+
+    surface->image_layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+
+    pgraph_vk_end_nondraw_commands(pg, cmd);
+
+    texture->draw_time = surface->draw_time;
+}
+
 static void copy_surface_to_texture(PGRAPHState *pg, SurfaceBinding *surface,
                                     TextureBinding *texture)
 {
@@ -923,8 +941,7 @@ static void copy_surface_to_texture(PGRAPHState *pg, SurfaceBinding *surface,
 
     pgraph_vk_transition_image_layout(
         pg, cmd, surface->image, surface->host_fmt.vk_format,
-        surface->color ? VK_IMAGE_LAYOUT_GENERAL :
-                         VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        surface->image_layout,
         VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
 
     pgraph_vk_transition_image_layout(pg, cmd, texture->image, vkf.vk_format,
@@ -950,8 +967,7 @@ static void copy_surface_to_texture(PGRAPHState *pg, SurfaceBinding *surface,
     pgraph_vk_transition_image_layout(
         pg, cmd, surface->image, surface->host_fmt.vk_format,
         VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-        surface->color ? VK_IMAGE_LAYOUT_GENERAL :
-                         VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+        surface->image_layout);
 
     pgraph_vk_transition_image_layout(pg, cmd, texture->image, vkf.vk_format,
                                       texture->current_layout,
@@ -1288,8 +1304,13 @@ static void create_texture(PGRAPHState *pg, int texture_idx)
         bool skip_surf_scan = false;
         if (r->tex_surf_range_cache[texture_idx].vram_addr == texture_vram_offset &&
             r->tex_surf_range_cache[texture_idx].length == texture_length &&
-            !r->tex_surf_range_cache[texture_idx].had_overlap &&
-            r->tex_surf_range_cache[texture_idx].surface_list_gen == r->surface_list_gen) {
+            r->tex_surf_range_cache[texture_idx].surface_list_gen == r->surface_list_gen &&
+            (/* No overlap last time — nothing to download */
+             !r->tex_surf_range_cache[texture_idx].had_overlap ||
+             /* Had overlap but no surface has been drawn to since last
+              * download — overlapping surfaces are still clean. */
+             r->tex_surf_range_cache[texture_idx].surface_draw_gen ==
+                 r->surface_draw_gen)) {
             skip_surf_scan = true;
         }
 
@@ -1300,6 +1321,7 @@ static void create_texture(PGRAPHState *pg, int texture_idx)
             r->tex_surf_range_cache[texture_idx].length = texture_length;
             r->tex_surf_range_cache[texture_idx].had_overlap = had_overlap;
             r->tex_surf_range_cache[texture_idx].surface_list_gen = r->surface_list_gen;
+            r->tex_surf_range_cache[texture_idx].surface_draw_gen = r->surface_draw_gen;
         }
     }
 
@@ -1382,16 +1404,29 @@ static void create_texture(PGRAPHState *pg, int texture_idx)
                 if (snode->submit_time + r->num_active_frames > r->submit_count) {
                     pgraph_vk_flush_all_frames(pg);
                 }
-                if (surface->color) {
-                    bind_surface_as_texture(pg, surface, snode);
+                bool can_direct_bind =
+                    surface->color ||
+                    !(surface->host_fmt.aspect & VK_IMAGE_ASPECT_STENCIL_BIT);
+
+                if (can_direct_bind) {
+                    VkImageLayout direct_layout;
+                    if (surface->color) {
+                        bind_surface_as_texture(pg, surface, snode);
+                        direct_layout = VK_IMAGE_LAYOUT_GENERAL;
+                    } else {
+                        bind_zeta_surface_as_texture(pg, surface, snode);
+                        direct_layout =
+                            VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+                    }
                     r->tex_surface_direct[texture_idx] = true;
                     r->tex_surface_direct_views[texture_idx] =
                         surface->image_view;
+                    r->tex_surface_direct_layout[texture_idx] = direct_layout;
                     r->texture_bindings_changed = true;
 #if OPT_BINDLESS_TEXTURES
                     if (r->bindless_textures_supported) {
                         VkDescriptorImageInfo bl_info = {
-                            .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
+                            .imageLayout = direct_layout,
                             .imageView = surface->image_view,
                             .sampler = snode->sampler,
                         };
@@ -1413,7 +1448,9 @@ static void create_texture(PGRAPHState *pg, int texture_idx)
                     copy_surface_to_texture(pg, surface, snode);
                 }
                 did_s2t_copy = true;
-            } else if (surface->color) {
+            } else if (surface->color ||
+                       !(surface->host_fmt.aspect &
+                         VK_IMAGE_ASPECT_STENCIL_BIT)) {
                 // Same draw_time: surface hasn't changed, reuse direct view
                 r->tex_surface_direct[texture_idx] = true;
                 r->tex_surface_direct_views[texture_idx] =
@@ -1719,14 +1756,27 @@ static void create_texture(PGRAPHState *pg, int texture_idx)
     r->texture_bindings[texture_idx] = snode;
 
     if (surface_to_texture) {
-        if (surface->color) {
-            bind_surface_as_texture(pg, surface, snode);
+        bool can_direct_bind =
+            surface->color ||
+            !(surface->host_fmt.aspect & VK_IMAGE_ASPECT_STENCIL_BIT);
+
+        if (can_direct_bind) {
+            VkImageLayout direct_layout;
+            if (surface->color) {
+                bind_surface_as_texture(pg, surface, snode);
+                direct_layout = VK_IMAGE_LAYOUT_GENERAL;
+            } else {
+                bind_zeta_surface_as_texture(pg, surface, snode);
+                direct_layout =
+                    VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+            }
             r->tex_surface_direct[texture_idx] = true;
             r->tex_surface_direct_views[texture_idx] = surface->image_view;
+            r->tex_surface_direct_layout[texture_idx] = direct_layout;
 #if OPT_BINDLESS_TEXTURES
             if (r->bindless_textures_supported) {
                 VkDescriptorImageInfo bl_info = {
-                    .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
+                    .imageLayout = direct_layout,
                     .imageView = surface->image_view,
                     .sampler = snode->sampler,
                 };

@@ -114,6 +114,28 @@ const char *unpack_z24s8_to_d32_sfloat_s8_uint_glsl =
     "    }\n"
     "}\n";
 
+// Direct depth pack: samples depth from image, reads stencil from buffer.
+// Works for both D24_UNORM_S8_UINT and D32_SFLOAT_S8_UINT since both return
+// float depth when sampled.
+static const char *pack_depth_stencil_direct_glsl =
+    "layout(push_constant) uniform PushConstants { uint width_in, width_out; };\n"
+    "layout(set = 0, binding = 0) uniform sampler2D depth_tex;\n"
+    "layout(std430, set = 0, binding = 1) readonly buffer StencilIn { uint stencil_in[]; };\n"
+    "layout(std430, set = 0, binding = 2) writeonly buffer PackedOut { uint packed_out[]; };\n"
+    "void main() {\n"
+    "    uint idx_out = gl_GlobalInvocationID.x;\n"
+    "    uint scale = width_in / width_out;\n"
+    "    uint out_x = idx_out % width_out;\n"
+    "    uint out_y = idx_out / width_out;\n"
+    "    uint in_x = out_x * scale;\n"
+    "    uint in_y = out_y * scale;\n"
+    "    uint idx_in = in_y * width_in + in_x;\n"
+    "    float depth = texelFetch(depth_tex, ivec2(in_x, in_y), 0).r;\n"
+    "    uint depth_value = uint(depth * float(0xFFFFFF));\n"
+    "    uint stencil_value = (stencil_in[idx_in / 4] >> ((idx_in %% 4) * 8)) & 0xFFu;\n"
+    "    packed_out[idx_out] = depth_value << 8 | stencil_value;\n"
+    "}\n";
+
 static const char *swizzle_common_glsl =
     "layout(push_constant) uniform PushConstants { uint width, height, mask_x, mask_y; };\n"
     "layout(set = 0, binding = 0) buffer DstBuf { uint dst_data[]; };\n"
@@ -300,14 +322,15 @@ static void destroy_compute_pipeline_layout(PGRAPHVkState *r)
     r->compute.pipeline_layout = VK_NULL_HANDLE;
 }
 
-static VkPipeline create_compute_pipeline(PGRAPHVkState *r, const char *glsl)
+static VkPipeline create_compute_pipeline(PGRAPHVkState *r, const char *glsl,
+                                          VkPipelineLayout layout)
 {
     ShaderModuleInfo *module = pgraph_vk_create_shader_module_from_glsl(
         r, VK_SHADER_STAGE_COMPUTE_BIT, glsl);
 
     VkComputePipelineCreateInfo pipeline_info = {
         .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
-        .layout = r->compute.pipeline_layout,
+        .layout = layout,
         .stage =
             (VkPipelineShaderStageCreateInfo){
                 .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
@@ -361,15 +384,16 @@ static void update_descriptor_sets(PGRAPHState *pg,
 
 bool pgraph_vk_compute_needs_finish(PGRAPHVkState *r)
 {
-    bool need_descriptor_write_reset = (r->compute.descriptor_set_index >=
-                                        ARRAY_SIZE(r->compute.descriptor_sets));
-
-    return need_descriptor_write_reset;
+    return (r->compute.descriptor_set_index >=
+            (int)ARRAY_SIZE(r->compute.descriptor_sets)) ||
+           (r->compute.direct_descriptor_set_index >=
+            (int)ARRAY_SIZE(r->compute.direct_descriptor_sets));
 }
 
 void pgraph_vk_compute_finish_complete(PGRAPHVkState *r)
 {
     r->compute.descriptor_set_index = 0;
+    r->compute.direct_descriptor_set_index = 0;
 }
 
 static int get_workgroup_size_for_output_units(PGRAPHVkState *r, int output_units)
@@ -572,6 +596,114 @@ void pgraph_vk_unpack_depth_stencil(PGRAPHState *pg, SurfaceBinding *surface,
     pgraph_vk_end_debug_marker(r, cmd);
 }
 
+void pgraph_vk_pack_depth_stencil_direct(PGRAPHState *pg,
+                                         SurfaceBinding *surface,
+                                         VkCommandBuffer cmd,
+                                         VkImageView depth_view,
+                                         VkBuffer stencil_buf,
+                                         VkDeviceSize stencil_offset,
+                                         VkDeviceSize stencil_size,
+                                         VkBuffer dst, bool downscale)
+{
+    PGRAPHVkState *r = pg->vk_renderer_state;
+
+    unsigned int input_width = surface->width, input_height = surface->height;
+    pgraph_apply_scaling_factor(pg, &input_width, &input_height);
+
+    unsigned int output_width = surface->width, output_height = surface->height;
+    if (!downscale) {
+        pgraph_apply_scaling_factor(pg, &output_width, &output_height);
+    }
+
+    size_t output_size = output_width * output_height * 4;
+
+    // Check descriptor set availability
+    if (r->compute.direct_descriptor_set_index >=
+        (int)ARRAY_SIZE(r->compute.direct_descriptor_sets)) {
+        pgraph_vk_flush_all_frames(pg);
+        r->compute.direct_descriptor_set_index = 0;
+    }
+
+    int ds_idx = r->compute.direct_descriptor_set_index;
+    VkDescriptorSet ds = r->compute.direct_descriptor_sets[ds_idx];
+
+    // Update descriptor set
+    VkDescriptorImageInfo image_info = {
+        .imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+        .imageView = depth_view,
+        .sampler = r->compute.direct_depth_sampler,
+    };
+    VkDescriptorBufferInfo stencil_buf_info = {
+        .buffer = stencil_buf,
+        .offset = stencil_offset,
+        .range = stencil_size,
+    };
+    VkDescriptorBufferInfo output_buf_info = {
+        .buffer = dst,
+        .offset = 0,
+        .range = output_size,
+    };
+    VkWriteDescriptorSet writes[] = {
+        {
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = ds,
+            .dstBinding = 0,
+            .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            .descriptorCount = 1,
+            .pImageInfo = &image_info,
+        },
+        {
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = ds,
+            .dstBinding = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .descriptorCount = 1,
+            .pBufferInfo = &stencil_buf_info,
+        },
+        {
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = ds,
+            .dstBinding = 2,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .descriptorCount = 1,
+            .pBufferInfo = &output_buf_info,
+        },
+    };
+    vkUpdateDescriptorSets(r->device, ARRAY_SIZE(writes), writes, 0, NULL);
+    r->compute.direct_descriptor_set_index++;
+
+    // Get or create pipeline
+    size_t output_units = output_width * output_height;
+    int workgroup_size = get_workgroup_size_for_output_units(r, output_units);
+
+    ComputePipelineKey key;
+    memset(&key, 0, sizeof(key));
+    key.compute_type = COMPUTE_TYPE_DEPTH_STENCIL_DIRECT;
+    key.pack = true;
+    key.workgroup_size = workgroup_size;
+
+    LruNode *node = lru_lookup(&r->compute.pipeline_cache,
+                      fast_hash((void *)&key, sizeof(key)), &key);
+    ComputePipeline *pipeline = container_of(node, ComputePipeline, node);
+    assert(pipeline);
+
+    size_t group_count = output_units / workgroup_size;
+
+    pgraph_vk_begin_debug_marker(r, cmd, RGBA_PINK, __func__);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline->pipeline);
+    vkCmdBindDescriptorSets(
+        cmd, VK_PIPELINE_BIND_POINT_COMPUTE, r->compute.direct_pipeline_layout,
+        0, 1, &ds, 0, NULL);
+
+    uint32_t push_constants[4] = { input_width, output_width, 0, 0 };
+    vkCmdPushConstants(cmd, r->compute.direct_pipeline_layout,
+                       VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push_constants),
+                       push_constants);
+
+    vkCmdDispatch(cmd, group_count, 1, 1);
+    pgraph_vk_end_debug_marker(r, cmd);
+}
+
 void pgraph_vk_compute_swizzle(PGRAPHState *pg, VkCommandBuffer cmd,
                                 VkBuffer src, size_t src_size,
                                 VkBuffer dst, size_t dst_size,
@@ -646,19 +778,29 @@ static void pipeline_cache_entry_init(Lru *lru, LruNode *node,
     }
 
     gchar *glsl;
+    VkPipelineLayout layout;
     switch (snode->key.compute_type) {
     case COMPUTE_TYPE_SWIZZLE:
     case COMPUTE_TYPE_UNSWIZZLE:
         glsl = get_swizzle_shader_glsl(snode->key.compute_type,
                                        snode->key.workgroup_size);
+        layout = r->compute.pipeline_layout;
+        break;
+    case COMPUTE_TYPE_DEPTH_STENCIL_DIRECT:
+        glsl = g_strdup_printf(
+            "#version 450\n"
+            "layout(local_size_x = %d, local_size_y = 1, local_size_z = 1) in;\n"
+            "%s", snode->key.workgroup_size, pack_depth_stencil_direct_glsl);
+        layout = r->compute.direct_pipeline_layout;
         break;
     default:
         glsl = get_compute_shader_glsl(snode->key.host_fmt, snode->key.pack,
                                        snode->key.workgroup_size);
+        layout = r->compute.pipeline_layout;
         break;
     }
     assert(glsl);
-    snode->pipeline = create_compute_pipeline(r, glsl);
+    snode->pipeline = create_compute_pipeline(r, glsl, layout);
     g_free(glsl);
 }
 
@@ -704,6 +846,115 @@ static void pipeline_cache_finalize(PGRAPHVkState *r)
     r->compute.pipeline_cache_entries = NULL;
 }
 
+static void init_direct_compute(PGRAPHState *pg)
+{
+    PGRAPHVkState *r = pg->vk_renderer_state;
+
+    // Sampler for depth texelFetch (settings don't matter for texelFetch)
+    VkSamplerCreateInfo sampler_info = {
+        .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+        .magFilter = VK_FILTER_NEAREST,
+        .minFilter = VK_FILTER_NEAREST,
+        .addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+        .addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+        .addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+    };
+    VK_CHECK(vkCreateSampler(r->device, &sampler_info, NULL,
+                             &r->compute.direct_depth_sampler));
+
+    // Descriptor set layout: sampled image + 2 storage buffers
+    VkDescriptorSetLayoutBinding bindings[3] = {
+        {
+            .binding = 0,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
+            .pImmutableSamplers = &r->compute.direct_depth_sampler,
+        },
+        {
+            .binding = 1,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
+        },
+        {
+            .binding = 2,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
+        },
+    };
+    VkDescriptorSetLayoutCreateInfo layout_info = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .bindingCount = ARRAY_SIZE(bindings),
+        .pBindings = bindings,
+    };
+    VK_CHECK(vkCreateDescriptorSetLayout(r->device, &layout_info, NULL,
+                                         &r->compute.direct_descriptor_set_layout));
+
+    // Descriptor pool
+    VkDescriptorPoolSize pool_sizes[] = {
+        {
+            .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            .descriptorCount = ARRAY_SIZE(r->compute.direct_descriptor_sets),
+        },
+        {
+            .type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .descriptorCount = 2 * ARRAY_SIZE(r->compute.direct_descriptor_sets),
+        },
+    };
+    VkDescriptorPoolCreateInfo pool_info = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+        .poolSizeCount = ARRAY_SIZE(pool_sizes),
+        .pPoolSizes = pool_sizes,
+        .maxSets = ARRAY_SIZE(r->compute.direct_descriptor_sets),
+        .flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT,
+    };
+    VK_CHECK(vkCreateDescriptorPool(r->device, &pool_info, NULL,
+                                    &r->compute.direct_descriptor_pool));
+
+    // Allocate descriptor sets
+    VkDescriptorSetLayout layouts[ARRAY_SIZE(r->compute.direct_descriptor_sets)];
+    for (int i = 0; i < ARRAY_SIZE(layouts); i++) {
+        layouts[i] = r->compute.direct_descriptor_set_layout;
+    }
+    VkDescriptorSetAllocateInfo alloc_info = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+        .descriptorPool = r->compute.direct_descriptor_pool,
+        .descriptorSetCount = ARRAY_SIZE(r->compute.direct_descriptor_sets),
+        .pSetLayouts = layouts,
+    };
+    VK_CHECK(vkAllocateDescriptorSets(r->device, &alloc_info,
+                                      r->compute.direct_descriptor_sets));
+
+    // Pipeline layout
+    VkPushConstantRange push_constant_range = {
+        .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
+        .size = 4 * sizeof(uint32_t),
+    };
+    VkPipelineLayoutCreateInfo pipeline_layout_info = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .setLayoutCount = 1,
+        .pSetLayouts = &r->compute.direct_descriptor_set_layout,
+        .pushConstantRangeCount = 1,
+        .pPushConstantRanges = &push_constant_range,
+    };
+    VK_CHECK(vkCreatePipelineLayout(r->device, &pipeline_layout_info, NULL,
+                                    &r->compute.direct_pipeline_layout));
+}
+
+static void finalize_direct_compute(PGRAPHVkState *r)
+{
+    vkDestroyPipelineLayout(r->device, r->compute.direct_pipeline_layout, NULL);
+    vkFreeDescriptorSets(r->device, r->compute.direct_descriptor_pool,
+                         ARRAY_SIZE(r->compute.direct_descriptor_sets),
+                         r->compute.direct_descriptor_sets);
+    vkDestroyDescriptorPool(r->device, r->compute.direct_descriptor_pool, NULL);
+    vkDestroyDescriptorSetLayout(r->device,
+                                 r->compute.direct_descriptor_set_layout, NULL);
+    vkDestroySampler(r->device, r->compute.direct_depth_sampler, NULL);
+}
+
 void pgraph_vk_init_compute(PGRAPHState *pg)
 {
     PGRAPHVkState *r = pg->vk_renderer_state;
@@ -714,6 +965,7 @@ void pgraph_vk_init_compute(PGRAPHState *pg)
     create_descriptor_sets(pg);
     create_compute_pipeline_layout(pg);
     pipeline_cache_init(r);
+    init_direct_compute(pg);
     VK_LOG("init_compute: done");
 }
 
@@ -723,6 +975,7 @@ void pgraph_vk_finalize_compute(PGRAPHState *pg)
 
     assert(!r->in_command_buffer);
 
+    finalize_direct_compute(r);
     pipeline_cache_finalize(r);
     destroy_compute_pipeline_layout(r);
     destroy_descriptor_sets(pg);

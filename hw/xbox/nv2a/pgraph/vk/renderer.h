@@ -283,6 +283,7 @@ typedef struct SurfaceBinding {
 
     VkImage image;
     VkImageView image_view;
+    VkImageLayout image_layout;
     VmaAllocation allocation;
 
     // Used for scaling
@@ -800,6 +801,7 @@ typedef enum {
     COMPUTE_TYPE_DEPTH_STENCIL = 0,
     COMPUTE_TYPE_SWIZZLE = 1,
     COMPUTE_TYPE_UNSWIZZLE = 2,
+    COMPUTE_TYPE_DEPTH_STENCIL_DIRECT = 3,
 } ComputeType;
 
 typedef struct ComputePipelineKey {
@@ -823,6 +825,14 @@ typedef struct PGRAPHVkComputeState {
     VkPipelineLayout pipeline_layout;
     Lru pipeline_cache;
     ComputePipeline *pipeline_cache_entries;
+
+    // Direct depth pack: samples depth image + reads stencil from buffer
+    VkDescriptorPool direct_descriptor_pool;
+    VkDescriptorSetLayout direct_descriptor_set_layout;
+    VkDescriptorSet direct_descriptor_sets[512];
+    int direct_descriptor_set_index;
+    VkPipelineLayout direct_pipeline_layout;
+    VkSampler direct_depth_sampler;
 } PGRAPHVkComputeState;
 
 #define DRAW_QUEUE_MAX 128
@@ -1146,6 +1156,7 @@ typedef struct PGRAPHVkState {
     QTAILQ_HEAD(, SurfaceBinding) shelved_surfaces;
     GHashTable *surface_addr_map;
     uint32_t surface_list_gen;
+    uint32_t surface_draw_gen; /* Incremented when any surface becomes draw_dirty */
     SurfaceBinding *color_binding, *zeta_binding;
     bool downloads_pending;
     QemuEvent downloads_complete;
@@ -1176,6 +1187,7 @@ typedef struct PGRAPHVkState {
 
     struct {
         uint32_t surface_list_gen;
+        uint32_t surface_draw_gen;
         hwaddr vram_addr;
         hwaddr length;
         bool had_overlap;
@@ -1188,6 +1200,7 @@ typedef struct PGRAPHVkState {
 
     bool tex_surface_direct[NV2A_MAX_TEXTURES];
     VkImageView tex_surface_direct_views[NV2A_MAX_TEXTURES];
+    VkImageLayout tex_surface_direct_layout[NV2A_MAX_TEXTURES];
 
     struct {
         uint32_t regs[8];
@@ -1428,6 +1441,14 @@ void pgraph_vk_finalize_compute(PGRAPHState *pg);
 void pgraph_vk_pack_depth_stencil(PGRAPHState *pg, SurfaceBinding *surface,
                                   VkCommandBuffer cmd, VkBuffer src,
                                   VkBuffer dst, bool downscale);
+void pgraph_vk_pack_depth_stencil_direct(PGRAPHState *pg,
+                                         SurfaceBinding *surface,
+                                         VkCommandBuffer cmd,
+                                         VkImageView depth_view,
+                                         VkBuffer stencil_buf,
+                                         VkDeviceSize stencil_offset,
+                                         VkDeviceSize stencil_size,
+                                         VkBuffer dst, bool downscale);
 void pgraph_vk_unpack_depth_stencil(PGRAPHState *pg, SurfaceBinding *surface,
                                     VkCommandBuffer cmd, VkBuffer src,
                                     VkBuffer dst);
