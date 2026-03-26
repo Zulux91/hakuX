@@ -974,6 +974,9 @@ extern "C" int xemu_android_main(int argc, char** argv) {
     snprintf(cache_path, sizeof(cache_path), "%s/x1box/tb_cache.bin", storage_load);
     uint32_t game_hash = tb_cache_compute_game_hash(
         g_config.sys.files.bootrom_path, g_config.sys.files.flashrom_path);
+    /* Fold code-generation-affecting settings into the hash so that a
+     * cache saved with different FP modes is automatically rejected. */
+    game_hash ^= (xemu_get_fp_safe() ? 0x1u : 0) | (xemu_get_fp_jit() ? 0x2u : 0);
     int nhints = tb_cache_load(cache_path, game_hash);
     __android_log_print(ANDROID_LOG_INFO, "xemu-android",
                         "TB cache: loaded %d hints from %s", nhints, cache_path);
@@ -995,6 +998,7 @@ extern "C" int xemu_android_main(int argc, char** argv) {
     snprintf(cache_path, sizeof(cache_path), "%s/tb_cache.bin", dir_path);
     uint32_t game_hash = tb_cache_compute_game_hash(
         g_config.sys.files.bootrom_path, g_config.sys.files.flashrom_path);
+    game_hash ^= (xemu_get_fp_safe() ? 0x1u : 0) | (xemu_get_fp_jit() ? 0x2u : 0);
     tb_cache_save(cache_path, game_hash);
   }
   tb_cache_cleanup();
@@ -1293,13 +1297,11 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_rfandango_xemuandroid_SettingsActivity_nativeSetFpSafe(JNIEnv *, jobject, jboolean enable)
 {
     xemu_set_fp_safe(enable == JNI_TRUE);
-    if (!enable) {
-        const char *storage = SDL_AndroidGetInternalStoragePath();
-        if (storage) {
-            char path[PATH_MAX];
-            snprintf(path, sizeof(path), "%s/x1box/tb_cache.bin", storage);
-            remove(path);
-        }
+    const char *storage = SDL_AndroidGetInternalStoragePath();
+    if (storage) {
+        char path[PATH_MAX];
+        snprintf(path, sizeof(path), "%s/x1box/tb_cache.bin", storage);
+        remove(path);
     }
 }
 
@@ -1409,6 +1411,12 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_rfandango_xemuandroid_SettingsActivity_nativeSetFpJit(JNIEnv *, jobject, jboolean enable)
 {
     xemu_set_fp_jit(enable == JNI_TRUE);
+    const char *storage = SDL_AndroidGetInternalStoragePath();
+    if (storage) {
+        char path[PATH_MAX];
+        snprintf(path, sizeof(path), "%s/x1box/tb_cache.bin", storage);
+        remove(path);
+    }
 }
 
 extern "C" JNIEXPORT void JNICALL

@@ -2617,6 +2617,7 @@ void pgraph_vk_begin_command_buffer(PGRAPHState *pg)
                                   &command_buffer_begin_info));
     r->command_buffer_start_time = pg->draw_time;
     r->in_command_buffer = true;
+    r->draws_in_cb = 0;
 
     if (r->gpu_ts_supported) {
         uint32_t base = r->current_frame * GPU_TS_QUERIES_PER_CB;
@@ -3147,6 +3148,7 @@ static void begin_draw(PGRAPHState *pg)
     PGRAPHVkState *r = pg->vk_renderer_state;
 
     assert(r->in_command_buffer);
+    r->draws_in_cb++;
 
     // Visibility testing
     if (!pg->clearing && pg->zpass_pixel_count_enable) {
@@ -4918,6 +4920,8 @@ static void flush_reorder_window_internal(NV2AState *d)
 #endif
 
     r->dyn_state.valid = false;
+
+    r->draws_in_cb += w->count;
 
     ReorderWindowEntry *prev = NULL;
     for (int i = 0; i < w->count; i++) {

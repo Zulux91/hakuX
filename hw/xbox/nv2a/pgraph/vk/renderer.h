@@ -1015,6 +1015,7 @@ typedef struct PGRAPHVkState {
     unsigned int command_buffer_start_time;
     unsigned int last_stall_draw_time;
     bool in_command_buffer;
+    int draws_in_cb;  /* Draw/clear/blit commands recorded in current CB */
 #if OPT_BINDLESS_TEXTURES
     bool bindless_set_bound;
 #endif

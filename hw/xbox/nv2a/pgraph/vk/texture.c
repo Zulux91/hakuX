@@ -1006,8 +1006,7 @@ static unsigned int vk_format_texel_size(VkFormat format)
 static bool check_surface_to_texture_compatiblity(const SurfaceBinding *surface,
                                                   const TextureShape *shape)
 {
-    if ((!surface->swizzle && surface->pitch != shape->pitch) ||
-        surface->width != shape->width ||
+    if (surface->width != shape->width ||
         surface->height != shape->height ||
         shape->cubemap ||
         shape->levels > 1) {
