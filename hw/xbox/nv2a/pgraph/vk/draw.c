@@ -2325,23 +2325,32 @@ void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
                                    r->command_buffer_fence));
             qatomic_inc(&r->submit_count);
 
-            VK_CHECK(vkWaitForFences(r->device, 1, &r->command_buffer_fence,
-                                     VK_TRUE, UINT64_MAX));
-            if (r->pending_post_fence_cb) {
-                r->pending_post_fence_cb(r, NULL,
-                                         r->pending_post_fence_opaque);
-                r->pending_post_fence_cb = NULL;
-                r->pending_post_fence_opaque = NULL;
-            }
-            gpu_ts_readback(r, r->current_frame);
+            if (finish_reason == VK_FINISH_REASON_PRESENTING) {
+                /* For presenting: skip fence wait, mark frame submitted.
+                 * Frame rotation below will advance to new CBs so these
+                 * stay untouched until the GPU finishes. */
+                qatomic_set(&r->frame_submitted[r->current_frame], true);
+            } else {
+                VK_CHECK(vkWaitForFences(r->device, 1,
+                                         &r->command_buffer_fence,
+                                         VK_TRUE, UINT64_MAX));
+                if (r->pending_post_fence_cb) {
+                    r->pending_post_fence_cb(r, NULL,
+                                             r->pending_post_fence_opaque);
+                    r->pending_post_fence_cb = NULL;
+                    r->pending_post_fence_opaque = NULL;
+                }
+                gpu_ts_readback(r, r->current_frame);
 
-            /* Immediate submit: GPU done, descriptor sets safe to reuse */
-            r->descriptor_set_index = 0;
-            r->push_ubo_set_index = 0;
+                /* Immediate submit: GPU done, descriptor sets safe to
+                 * reuse */
+                r->descriptor_set_index = 0;
+                r->push_ubo_set_index = 0;
 #if OPT_BINDLESS_TEXTURES
-            r->ubo_descriptor_set_index = 0;
+                r->ubo_descriptor_set_index = 0;
 #endif
-            pgraph_vk_compute_finish_complete(r);
+                pgraph_vk_compute_finish_complete(r);
+            }
         } else {
             QemuEvent finish_event;
             if (!deferred) {
@@ -2430,8 +2439,11 @@ void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
          * propagate per-frame state. Skip when running on the render thread
          * (inline finish for downloads/flush) -- the render thread only
          * submits and waits; PFIFO manages frame indices.
+         * Exception: PRESENTING skips the fence wait, so it needs frame
+         * rotation to advance to new CBs while the old ones are in flight.
          */
-        if (!r->is_render_thread_context) {
+        if (!r->is_render_thread_context ||
+            finish_reason == VK_FINISH_REASON_PRESENTING) {
             memcpy(r->deferred_framebuffers[r->current_frame],
                    r->framebuffers,
                    r->framebuffer_index * sizeof(VkFramebuffer));
