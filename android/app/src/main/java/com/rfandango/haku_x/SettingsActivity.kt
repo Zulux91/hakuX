@@ -86,10 +86,59 @@ class SettingsActivity : AppCompatActivity() {
   private lateinit var btnResetDriver: MaterialButton
   private lateinit var switchShowFps: MaterialSwitch
 
+  private lateinit var mcpxPathText: TextView
+  private lateinit var flashPathText: TextView
+  private lateinit var hddPathText: TextView
+  private lateinit var gamesFolderPathText: TextView
+
+  private val romExts = setOf("bin", "rom", "img")
+  private val hddExts = setOf("qcow2", "img")
+
   private val pickDriverZip =
     registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
       if (uri != null) {
         installDriverFromUri(uri)
+      }
+    }
+
+  private val pickMcpx =
+    registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+      if (uri != null) {
+        copySystemFile(uri, "mcpx.bin", "mcpxPath", "mcpxUri") { updateMcpxPath() }
+      }
+    }
+
+  private val pickFlash =
+    registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+      if (uri != null) {
+        copySystemFile(uri, "flash.bin", "flashPath", "flashUri") { updateFlashPath() }
+      }
+    }
+
+  private val pickHdd =
+    registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+      if (uri != null) {
+        copySystemFile(uri, "hdd.img", "hddPath", "hddUri") { updateHddPath() }
+      }
+    }
+
+  private val exportHdd =
+    registerForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
+      if (uri != null) {
+        exportHddToUri(uri)
+      }
+    }
+
+  private val pickGamesFolder =
+    registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+      if (uri != null) {
+        try {
+          contentResolver.takePersistableUriPermission(uri,
+            android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
+            android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+        } catch (_: SecurityException) {}
+        prefs.edit().putString("gamesFolderUri", uri.toString()).apply()
+        updateGamesFolderPath()
       }
     }
 
@@ -116,6 +165,28 @@ class SettingsActivity : AppCompatActivity() {
     switchEeprom480p = findViewById(R.id.switch_eeprom_480p)
     switchEeprom720p = findViewById(R.id.switch_eeprom_720p)
     switchEeprom1080i = findViewById(R.id.switch_eeprom_1080i)
+
+    mcpxPathText = findViewById(R.id.settings_mcpx_path)
+    flashPathText = findViewById(R.id.settings_flash_path)
+    hddPathText = findViewById(R.id.settings_hdd_path)
+    gamesFolderPathText = findViewById(R.id.settings_games_folder_path)
+    updateMcpxPath()
+    updateFlashPath()
+    updateHddPath()
+    updateGamesFolderPath()
+    findViewById<MaterialButton>(R.id.btn_pick_mcpx).setOnClickListener {
+      pickMcpx.launch(arrayOf("application/octet-stream"))
+    }
+    findViewById<MaterialButton>(R.id.btn_pick_flash).setOnClickListener {
+      pickFlash.launch(arrayOf("application/octet-stream"))
+    }
+    findViewById<MaterialButton>(R.id.btn_pick_hdd).setOnClickListener {
+      pickHdd.launch(arrayOf("application/x-qcow2", "application/octet-stream"))
+    }
+    findViewById<MaterialButton>(R.id.btn_pick_games_folder).setOnClickListener {
+      val currentUri = prefs.getString("gamesFolderUri", null)?.let(Uri::parse)
+      pickGamesFolder.launch(currentUri)
+    }
 
     findViewById<View>(R.id.btn_settings_back).setOnClickListener { finish() }
 
@@ -260,6 +331,15 @@ class SettingsActivity : AppCompatActivity() {
 
     findViewById<MaterialButton>(R.id.btn_recreate_hdd).setOnClickListener {
       confirmRecreateHdd()
+    }
+
+    findViewById<MaterialButton>(R.id.btn_export_hdd).setOnClickListener {
+      val hddPath = resolveHddPath()
+      if (hddPath == null) {
+        Toast.makeText(this, getString(R.string.settings_export_hdd_no_file), Toast.LENGTH_LONG).show()
+      } else {
+        exportHdd.launch("hdd.img")
+      }
     }
 
     setupResolutionScale()
@@ -616,6 +696,107 @@ class SettingsActivity : AppCompatActivity() {
         }
       }
     }.start()
+  }
+
+  private fun exportHddToUri(uri: Uri) {
+    val hddPath = resolveHddPath()
+    if (hddPath == null) {
+      Toast.makeText(this, getString(R.string.settings_export_hdd_no_file), Toast.LENGTH_LONG).show()
+      return
+    }
+    Toast.makeText(this, getString(R.string.settings_export_hdd_copying), Toast.LENGTH_SHORT).show()
+    Thread {
+      try {
+        val source = File(hddPath)
+        contentResolver.openOutputStream(uri)?.use { output ->
+          source.inputStream().use { input ->
+            input.copyTo(output)
+          }
+        } ?: throw IOException("Unable to open output")
+        runOnUiThread {
+          Toast.makeText(this, getString(R.string.settings_export_hdd_success), Toast.LENGTH_SHORT).show()
+        }
+      } catch (e: Exception) {
+        Log.e("SettingsActivity", "HDD export failed", e)
+        runOnUiThread {
+          Toast.makeText(this, getString(R.string.settings_export_hdd_failed, e.message), Toast.LENGTH_LONG).show()
+        }
+      }
+    }.start()
+  }
+
+  private fun updateMcpxPath() {
+    val path = prefs.getString("mcpxPath", null)
+    mcpxPathText.text = getString(R.string.settings_mcpx_label,
+      if (path != null && File(path).isFile) path else getString(R.string.settings_file_not_set))
+  }
+
+  private fun updateFlashPath() {
+    val path = prefs.getString("flashPath", null)
+    flashPathText.text = getString(R.string.settings_flash_label,
+      if (path != null && File(path).isFile) path else getString(R.string.settings_file_not_set))
+  }
+
+  private fun updateHddPath() {
+    val path = prefs.getString("hddPath", null)
+    hddPathText.text = getString(R.string.settings_hdd_label,
+      if (path != null && File(path).isFile) path else getString(R.string.settings_file_not_set))
+  }
+
+  private fun updateGamesFolderPath() {
+    val uriStr = prefs.getString("gamesFolderUri", null)
+    val label = if (uriStr != null) {
+      val uri = Uri.parse(uriStr)
+      androidx.documentfile.provider.DocumentFile.fromTreeUri(this, uri)?.name ?: uri.toString()
+    } else {
+      getString(R.string.settings_file_not_set)
+    }
+    gamesFolderPathText.text = getString(R.string.settings_games_folder_label, label)
+  }
+
+  private fun copySystemFile(uri: Uri, destName: String, pathKey: String, uriKey: String, onDone: () -> Unit) {
+    try {
+      contentResolver.takePersistableUriPermission(uri,
+        android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    } catch (_: SecurityException) {}
+    prefs.edit().putString(uriKey, uri.toString()).apply()
+    Toast.makeText(this, getString(R.string.settings_file_copying), Toast.LENGTH_SHORT).show()
+    Thread {
+      val path = copyUriToAppStorage(uri, destName)
+      runOnUiThread {
+        if (path != null) {
+          prefs.edit().putString(pathKey, path).apply()
+          Toast.makeText(this, getString(R.string.settings_file_copied), Toast.LENGTH_SHORT).show()
+        } else {
+          Toast.makeText(this, getString(R.string.settings_file_copy_failed), Toast.LENGTH_LONG).show()
+        }
+        onDone()
+      }
+    }.start()
+  }
+
+  private fun copyUriToAppStorage(uri: Uri, destName: String): String? {
+    val base = getExternalFilesDir(null) ?: filesDir
+    val dir = File(base, "x1box")
+    if (!dir.exists() && !dir.mkdirs()) {
+      Log.e("SettingsActivity", "Failed to create ${dir.absolutePath}")
+      return null
+    }
+    val target = File(dir, destName)
+    return try {
+      val bytesCopied = contentResolver.openInputStream(uri)?.use { input ->
+        FileOutputStream(target).use { output -> input.copyTo(output) }
+      } ?: return null
+      if (bytesCopied == 0L) {
+        target.delete()
+        return null
+      }
+      target.absolutePath
+    } catch (e: IOException) {
+      Log.e("SettingsActivity", "Copy failed for $destName", e)
+      target.delete()
+      null
+    }
   }
 
   private fun resolveEepromFile(): File {

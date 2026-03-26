@@ -107,6 +107,12 @@
 
   <string name="settings_recreate_hdd">Recreate Hard Disk</string>
   <string name="settings_recreate_hdd_desc">Re-copy the original HDD image selected during setup, replacing the current one. Use this if save data or partitions have become corrupted.</string>
+  <string name="settings_export_hdd">Export HDD Image</string>
+  <string name="settings_export_hdd_desc">Save a copy of the current HDD image to a folder of your choice. Use this to back up game saves.</string>
+  <string name="settings_export_hdd_no_file">No HDD image found to export.</string>
+  <string name="settings_export_hdd_copying">Exporting HDD image…</string>
+  <string name="settings_export_hdd_success">HDD image exported successfully.</string>
+  <string name="settings_export_hdd_failed">Failed to export HDD image: %1$s</string>
   <string name="settings_recreate_hdd_confirm_title">Recreate hard disk?</string>
   <string name="settings_recreate_hdd_confirm_message">This will overwrite the current Xbox HDD image with a fresh copy from the original file. ALL save games, installed titles, and dashboard data will be permanently lost.\n\nMake sure the emulator is not running.</string>
   <string name="settings_recreate_hdd_success">Hard disk image recreated successfully.</string>
@@ -175,6 +181,23 @@
   <string name="settings_env_vars_desc">Set custom environment variables applied at startup. One per line: KEY=VALUE. Requires app restart.</string>
   <string name="settings_env_vars_hint">e.g. MESA_VK_WSI_DEBUG=sw</string>
   <string name="settings_env_vars_save">Save</string>
+
+  <!-- System Files -->
+  <string name="settings_system_files_title">System Files</string>
+  <string name="settings_system_files_desc">Change MCPX ROM, Flash ROM, or HDD image. Files are copied to app storage. Requires app restart.</string>
+  <string name="settings_pick_mcpx">Change MCPX ROM</string>
+  <string name="settings_pick_flash">Change Flash ROM</string>
+  <string name="settings_pick_hdd">Change HDD Image</string>
+  <string name="settings_mcpx_label">MCPX ROM: %1$s</string>
+  <string name="settings_flash_label">Flash ROM: %1$s</string>
+  <string name="settings_hdd_label">HDD Image: %1$s</string>
+  <string name="settings_games_folder_title">Games Folder</string>
+  <string name="settings_pick_games_folder">Change Games Folder</string>
+  <string name="settings_games_folder_label">Games folder: %1$s</string>
+  <string name="settings_file_not_set">Not set</string>
+  <string name="settings_file_copying">Copying file…</string>
+  <string name="settings_file_copy_failed">Failed to copy file</string>
+  <string name="settings_file_copied">File updated. Restart app to apply.</string>
 
   <!-- EEPROM Settings -->
   <string name="settings_section_eeprom">EEPROM Settings</string>

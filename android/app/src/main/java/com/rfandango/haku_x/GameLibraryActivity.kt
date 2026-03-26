@@ -56,13 +56,11 @@ class GameLibraryActivity : AppCompatActivity() {
   private val coverEntries = ArrayList<CoverEntry>()
   @Volatile private var coverIndexLoaded = false
 
-  private lateinit var folderText: TextView
   private lateinit var loadingSpinner: ProgressBar
   private lateinit var loadingText: TextView
   private lateinit var emptyText: TextView
   private lateinit var gamesListContainer: LinearLayout
   private lateinit var gamesGridContainer: LinearLayout
-  private lateinit var btnChangeFolder: MaterialButton
   private lateinit var btnSettings: ImageButton
   private lateinit var viewModeToggle: MaterialButtonToggleGroup
   private lateinit var switchBoxArtLookup: MaterialSwitch
@@ -74,29 +72,15 @@ class GameLibraryActivity : AppCompatActivity() {
   private var boxArtLookupEnabled = true
   @Volatile private var isConvertingIso = false
 
-  private val pickGamesFolder =
-    registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
-      if (uri != null) {
-        persistUriPermission(uri)
-        gamesFolderUri = uri
-        prefs.edit().putString("gamesFolderUri", uri.toString()).apply()
-        boxArtCache.clear()
-        boxArtMisses.clear()
-        loadGames()
-      }
-    }
-
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     setContentView(R.layout.activity_game_library)
 
-    folderText = findViewById(R.id.library_folder_text)
     loadingSpinner = findViewById(R.id.library_loading)
     loadingText = findViewById(R.id.library_loading_text)
     emptyText = findViewById(R.id.library_empty_text)
     gamesListContainer = findViewById(R.id.library_games_container)
     gamesGridContainer = findViewById(R.id.library_games_grid_container)
-    btnChangeFolder = findViewById(R.id.btn_change_games_folder)
     btnSettings = findViewById(R.id.btn_library_settings)
     viewModeToggle = findViewById(R.id.library_view_mode_toggle)
     switchBoxArtLookup = findViewById(R.id.switch_box_art_lookup)
@@ -109,13 +93,6 @@ class GameLibraryActivity : AppCompatActivity() {
     viewModeToggle.check(if (useCoverGrid) R.id.btn_view_grid else R.id.btn_view_list)
     syncDisplayModeUi()
 
-    btnChangeFolder.setOnClickListener {
-      if (isConvertingIso) {
-        Toast.makeText(this, getString(R.string.library_convert_busy), Toast.LENGTH_SHORT).show()
-        return@setOnClickListener
-      }
-      pickGamesFolder.launch(gamesFolderUri)
-    }
     btnSettings.setOnClickListener {
       startActivity(Intent(this, SettingsActivity::class.java))
     }
@@ -140,9 +117,7 @@ class GameLibraryActivity : AppCompatActivity() {
       }
     }
     if (!isFolderReady(gamesFolderUri)) {
-      folderText.text = getString(R.string.library_no_folder)
-      Toast.makeText(this, getString(R.string.setup_pick_disc), Toast.LENGTH_SHORT).show()
-      pickGamesFolder.launch(gamesFolderUri)
+      Toast.makeText(this, getString(R.string.library_no_folder), Toast.LENGTH_SHORT).show()
       return
     }
 
@@ -155,16 +130,13 @@ class GameLibraryActivity : AppCompatActivity() {
       setLoading(false)
       currentGames = emptyList()
       renderGames()
-      folderText.text = getString(R.string.library_no_folder)
       return
     }
-
-    folderText.text = getString(R.string.library_folder_value, formatTreeLabel(folderUri!!))
     setLoading(true, getString(R.string.library_loading_games))
 
     val generation = ++scanGeneration
     Thread {
-      val games = scanFolderForGames(folderUri)
+      val games = scanFolderForGames(folderUri!!)
       runOnUiThread {
         if (generation != scanGeneration) {
           return@runOnUiThread
