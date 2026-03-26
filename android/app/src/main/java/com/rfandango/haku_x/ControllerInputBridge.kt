@@ -1,5 +1,8 @@
 package com.rfandango.haku_x
 
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import android.view.KeyEvent
 import org.libsdl.app.SDLControllerManager
 
@@ -8,9 +11,16 @@ import org.libsdl.app.SDLControllerManager
  */
 class ControllerInputBridge : OnScreenController.ControllerListener {
 
+  private data class ButtonDispatchState(
+    var isDown: Boolean = false,
+    var pressedAtMs: Long = 0L,
+    var pendingRelease: Runnable? = null,
+  )
+
   companion object {
     // Virtual device ID for on-screen controller
     const val VIRTUAL_DEVICE_ID = -2
+    private const val MIN_TAP_HOLD_MS = 50L
 
     // Axis indices for SDL
     const val AXIS_LEFT_X = 0
@@ -21,21 +31,59 @@ class ControllerInputBridge : OnScreenController.ControllerListener {
     const val AXIS_RIGHT_TRIGGER = 5
   }
 
+  private val mainHandler = Handler(Looper.getMainLooper())
+  private val buttonStates = mutableMapOf<OnScreenController.Button, ButtonDispatchState>()
+
   override fun onButtonPressed(button: OnScreenController.Button) {
+    val state = buttonStates.getOrPut(button) { ButtonDispatchState() }
+    state.pendingRelease?.let(mainHandler::removeCallbacks)
+    state.pendingRelease = null
+    state.pressedAtMs = SystemClock.uptimeMillis()
+    if (state.isDown) {
+      return
+    }
+    state.isDown = true
+
     try {
-      val keyCode = getKeyCodeForButton(button)
-      SDLControllerManager.onNativePadDown(VIRTUAL_DEVICE_ID, keyCode)
+      dispatchButtonState(button, pressed = true)
     } catch (e: Exception) {
-      android.util.Log.e("ControllerBridge", "Error on button press: ${e.message}")
+      android.util.Log.e("ControllerBridge", "Error on button press: ${e.message}", e)
     }
   }
 
   override fun onButtonReleased(button: OnScreenController.Button) {
+    val state = buttonStates.getOrPut(button) { ButtonDispatchState() }
+    state.pendingRelease?.let(mainHandler::removeCallbacks)
+    state.pendingRelease = null
+    if (!state.isDown) {
+      return
+    }
+
+    val elapsed = SystemClock.uptimeMillis() - state.pressedAtMs
+    val remaining = MIN_TAP_HOLD_MS - elapsed
+    if (remaining > 0L) {
+      val releaseTask = Runnable {
+        state.pendingRelease = null
+        if (!state.isDown) {
+          return@Runnable
+        }
+        state.isDown = false
+        try {
+          dispatchButtonState(button, pressed = false)
+        } catch (e: Exception) {
+          android.util.Log.e("ControllerBridge", "Error on delayed button release: ${e.message}", e)
+        }
+      }
+      state.pendingRelease = releaseTask
+      mainHandler.postDelayed(releaseTask, remaining)
+      return
+    }
+
+    state.isDown = false
     try {
-      val keyCode = getKeyCodeForButton(button)
-      SDLControllerManager.onNativePadUp(VIRTUAL_DEVICE_ID, keyCode)
+      dispatchButtonState(button, pressed = false)
     } catch (e: Exception) {
-      android.util.Log.e("ControllerBridge", "Error on button release: ${e.message}")
+      android.util.Log.e("ControllerBridge", "Error on button release: ${e.message}", e)
     }
   }
 
@@ -52,7 +100,7 @@ class ControllerInputBridge : OnScreenController.ControllerListener {
         }
       }
     } catch (e: Exception) {
-      android.util.Log.e("ControllerBridge", "Error on stick move: ${e.message}")
+      android.util.Log.e("ControllerBridge", "Error on stick move: ${e.message}", e)
     }
   }
 
@@ -64,7 +112,7 @@ class ControllerInputBridge : OnScreenController.ControllerListener {
       }
       SDLControllerManager.onNativePadDown(VIRTUAL_DEVICE_ID, keyCode)
     } catch (e: Exception) {
-      android.util.Log.e("ControllerBridge", "Error on stick press: ${e.message}")
+      android.util.Log.e("ControllerBridge", "Error on stick press: ${e.message}", e)
     }
   }
 
@@ -76,7 +124,67 @@ class ControllerInputBridge : OnScreenController.ControllerListener {
       }
       SDLControllerManager.onNativePadUp(VIRTUAL_DEVICE_ID, keyCode)
     } catch (e: Exception) {
-      android.util.Log.e("ControllerBridge", "Error on stick release: ${e.message}")
+      android.util.Log.e("ControllerBridge", "Error on stick release: ${e.message}", e)
+    }
+  }
+
+  fun reset() {
+    buttonStates.forEach { (button, state) ->
+      state.pendingRelease?.let(mainHandler::removeCallbacks)
+      state.pendingRelease = null
+      if (!state.isDown) {
+        return@forEach
+      }
+      state.isDown = false
+      try {
+        dispatchButtonState(button, pressed = false)
+      } catch (e: Exception) {
+        android.util.Log.e("ControllerBridge", "Error resetting $button: ${e.message}", e)
+      }
+    }
+  }
+
+  private fun dispatchButtonState(button: OnScreenController.Button, pressed: Boolean) {
+    when (button) {
+      OnScreenController.Button.LEFT_TRIGGER,
+      OnScreenController.Button.RIGHT_TRIGGER ->
+        setTriggerState(button, pressed)
+      else -> {
+        val keyCode = getKeyCodeForButton(button)
+        if (pressed) {
+          SDLControllerManager.onNativePadDown(VIRTUAL_DEVICE_ID, keyCode)
+        } else {
+          SDLControllerManager.onNativePadUp(VIRTUAL_DEVICE_ID, keyCode)
+        }
+      }
+    }
+  }
+
+  private fun setTriggerState(button: OnScreenController.Button, pressed: Boolean) {
+    val keyCode = getKeyCodeForButton(button)
+    val axis = when (button) {
+      OnScreenController.Button.LEFT_TRIGGER -> AXIS_LEFT_TRIGGER
+      OnScreenController.Button.RIGHT_TRIGGER -> AXIS_RIGHT_TRIGGER
+      else -> return
+    }
+    // SDL maps the raw joystick axis (-1..1) to the game controller trigger
+    // axis (0..1) as: output = (raw + 1) / 2. So 0.0f → 50% pressed, not 0%.
+    // Use -1.0f for release so SDL computes output = 0 (fully released).
+    val axisValue = if (pressed) 1.0f else -1.0f
+
+    try {
+      if (pressed) {
+        SDLControllerManager.onNativePadDown(VIRTUAL_DEVICE_ID, keyCode)
+      } else {
+        SDLControllerManager.onNativePadUp(VIRTUAL_DEVICE_ID, keyCode)
+      }
+    } catch (e: Exception) {
+      android.util.Log.e("ControllerBridge", "SDL pad event failed for $button: ${e.message}", e)
+    }
+    try {
+      SDLControllerManager.onNativeJoy(VIRTUAL_DEVICE_ID, axis, axisValue)
+    } catch (e: Exception) {
+      android.util.Log.e("ControllerBridge", "SDL joy event failed for $button: ${e.message}", e)
     }
   }
 

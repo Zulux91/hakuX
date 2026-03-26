@@ -206,6 +206,7 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
     // Create input bridge
     controllerBridge = ControllerInputBridge()
     onScreenController?.setControllerListener(controllerBridge!!)
+    onScreenController?.onMenuButtonTapped = { togglePauseMenu() }
 
     // Add to layout
     mLayout?.addView(onScreenController)

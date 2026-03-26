@@ -8,6 +8,8 @@ import android.graphics.PointF
 import android.util.AttributeSet
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
+import kotlin.math.max
 import kotlin.math.pow
 import kotlin.math.sqrt
 
@@ -20,7 +22,29 @@ class OnScreenController @JvmOverloads constructor(
   private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
   private val buttons = mutableMapOf<Button, ButtonState>()
   private val sticks = mutableMapOf<Stick, StickState>()
-  
+
+  private var menuButtonCenter = PointF(0f, 0f)
+  private var menuButtonRadius = 0f
+  private var menuButtonPressed = false
+  private var menuButtonPointerId = -1
+  private val swipeTouchSlop = ViewConfiguration.get(context).scaledTouchSlop.toFloat()
+  private val swipeUpGestureRecognizer = SwipeUpGestureRecognizer(
+    minDistancePx = {
+      max(height * 0.14f, swipeTouchSlop * 8f)
+    },
+    touchSlopPx = { swipeTouchSlop },
+    canStartAt = { x, y ->
+      y >= height * 0.35f && !isPointInInteractiveElement(x, y)
+    },
+    onTriggered = {
+      handleCancel()
+      onMenuButtonTapped?.invoke()
+      invalidate()
+    },
+  )
+
+  var onMenuButtonTapped: (() -> Unit)? = null
+
   private var controllerListener: ControllerListener? = null
 
   enum class Button {
@@ -39,7 +63,8 @@ class OnScreenController @JvmOverloads constructor(
   data class ButtonState(
     val center: PointF,
     val radius: Float,
-    var isPressed: Boolean = false
+    var isPressed: Boolean = false,
+    var activePointerId: Int = -1
   )
 
   data class StickState(
@@ -105,25 +130,27 @@ class OnScreenController @JvmOverloads constructor(
       faceButtonRadius
     )
 
-    // D-Pad (bottom left corner) - smaller buttons
-    val dpadCenterX = w * 0.12f
-    val dpadCenterY = h * 0.83f
+    // Spread the left-side controls apart: D-pad farther left, left stick farther right.
+    val leftUpperControlCenterX = w * 0.13f
+    val leftUpperControlCenterY = h * 0.45f
+    val leftLowerControlCenterX = w * 0.18f
+    val leftLowerControlCenterY = h * 0.82f
     val dpadSpacing = w * 0.045f
 
     buttons[Button.DPAD_UP] = ButtonState(
-      PointF(dpadCenterX, dpadCenterY - dpadSpacing),
+      PointF(leftUpperControlCenterX, leftUpperControlCenterY - dpadSpacing),
       dpadButtonRadius
     )
     buttons[Button.DPAD_DOWN] = ButtonState(
-      PointF(dpadCenterX, dpadCenterY + dpadSpacing),
+      PointF(leftUpperControlCenterX, leftUpperControlCenterY + dpadSpacing),
       dpadButtonRadius
     )
     buttons[Button.DPAD_LEFT] = ButtonState(
-      PointF(dpadCenterX - dpadSpacing, dpadCenterY),
+      PointF(leftUpperControlCenterX - dpadSpacing, leftUpperControlCenterY),
       dpadButtonRadius
     )
     buttons[Button.DPAD_RIGHT] = ButtonState(
-      PointF(dpadCenterX + dpadSpacing, dpadCenterY),
+      PointF(leftUpperControlCenterX + dpadSpacing, leftUpperControlCenterY),
       dpadButtonRadius
     )
 
@@ -140,7 +167,7 @@ class OnScreenController @JvmOverloads constructor(
 
     // Analog sticks
     sticks[Stick.LEFT] = StickState(
-      PointF(w * 0.18f, h * 0.45f),
+      PointF(leftLowerControlCenterX, leftLowerControlCenterY),
       stickRadius
     )
     sticks[Stick.RIGHT] = StickState(
@@ -148,8 +175,8 @@ class OnScreenController @JvmOverloads constructor(
       stickRadius
     )
 
-    // Center buttons - moved near bottom, between D-pad and right stick
-    val centerButtonsBaseX = (dpadCenterX + sticks[Stick.RIGHT]!!.center.x) * 0.5f
+    // Center buttons - keep these near the lower controls and right stick.
+    val centerButtonsBaseX = (leftLowerControlCenterX + sticks[Stick.RIGHT]!!.center.x) * 0.5f
     val centerButtonsY = h * 0.9f
     val centerButtonSpacing = smallButtonRadius * 3.4f
     buttons[Button.BACK] = ButtonState(
@@ -174,14 +201,23 @@ class OnScreenController @JvmOverloads constructor(
       smallButtonRadius
     )
 
-    // Stick buttons
+    // LS/RS (thumbstick click) as dedicated buttons separate from the stick
+    // circles so they can't be triggered accidentally by joystick movement.
+    // LS follows the left stick into the lower-left cluster.
     buttons[Button.LEFT_STICK_BUTTON] = ButtonState(
-      sticks[Stick.LEFT]!!.center,
-      stickRadius * 0.3f
+      PointF(leftLowerControlCenterX - (w * 0.10f), leftLowerControlCenterY + (h * 0.08f)),
+      smallButtonRadius
     )
     buttons[Button.RIGHT_STICK_BUTTON] = ButtonState(
-      sticks[Stick.RIGHT]!!.center,
-      stickRadius * 0.3f
+      PointF(w * 0.51f, h * 0.9f),
+      smallButtonRadius
+    )
+
+    // Menu button — bottom-right corner, opens in-game menu
+    menuButtonRadius = smallButtonRadius * 1.25f
+    menuButtonCenter = PointF(
+      w - menuButtonRadius - w * 0.018f,
+      h - menuButtonRadius - h * 0.022f
     )
   }
 
@@ -215,10 +251,6 @@ class OnScreenController @JvmOverloads constructor(
 
     // Draw buttons
     buttons.forEach { (button, state) ->
-      // Skip stick buttons as they're drawn with sticks
-      if (button == Button.LEFT_STICK_BUTTON || button == Button.RIGHT_STICK_BUTTON) {
-        return@forEach
-      }
 
       paint.style = Paint.Style.FILL
       paint.color = when {
@@ -241,6 +273,26 @@ class OnScreenController @JvmOverloads constructor(
       val label = getButtonLabel(button)
       canvas.drawText(label, state.center.x, state.center.y + state.radius * 0.3f, paint)
     }
+
+    // Draw menu button (bottom-right corner)
+    paint.style = Paint.Style.FILL
+    paint.color = if (menuButtonPressed) {
+      Color.argb(200, 120, 120, 220)
+    } else {
+      Color.argb(120, 100, 100, 180)
+    }
+    canvas.drawCircle(menuButtonCenter.x, menuButtonCenter.y, menuButtonRadius, paint)
+
+    paint.style = Paint.Style.STROKE
+    paint.strokeWidth = 3f
+    paint.color = Color.argb(150, 255, 255, 255)
+    canvas.drawCircle(menuButtonCenter.x, menuButtonCenter.y, menuButtonRadius, paint)
+
+    paint.style = Paint.Style.FILL
+    paint.color = Color.WHITE
+    paint.textSize = menuButtonRadius * 1.0f
+    paint.textAlign = Paint.Align.CENTER
+    canvas.drawText("☰", menuButtonCenter.x, menuButtonCenter.y + menuButtonRadius * 0.35f, paint)
   }
 
   private fun getButtonColor(button: Button): Int {
@@ -283,11 +335,17 @@ class OnScreenController @JvmOverloads constructor(
       Button.BACK -> "◀"
       Button.BLACK -> "BK"
       Button.WHITE -> "WH"
-      else -> ""
+      Button.LEFT_STICK_BUTTON -> "LS"
+      Button.RIGHT_STICK_BUTTON -> "RS"
     }
   }
 
   override fun onTouchEvent(event: MotionEvent): Boolean {
+    if (swipeUpGestureRecognizer.onTouchEvent(event)) {
+      invalidate()
+      return true
+    }
+
     val pointerIndex = event.actionIndex
     val pointerId = event.getPointerId(pointerIndex)
     val x = event.getX(pointerIndex)
@@ -306,8 +364,17 @@ class OnScreenController @JvmOverloads constructor(
           )
         }
       }
-      MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP, MotionEvent.ACTION_CANCEL -> {
+      MotionEvent.ACTION_POINTER_UP -> {
         handleTouchUp(pointerId)
+      }
+      MotionEvent.ACTION_UP -> {
+        handleTouchUp(pointerId)
+        // Last finger lifted — release everything as a safety net in case
+        // pointer ID tracking got confused by multi-touch or system gestures.
+        handleCancel()
+      }
+      MotionEvent.ACTION_CANCEL -> {
+        handleCancel()
       }
     }
 
@@ -316,6 +383,13 @@ class OnScreenController @JvmOverloads constructor(
   }
 
   private fun handleTouchDown(x: Float, y: Float, pointerId: Int) {
+    // Check menu button first (UI button, not a controller input)
+    if (menuButtonPointerId == -1 && isPointInCircle(x, y, menuButtonCenter, menuButtonRadius)) {
+      menuButtonPressed = true
+      menuButtonPointerId = pointerId
+      return
+    }
+
     // Check sticks first
     sticks.forEach { (stick, state) ->
       if (state.activePointerId == -1 && isPointInCircle(x, y, state.center, state.radius)) {
@@ -327,23 +401,56 @@ class OnScreenController @JvmOverloads constructor(
 
     // Check buttons
     buttons.forEach { (button, state) ->
-      if (isPointInCircle(x, y, state.center, state.radius)) {
-        state.isPressed = true
-        controllerListener?.onButtonPressed(button)
+      if (state.activePointerId == -1 && isPointInCircle(x, y, state.center, state.radius)) {
+        pressButton(button, state, pointerId)
         return
       }
     }
   }
 
   private fun handleTouchMove(x: Float, y: Float, pointerId: Int) {
+    if (menuButtonPointerId == pointerId) {
+      menuButtonPressed = isPointInCircle(x, y, menuButtonCenter, menuButtonRadius)
+      return
+    }
+
     sticks.forEach { (stick, state) ->
       if (state.activePointerId == pointerId) {
         updateStickPosition(stick, state, x, y)
+        return
+      }
+    }
+
+    val activeButton = buttons.entries.firstOrNull { it.value.activePointerId == pointerId }
+    if (activeButton != null) {
+      val (button, state) = activeButton
+      if (isPointInCircle(x, y, state.center, state.radius)) {
+        return
+      }
+      releaseButton(button, state)
+      // Only slide to a new button when this pointer was already tracking one.
+      // This prevents other pointers from stealing a just-released button in the
+      // same ACTION_MOVE batch, which would cause triggers (LT/RT) to get stuck.
+      val hoveredButton = buttons.entries.firstOrNull { (_, s) ->
+        s.activePointerId == -1 && isPointInCircle(x, y, s.center, s.radius)
+      }
+      if (hoveredButton != null) {
+        val (newButton, newState) = hoveredButton
+        pressButton(newButton, newState, pointerId)
       }
     }
   }
 
   private fun handleTouchUp(pointerId: Int) {
+    // Release menu button (fire on up = tap semantics)
+    if (menuButtonPointerId == pointerId) {
+      if (menuButtonPressed) {
+        onMenuButtonTapped?.invoke()
+      }
+      menuButtonPressed = false
+      menuButtonPointerId = -1
+    }
+
     // Release sticks
     sticks.forEach { (stick, state) ->
       if (state.activePointerId == pointerId) {
@@ -359,11 +466,66 @@ class OnScreenController @JvmOverloads constructor(
 
     // Release buttons
     buttons.forEach { (button, state) ->
-      if (state.isPressed) {
-        state.isPressed = false
-        controllerListener?.onButtonReleased(button)
+      if (state.activePointerId == pointerId) {
+        releaseButton(button, state)
       }
     }
+  }
+
+  private fun handleCancel() {
+    swipeUpGestureRecognizer.reset()
+
+    if (menuButtonPointerId != -1) {
+      menuButtonPressed = false
+      menuButtonPointerId = -1
+    }
+
+    sticks.forEach { (stick, state) ->
+      if (state.activePointerId != -1) {
+        state.activePointerId = -1
+        state.currentPos = PointF(0f, 0f)
+        controllerListener?.onStickMoved(stick, 0f, 0f)
+        if (state.isPressed) {
+          state.isPressed = false
+          controllerListener?.onStickReleased(stick)
+        }
+      }
+    }
+
+    buttons.forEach { (button, state) ->
+      if (state.isPressed) {
+        releaseButton(button, state)
+      }
+    }
+  }
+
+  fun resetAllInputs() {
+    handleCancel()
+    invalidate()
+  }
+
+  override fun onDetachedFromWindow() {
+    resetAllInputs()
+    super.onDetachedFromWindow()
+  }
+
+  override fun onVisibilityChanged(changedView: View, visibility: Int) {
+    super.onVisibilityChanged(changedView, visibility)
+    if (changedView === this && visibility != View.VISIBLE) {
+      resetAllInputs()
+    }
+  }
+
+  private fun pressButton(button: Button, state: ButtonState, pointerId: Int) {
+    state.isPressed = true
+    state.activePointerId = pointerId
+    controllerListener?.onButtonPressed(button)
+  }
+
+  private fun releaseButton(button: Button, state: ButtonState) {
+    state.isPressed = false
+    state.activePointerId = -1
+    controllerListener?.onButtonReleased(button)
   }
 
   private fun updateStickPosition(stick: Stick, state: StickState, x: Float, y: Float) {
@@ -395,6 +557,18 @@ class OnScreenController @JvmOverloads constructor(
     val dx = x - center.x
     val dy = y - center.y
     return sqrt(dx.pow(2) + dy.pow(2)) <= radius
+  }
+
+  private fun isPointInInteractiveElement(x: Float, y: Float): Boolean {
+    if (isPointInCircle(x, y, menuButtonCenter, menuButtonRadius)) {
+      return true
+    }
+
+    if (sticks.values.any { isPointInCircle(x, y, it.center, it.radius) }) {
+      return true
+    }
+
+    return buttons.values.any { isPointInCircle(x, y, it.center, it.radius) }
   }
 
   fun setVisibility(visible: Boolean) {
