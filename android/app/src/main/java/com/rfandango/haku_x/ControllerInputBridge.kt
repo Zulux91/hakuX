@@ -1,4 +1,4 @@
-package com.rfandango.xemuandroid
+package com.rfandango.haku_x
 
 import android.view.KeyEvent
 import org.libsdl.app.SDLControllerManager

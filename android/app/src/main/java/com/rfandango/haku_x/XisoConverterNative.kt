@@ -1,4 +1,4 @@
-package com.rfandango.xemuandroid
+package com.rfandango.haku_x
 
 object XisoConverterNative {
   private val isLibraryLoaded: Boolean = try {

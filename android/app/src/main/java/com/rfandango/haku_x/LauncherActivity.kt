@@ -1,4 +1,4 @@
-package com.rfandango.xemuandroid
+package com.rfandango.haku_x
 
 import android.app.Activity
 import android.content.Intent

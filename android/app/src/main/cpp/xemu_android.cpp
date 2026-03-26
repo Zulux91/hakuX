@@ -73,7 +73,7 @@ extern "C" PFN_vkGetInstanceProcAddr xemu_android_get_vk_proc_addr(void)
 static int g_dvd_fd = -1;
 
 namespace {
-constexpr const char* kLogTag = "xemu-android";
+constexpr const char* kLogTag = "hakuX";
 constexpr const char* kPrefsName = "x1box_prefs";
 
 static JNIEnv* GetEnv();
@@ -775,52 +775,52 @@ static SetupFiles SyncSetupFiles() {
 
   bool fp_safe = GetPrefBool(env, activity, "fp_safe", true);
   xemu_set_fp_safe(fp_safe);
-  __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+  __android_log_print(ANDROID_LOG_INFO, "hakuX",
                       "FP safe (native arithmetic): %s", fp_safe ? "ON" : "OFF");
 
   bool fp_jit = GetPrefBool(env, activity, "fp_jit", true);
   xemu_set_fp_jit(fp_jit);
-  __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+  __android_log_print(ANDROID_LOG_INFO, "hakuX",
                       "FP JIT (native storage + inline ops): %s", fp_jit ? "ON" : "OFF");
 
   bool fast_fences = GetPrefBool(env, activity, "fast_fences", false);
   xemu_set_fast_fences(fast_fences);
-  __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+  __android_log_print(ANDROID_LOG_INFO, "hakuX",
                       "fast fences: %s", fast_fences ? "ON" : "OFF");
 
   bool draw_reorder = GetPrefBool(env, activity, "draw_reorder", false);
   xemu_set_draw_reorder(draw_reorder);
-  __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+  __android_log_print(ANDROID_LOG_INFO, "hakuX",
                       "draw reorder: %s", draw_reorder ? "ON" : "OFF");
 
   bool draw_merge = GetPrefBool(env, activity, "draw_merge", false);
   xemu_set_draw_merge(draw_merge);
-  __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+  __android_log_print(ANDROID_LOG_INFO, "hakuX",
                       "draw merge: %s", draw_merge ? "ON" : "OFF");
 
   bool bindless_tex = GetPrefBool(env, activity, "bindless_textures", false);
   xemu_set_bindless_textures(bindless_tex);
-  __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+  __android_log_print(ANDROID_LOG_INFO, "hakuX",
                       "bindless textures: %s", bindless_tex ? "ON" : "OFF");
 
   bool async_compile = GetPrefBool(env, activity, "async_compile", false);
   xemu_set_async_compile(async_compile);
-  __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+  __android_log_print(ANDROID_LOG_INFO, "hakuX",
                       "async compile: %s", async_compile ? "ON" : "OFF");
 
   bool frame_skip = GetPrefBool(env, activity, "frame_skip", false);
   xemu_set_frame_skip(frame_skip);
-  __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+  __android_log_print(ANDROID_LOG_INFO, "hakuX",
                       "frame skip: %s", frame_skip ? "ON" : "OFF");
 
   int submit_frames = GetPrefInt(env, activity, "submit_frames", 2);
   xemu_set_submit_frames(submit_frames);
-  __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+  __android_log_print(ANDROID_LOG_INFO, "hakuX",
                       "submit frames: %d", submit_frames);
 
   int tier1_threshold = GetPrefInt(env, activity, "tier1_threshold", 64);
   xemu_set_tier1_threshold(tier1_threshold);
-  __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+  __android_log_print(ANDROID_LOG_INFO, "hakuX",
                       "tier1 threshold: %d", tier1_threshold);
 
   std::string filterPref = GetPrefString(env, activity, "filtering");
@@ -899,7 +899,7 @@ static void xemu_pin_to_big_cores_cpp(const char *label) {
   }
   if (big_count > 0 && big_count < ncpus) {
     if (syscall(__NR_sched_setaffinity, 0, sizeof(mask), &mask) == 0) {
-      __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+      __android_log_print(ANDROID_LOG_INFO, "hakuX",
                           "%s: pinned to %d big cores (max_freq=%lu)",
                           label, big_count, max_freq);
     }
@@ -945,7 +945,7 @@ extern "C" int xemu_android_main(int argc, char** argv) {
   auto t_init_start = SDL_GetTicks();
   qemu_init(argc, argv);
   auto t_init_end = SDL_GetTicks();
-  __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+  __android_log_print(ANDROID_LOG_INFO, "hakuX",
                       "qemu_init took %u ms", t_init_end - t_init_start);
 
   /* qemu_init's cleanup_add_fd already closed the original fd */
@@ -978,7 +978,7 @@ extern "C" int xemu_android_main(int argc, char** argv) {
      * cache saved with different FP modes is automatically rejected. */
     game_hash ^= (xemu_get_fp_safe() ? 0x1u : 0) | (xemu_get_fp_jit() ? 0x2u : 0);
     int nhints = tb_cache_load(cache_path, game_hash);
-    __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+    __android_log_print(ANDROID_LOG_INFO, "hakuX",
                         "TB cache: loaded %d hints from %s", nhints, cache_path);
   }
 #endif
@@ -1033,7 +1033,7 @@ extern "C" int SDL_main(int argc, char* argv[]) {
   auto t_sync_start = SDL_GetTicks();
   SetupFiles setup = SyncSetupFiles();
   auto t_sync_end = SDL_GetTicks();
-  __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+  __android_log_print(ANDROID_LOG_INFO, "hakuX",
                       "SyncSetupFiles took %u ms", t_sync_end - t_sync_start);
 
   xemu_android_set_inline_aio_crash_flag_path(setup.inline_aio_flag_path.empty()
@@ -1234,13 +1234,13 @@ extern "C" int SDL_main(int argc, char* argv[]) {
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_com_rfandango_xemuandroid_MainActivity_nativeGetFps(JNIEnv *, jobject)
+Java_com_rfandango_haku_1x_MainActivity_nativeGetFps(JNIEnv *, jobject)
 {
     return static_cast<jint>(g_nv2a_stats.increment_fps);
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_rfandango_xemuandroid_MainActivity_nativeGetFramePacing(JNIEnv *env, jobject)
+Java_com_rfandango_haku_1x_MainActivity_nativeGetFramePacing(JNIEnv *env, jobject)
 {
     char buf[256];
     nv2a_profile_get_pacing_str(buf, sizeof(buf));
@@ -1248,7 +1248,7 @@ Java_com_rfandango_xemuandroid_MainActivity_nativeGetFramePacing(JNIEnv *env, jo
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_rfandango_xemuandroid_MainActivity_nativeGetShaderStats(JNIEnv *env, jobject)
+Java_com_rfandango_haku_1x_MainActivity_nativeGetShaderStats(JNIEnv *env, jobject)
 {
     char buf[256];
     nv2a_profile_get_shader_stats_str(buf, sizeof(buf));
@@ -1256,7 +1256,7 @@ Java_com_rfandango_xemuandroid_MainActivity_nativeGetShaderStats(JNIEnv *env, jo
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_com_rfandango_xemuandroid_MainActivity_nativeCaptureFrame(JNIEnv *, jobject)
+Java_com_rfandango_haku_1x_MainActivity_nativeCaptureFrame(JNIEnv *, jobject)
 {
 #ifdef CONFIG_RENDERDOC
     if (nv2a_dbg_renderdoc_available()) {
@@ -1268,13 +1268,13 @@ Java_com_rfandango_xemuandroid_MainActivity_nativeCaptureFrame(JNIEnv *, jobject
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_rfandango_xemuandroid_MainActivity_nativeDumpRenderTarget(JNIEnv *env, jobject)
+Java_com_rfandango_haku_1x_MainActivity_nativeDumpRenderTarget(JNIEnv *env, jobject)
 {
     nv2a_dbg_trigger_rt_dump();
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_rfandango_xemuandroid_MainActivity_nativeDumpDiagFrame(JNIEnv *, jobject)
+Java_com_rfandango_haku_1x_MainActivity_nativeDumpDiagFrame(JNIEnv *, jobject)
 {
     nv2a_dbg_trigger_diag_frame();
 }
@@ -1282,19 +1282,19 @@ Java_com_rfandango_xemuandroid_MainActivity_nativeDumpDiagFrame(JNIEnv *, jobjec
 extern "C" char g_vulkan_driver_info[256];
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_rfandango_xemuandroid_MainActivity_nativeGetDriverInfo(JNIEnv *env, jobject)
+Java_com_rfandango_haku_1x_MainActivity_nativeGetDriverInfo(JNIEnv *env, jobject)
 {
     return env->NewStringUTF(g_vulkan_driver_info);
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_com_rfandango_xemuandroid_SettingsActivity_nativeGetFpSafe(JNIEnv *, jobject)
+Java_com_rfandango_haku_1x_SettingsActivity_nativeGetFpSafe(JNIEnv *, jobject)
 {
     return xemu_get_fp_safe() ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_rfandango_xemuandroid_SettingsActivity_nativeSetFpSafe(JNIEnv *, jobject, jboolean enable)
+Java_com_rfandango_haku_1x_SettingsActivity_nativeSetFpSafe(JNIEnv *, jobject, jboolean enable)
 {
     xemu_set_fp_safe(enable == JNI_TRUE);
     const char *storage = SDL_AndroidGetInternalStoragePath();
@@ -1306,109 +1306,109 @@ Java_com_rfandango_xemuandroid_SettingsActivity_nativeSetFpSafe(JNIEnv *, jobjec
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_com_rfandango_xemuandroid_SettingsActivity_nativeGetFastFences(JNIEnv *, jobject)
+Java_com_rfandango_haku_1x_SettingsActivity_nativeGetFastFences(JNIEnv *, jobject)
 {
     return xemu_get_fast_fences() ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_rfandango_xemuandroid_SettingsActivity_nativeSetFastFences(JNIEnv *, jobject, jboolean enable)
+Java_com_rfandango_haku_1x_SettingsActivity_nativeSetFastFences(JNIEnv *, jobject, jboolean enable)
 {
     xemu_set_fast_fences(enable == JNI_TRUE);
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_com_rfandango_xemuandroid_SettingsActivity_nativeGetDrawReorder(JNIEnv *, jobject)
+Java_com_rfandango_haku_1x_SettingsActivity_nativeGetDrawReorder(JNIEnv *, jobject)
 {
     return xemu_get_draw_reorder() ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_rfandango_xemuandroid_SettingsActivity_nativeSetDrawReorder(JNIEnv *, jobject, jboolean enable)
+Java_com_rfandango_haku_1x_SettingsActivity_nativeSetDrawReorder(JNIEnv *, jobject, jboolean enable)
 {
     xemu_set_draw_reorder(enable == JNI_TRUE);
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_com_rfandango_xemuandroid_SettingsActivity_nativeGetDrawMerge(JNIEnv *, jobject)
+Java_com_rfandango_haku_1x_SettingsActivity_nativeGetDrawMerge(JNIEnv *, jobject)
 {
     return xemu_get_draw_merge() ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_rfandango_xemuandroid_SettingsActivity_nativeSetDrawMerge(JNIEnv *, jobject, jboolean enable)
+Java_com_rfandango_haku_1x_SettingsActivity_nativeSetDrawMerge(JNIEnv *, jobject, jboolean enable)
 {
     xemu_set_draw_merge(enable == JNI_TRUE);
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_com_rfandango_xemuandroid_SettingsActivity_nativeGetBindlessTextures(JNIEnv *, jobject)
+Java_com_rfandango_haku_1x_SettingsActivity_nativeGetBindlessTextures(JNIEnv *, jobject)
 {
     return xemu_get_bindless_textures() ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_rfandango_xemuandroid_SettingsActivity_nativeSetBindlessTextures(JNIEnv *, jobject, jboolean enable)
+Java_com_rfandango_haku_1x_SettingsActivity_nativeSetBindlessTextures(JNIEnv *, jobject, jboolean enable)
 {
     xemu_set_bindless_textures(enable == JNI_TRUE);
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_com_rfandango_xemuandroid_SettingsActivity_nativeGetAsyncCompile(JNIEnv *, jobject)
+Java_com_rfandango_haku_1x_SettingsActivity_nativeGetAsyncCompile(JNIEnv *, jobject)
 {
     return xemu_get_async_compile() ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_rfandango_xemuandroid_SettingsActivity_nativeSetAsyncCompile(JNIEnv *, jobject, jboolean enable)
+Java_com_rfandango_haku_1x_SettingsActivity_nativeSetAsyncCompile(JNIEnv *, jobject, jboolean enable)
 {
     xemu_set_async_compile(enable == JNI_TRUE);
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_com_rfandango_xemuandroid_SettingsActivity_nativeGetFrameSkip(JNIEnv *, jobject)
+Java_com_rfandango_haku_1x_SettingsActivity_nativeGetFrameSkip(JNIEnv *, jobject)
 {
     return xemu_get_frame_skip() ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_rfandango_xemuandroid_SettingsActivity_nativeSetFrameSkip(JNIEnv *, jobject, jboolean enable)
+Java_com_rfandango_haku_1x_SettingsActivity_nativeSetFrameSkip(JNIEnv *, jobject, jboolean enable)
 {
     xemu_set_frame_skip(enable == JNI_TRUE);
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_com_rfandango_xemuandroid_SettingsActivity_nativeGetSubmitFrames(JNIEnv *, jobject)
+Java_com_rfandango_haku_1x_SettingsActivity_nativeGetSubmitFrames(JNIEnv *, jobject)
 {
     return static_cast<jint>(xemu_get_submit_frames());
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_rfandango_xemuandroid_SettingsActivity_nativeSetSubmitFrames(JNIEnv *, jobject, jint count)
+Java_com_rfandango_haku_1x_SettingsActivity_nativeSetSubmitFrames(JNIEnv *, jobject, jint count)
 {
     xemu_set_submit_frames(static_cast<int>(count));
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_com_rfandango_xemuandroid_SettingsActivity_nativeGetTier1Threshold(JNIEnv *, jobject)
+Java_com_rfandango_haku_1x_SettingsActivity_nativeGetTier1Threshold(JNIEnv *, jobject)
 {
     return static_cast<jint>(xemu_get_tier1_threshold());
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_rfandango_xemuandroid_SettingsActivity_nativeSetTier1Threshold(JNIEnv *, jobject, jint value)
+Java_com_rfandango_haku_1x_SettingsActivity_nativeSetTier1Threshold(JNIEnv *, jobject, jint value)
 {
     xemu_set_tier1_threshold(static_cast<int>(value));
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_com_rfandango_xemuandroid_SettingsActivity_nativeGetFpJit(JNIEnv *, jobject)
+Java_com_rfandango_haku_1x_SettingsActivity_nativeGetFpJit(JNIEnv *, jobject)
 {
     return xemu_get_fp_jit() ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_rfandango_xemuandroid_SettingsActivity_nativeSetFpJit(JNIEnv *, jobject, jboolean enable)
+Java_com_rfandango_haku_1x_SettingsActivity_nativeSetFpJit(JNIEnv *, jobject, jboolean enable)
 {
     xemu_set_fp_jit(enable == JNI_TRUE);
     const char *storage = SDL_AndroidGetInternalStoragePath();
@@ -1420,32 +1420,32 @@ Java_com_rfandango_xemuandroid_SettingsActivity_nativeSetFpJit(JNIEnv *, jobject
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_rfandango_xemuandroid_MainActivity_nativePauseEmulation(JNIEnv *, jobject)
+Java_com_rfandango_haku_1x_MainActivity_nativePauseEmulation(JNIEnv *, jobject)
 {
     xemu_android_pause_emulation();
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_rfandango_xemuandroid_MainActivity_nativeResumeEmulation(JNIEnv *, jobject)
+Java_com_rfandango_haku_1x_MainActivity_nativeResumeEmulation(JNIEnv *, jobject)
 {
     xemu_android_resume_emulation();
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_rfandango_xemuandroid_MainActivity_nativeExitEmulation(JNIEnv *, jobject)
+Java_com_rfandango_haku_1x_MainActivity_nativeExitEmulation(JNIEnv *, jobject)
 {
     xemu_android_request_exit();
 }
 
 #ifdef CONFIG_VULKAN
 extern "C" JNIEXPORT jboolean JNICALL
-Java_com_rfandango_xemuandroid_GpuDriverHelper_nativeSupportsCustomDriverLoading(JNIEnv *, jclass)
+Java_com_rfandango_haku_1x_GpuDriverHelper_nativeSupportsCustomDriverLoading(JNIEnv *, jclass)
 {
     return access("/dev/kgsl-3d0", F_OK) == 0 ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_rfandango_xemuandroid_GpuDriverHelper_nativeInitializeDriver(
+Java_com_rfandango_haku_1x_GpuDriverHelper_nativeInitializeDriver(
     JNIEnv *env, jclass,
     jstring hookLibDir, jstring customDriverDir,
     jstring customDriverName)
@@ -1457,7 +1457,7 @@ Java_com_rfandango_xemuandroid_GpuDriverHelper_nativeInitializeDriver(
     void *handle = nullptr;
 
     if (driver_name && driver_name[0] != '\0') {
-        __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+        __android_log_print(ANDROID_LOG_INFO, "hakuX",
                             "Loading custom Vulkan driver: %s from %s",
                             driver_name, driver_dir ? driver_dir : "(null)");
         handle = adrenotools_open_libvulkan(
@@ -1472,14 +1472,14 @@ Java_com_rfandango_xemuandroid_GpuDriverHelper_nativeInitializeDriver(
 
         if (handle) {
             g_custom_vulkan_library = handle;
-            __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+            __android_log_print(ANDROID_LOG_INFO, "hakuX",
                                 "Custom Vulkan driver loaded successfully via adrenotools");
         } else {
-            __android_log_print(ANDROID_LOG_WARN, "xemu-android",
+            __android_log_print(ANDROID_LOG_WARN, "hakuX",
                                 "adrenotools failed to load custom driver, will fall back to system default");
         }
     } else {
-        __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+        __android_log_print(ANDROID_LOG_INFO, "hakuX",
                             "No custom driver specified, using system Vulkan driver");
     }
 

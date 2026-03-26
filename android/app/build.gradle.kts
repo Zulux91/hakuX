@@ -20,13 +20,13 @@ val hasReleaseKeystore = hasKeystoreProperties &&
   }
 
 android {
-  namespace = "com.rfandango.xemuandroid"
+  namespace = "com.rfandango.haku_x"
   compileSdk = 36
   buildToolsVersion = "36.1.0"
   ndkVersion = "29.0.14206865"
 
   defaultConfig {
-    applicationId = "com.rfandango.xemuandroid"
+    applicationId = "com.rfandango.haku_x"
     minSdk = 26
     targetSdk = 36
 
