@@ -132,7 +132,7 @@ static const char *pack_depth_stencil_direct_glsl =
     "    uint idx_in = in_y * width_in + in_x;\n"
     "    float depth = texelFetch(depth_tex, ivec2(in_x, in_y), 0).r;\n"
     "    uint depth_value = uint(depth * float(0xFFFFFF));\n"
-    "    uint stencil_value = (stencil_in[idx_in / 4] >> ((idx_in %% 4) * 8)) & 0xFFu;\n"
+    "    uint stencil_value = (stencil_in[idx_in / 4] >> ((idx_in % 4) * 8)) & 0xFFu;\n"
     "    packed_out[idx_out] = depth_value << 8 | stencil_value;\n"
     "}\n";
 
@@ -327,6 +327,7 @@ static VkPipeline create_compute_pipeline(PGRAPHVkState *r, const char *glsl,
 {
     ShaderModuleInfo *module = pgraph_vk_create_shader_module_from_glsl(
         r, VK_SHADER_STAGE_COMPUTE_BIT, glsl);
+    assert(module && "Compute shader GLSL compilation failed");
 
     VkComputePipelineCreateInfo pipeline_info = {
         .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
