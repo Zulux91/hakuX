@@ -34,7 +34,7 @@ const int max_surface_frame_time_delta = 5;
 
 static void destroy_surface_image(PGRAPHVkState *r, SurfaceBinding *surface);
 static void download_surface_deferred(NV2AState *d, SurfaceBinding *surface);
-static void download_surface_complete_deferred(NV2AState *d);
+/* Forward declaration — defined below, also called from texture.c */
 
 void pgraph_vk_set_surface_scale_factor(NV2AState *d, unsigned int scale)
 {
@@ -146,6 +146,18 @@ bool pgraph_vk_download_surfaces_in_range_if_dirty(PGRAPHState *pg,
     SurfaceBinding *surface;
     bool found_overlap = false;
 
+    /* If prior downloads were already submitted by a previous finish,
+     * complete them now before recording new ones. This ensures the
+     * deferred_downloads[] array only contains entries from the current
+     * (unsubmitted) aux CB. */
+    if (r->num_deferred_downloads > 0 && r->deferred_downloads_frame >= 0) {
+        OPT_STAT_INC(sd_complete_def_coalesced);
+        VK_CHECK(vkWaitForFences(r->device, 1,
+                                 &r->frame_fences[r->deferred_downloads_frame],
+                                 VK_TRUE, UINT64_MAX));
+        pgraph_vk_complete_staged_downloads(d, r);
+    }
+
     QTAILQ_FOREACH(surface, &r->surfaces, entry) {
         if (check_surface_overlaps_range(surface, start, size)) {
             found_overlap = true;
@@ -156,8 +168,10 @@ bool pgraph_vk_download_surfaces_in_range_if_dirty(PGRAPHState *pg,
         }
     }
 
-    if (found_overlap) {
-        download_surface_complete_deferred(d);
+    if (found_overlap && r->num_deferred_downloads > 0) {
+        /* Downloads just recorded but not yet submitted — must complete
+         * now since the caller needs the data in VRAM. */
+        pgraph_vk_download_surface_complete_deferred(d);
     }
 
     return found_overlap;
@@ -468,7 +482,20 @@ static bool download_surface_record_deferred(NV2AState *d,
     return true;
 }
 
-static void complete_staged_downloads(NV2AState *d, PGRAPHVkState *r)
+/* Clear deferred download references to a surface that is about to be
+ * freed. The download data in staging_dst is still valid and will be
+ * copied, but the surface flags will not be updated. */
+static void deferred_downloads_clear_surface(PGRAPHVkState *r,
+                                             SurfaceBinding *surface)
+{
+    for (int i = 0; i < r->num_deferred_downloads; i++) {
+        if (r->deferred_downloads[i].surface == surface) {
+            r->deferred_downloads[i].surface = NULL;
+        }
+    }
+}
+
+void pgraph_vk_complete_staged_downloads(NV2AState *d, PGRAPHVkState *r)
 {
     StorageBuffer *staging = &r->storage_buffers[BUFFER_STAGING_DST];
 
@@ -511,9 +538,10 @@ static void complete_staged_downloads(NV2AState *d, PGRAPHVkState *r)
 
     r->num_deferred_downloads = 0;
     r->staging_dst_offset = 0;
+    r->deferred_downloads_frame = -1;
 }
 
-static void download_surface_complete_deferred(NV2AState *d)
+void pgraph_vk_download_surface_complete_deferred(NV2AState *d)
 {
     PGRAPHState *pg = &d->pgraph;
     PGRAPHVkState *r = pg->vk_renderer_state;
@@ -534,6 +562,13 @@ static void download_surface_complete_deferred(NV2AState *d)
             VK_CHECK(vkWaitForFences(r->device, 1, &r->frame_fences[fi],
                                      VK_TRUE, UINT64_MAX));
         }
+    } else if (r->deferred_downloads_frame >= 0) {
+        /* Downloads were already submitted as part of a prior finish.
+         * Wait for that frame's fence — no new submit needed. */
+        OPT_STAT_INC(sd_complete_def_coalesced);
+        VK_CHECK(vkWaitForFences(r->device, 1,
+                                 &r->frame_fences[r->deferred_downloads_frame],
+                                 VK_TRUE, UINT64_MAX));
     } else {
         OPT_STAT_INC(sd_complete_def);
         pgraph_vk_finish(pg, VK_FINISH_REASON_SURFACE_DOWN);
@@ -541,7 +576,7 @@ static void download_surface_complete_deferred(NV2AState *d)
 
     int64_t _t1 = nv2a_clock_ns();
 
-    complete_staged_downloads(d, r);
+    pgraph_vk_complete_staged_downloads(d, r);
 
     if (r->display_predownload_pending) {
         SurfaceBinding *s = r->display_predownload_surface;
@@ -571,7 +606,7 @@ static void download_surface_to_buffer(NV2AState *d, SurfaceBinding *surface,
     PGRAPHState *pg = &d->pgraph;
     PGRAPHVkState *r = pg->vk_renderer_state;
 
-    download_surface_complete_deferred(d);
+    pgraph_vk_download_surface_complete_deferred(d);
 
     VK_LOG("download_surface: %s addr=0x%x %ux%u pitch=%d bpp=%d swizzle=%d",
            surface->color ? "COLOR" : "ZETA", surface->vram_addr,
@@ -1042,7 +1077,7 @@ static void download_surface(NV2AState *d, SurfaceBinding *surface, bool force)
 
 /*
  * Like download_surface but uses the deferred path to avoid a finish.
- * The caller MUST ensure download_surface_complete_deferred() is called
+ * The caller MUST ensure pgraph_vk_download_surface_complete_deferred() is called
  * before the surface is invalidated or freed.
  */
 static void download_surface_deferred(NV2AState *d, SurfaceBinding *surface)
@@ -1057,7 +1092,7 @@ static void download_surface_deferred(NV2AState *d, SurfaceBinding *surface)
 
     /* Try deferred path — records download into nondraw CB without
      * finishing. Multiple deferred downloads are batched into a single
-     * finish call when download_surface_complete_deferred() runs. */
+     * finish call when pgraph_vk_download_surface_complete_deferred() runs. */
     if (download_surface_record_deferred(
             d, surface, d->vram_ptr + surface->vram_addr)) {
         return;
@@ -1065,7 +1100,7 @@ static void download_surface_deferred(NV2AState *d, SurfaceBinding *surface)
 
     /* Deferred path failed (buffer full or limit reached). Complete pending
      * deferred downloads first, then retry. */
-    download_surface_complete_deferred(d);
+    pgraph_vk_download_surface_complete_deferred(d);
     if (download_surface_record_deferred(
             d, surface, d->vram_ptr + surface->vram_addr)) {
         return;
@@ -1167,7 +1202,7 @@ void pgraph_vk_process_pending_downloads(NV2AState *d)
     PGRAPHVkState *r = pg->vk_renderer_state;
     SurfaceBinding *surface;
 
-    download_surface_complete_deferred(d);
+    pgraph_vk_download_surface_complete_deferred(d);
 
     bool can_defer = true;
     int pending_count = 0;
@@ -1203,7 +1238,7 @@ void pgraph_vk_process_pending_downloads(NV2AState *d)
     }
 
     if (!can_defer || r->num_deferred_downloads == 0) {
-        download_surface_complete_deferred(d);
+        pgraph_vk_download_surface_complete_deferred(d);
         QTAILQ_FOREACH(surface, &r->surfaces, entry) {
             OPT_STAT_INC(dl_from_ppd_fb);
             download_surface(d, surface, false);
@@ -1216,7 +1251,7 @@ void pgraph_vk_process_pending_downloads(NV2AState *d)
     OPT_STAT_INC(sd_pending_dl);
     pgraph_vk_finish(pg, VK_FINISH_REASON_SURFACE_DOWN);
 
-    complete_staged_downloads(d, r);
+    pgraph_vk_complete_staged_downloads(d, r);
 
     QTAILQ_FOREACH(surface, &r->surfaces, entry) {
         if (!surface->download_pending || !surface->width ||
@@ -1244,7 +1279,7 @@ void pgraph_vk_download_dirty_surfaces(NV2AState *d)
     PGRAPHState *pg = &d->pgraph;
     PGRAPHVkState *r = pg->vk_renderer_state;
 
-    download_surface_complete_deferred(d);
+    pgraph_vk_download_surface_complete_deferred(d);
 
     bool can_defer = true;
     int pending_count = 0;
@@ -1281,7 +1316,7 @@ void pgraph_vk_download_dirty_surfaces(NV2AState *d)
     }
 
     if (!can_defer || r->num_deferred_downloads == 0) {
-        download_surface_complete_deferred(d);
+        pgraph_vk_download_surface_complete_deferred(d);
         QTAILQ_FOREACH(surface, &r->surfaces, entry) {
             OPT_STAT_INC(dif_dds_fb);
             pgraph_vk_surface_download_if_dirty(d, surface);
@@ -1294,7 +1329,7 @@ void pgraph_vk_download_dirty_surfaces(NV2AState *d)
     OPT_STAT_INC(sd_dirty_dl);
     pgraph_vk_finish(pg, VK_FINISH_REASON_SURFACE_DOWN);
 
-    complete_staged_downloads(d, r);
+    pgraph_vk_complete_staged_downloads(d, r);
 
     QTAILQ_FOREACH(surface, &r->surfaces, entry) {
         if (!surface->draw_dirty || !surface->width ||
@@ -1573,6 +1608,7 @@ static void invalidate_overlapping_surfaces(NV2AState *d,
             OPT_STAT_INC(dif_overlap_sh);
             pgraph_vk_surface_download_if_dirty(d, other_surface);
             QTAILQ_REMOVE(&r->shelved_surfaces, other_surface, entry);
+            deferred_downloads_clear_surface(r, other_surface);
             destroy_surface_image(r, other_surface);
             g_free(other_surface);
         }
@@ -1926,6 +1962,7 @@ static void prune_invalid_surfaces(PGRAPHVkState *r, int keep)
                 continue;
             }
             QTAILQ_REMOVE(&r->invalid_surfaces, surface, entry);
+            deferred_downloads_clear_surface(r, surface);
             destroy_surface_image(r, surface);
             g_free(surface);
         }
@@ -1957,6 +1994,7 @@ static void expire_old_surfaces(NV2AState *d)
             OPT_STAT_INC(dif_expire_sh);
             pgraph_vk_surface_download_if_dirty(d, s);
             QTAILQ_REMOVE(&r->shelved_surfaces, s, entry);
+            deferred_downloads_clear_surface(r, s);
             destroy_surface_image(r, s);
             g_free(s);
         } else {
@@ -2812,7 +2850,7 @@ static void update_surface_part(NV2AState *d, bool upload, bool color)
             // FIXME: Cannot monitor for reads/writes; flush now
             // Use deferred path to batch downloads across color/zeta.
             // Completion happens in surface_update via
-            // download_surface_complete_deferred() before any upload.
+            // pgraph_vk_download_surface_complete_deferred() before any upload.
             download_surface_deferred(
                 d, color ? r->color_binding : r->zeta_binding);
         }
@@ -2880,7 +2918,7 @@ void pgraph_vk_surface_update(NV2AState *d, bool upload, bool color_write,
         }
     }
 
-    download_surface_complete_deferred(d);
+    pgraph_vk_download_surface_complete_deferred(d);
 
     if (upload) {
         pg->draw_time++;
@@ -3046,6 +3084,7 @@ void pgraph_vk_surface_flush(NV2AState *d)
         OPT_STAT_INC(dif_flush);
         pgraph_vk_surface_download_if_dirty(d, s);
         QTAILQ_REMOVE(&r->shelved_surfaces, s, entry);
+        deferred_downloads_clear_surface(r, s);
         destroy_surface_image(r, s);
         g_free(s);
     }

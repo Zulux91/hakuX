@@ -125,6 +125,7 @@ struct OptBisectStats {
     int sd_eviction_nocb;
     int sd_dl_to_buf;
     int sd_complete_def;
+    int sd_complete_def_coalesced;
     int sd_pending_dl;
     int sd_dirty_dl;
     int dl_from_def_fb;
@@ -1172,6 +1173,9 @@ typedef struct PGRAPHVkState {
     DeferredSurfaceDownload deferred_downloads[MAX_DEFERRED_DOWNLOADS];
     int num_deferred_downloads;
     VkDeviceSize staging_dst_offset;
+    int deferred_downloads_frame; /* Frame index whose CB contains the
+                                   * deferred downloads, or -1 if not yet
+                                   * submitted. */
 
     bool display_predownload_pending;
     int display_predownload_frame_index;
@@ -1423,6 +1427,8 @@ void pgraph_vk_surface_flush(NV2AState *d);
 void pgraph_vk_surface_image_pool_init(PGRAPHVkState *r);
 void pgraph_vk_surface_image_pool_drain(PGRAPHVkState *r);
 void pgraph_vk_process_pending_downloads(NV2AState *d);
+void pgraph_vk_complete_staged_downloads(NV2AState *d, PGRAPHVkState *r);
+void pgraph_vk_download_surface_complete_deferred(NV2AState *d);
 void pgraph_vk_surface_download_if_dirty(NV2AState *d, SurfaceBinding *surface);
 SurfaceBinding *pgraph_vk_surface_get_within(NV2AState *d, hwaddr addr);
 void pgraph_vk_wait_for_surface_download(SurfaceBinding *e);

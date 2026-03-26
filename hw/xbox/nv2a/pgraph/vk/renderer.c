@@ -160,6 +160,7 @@ static void pgraph_vk_init(NV2AState *d, Error **errp)
     pg->vk_renderer_state = (PGRAPHVkState *)g_malloc0(sizeof(PGRAPHVkState));
     pg->vk_renderer_state->nv2a = d;
     pg->vk_renderer_state->need_descriptor_rebind = true;
+    pg->vk_renderer_state->deferred_downloads_frame = -1;
 
 #if HAVE_EXTERNAL_MEMORY
     bool use_external_memory = pgraph_vk_gl_external_memory_available();

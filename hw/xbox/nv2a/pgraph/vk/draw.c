@@ -137,7 +137,7 @@ static void opt_stats_log_and_reset(void)
                 g_opt_stats.draws_skipped_pending,
                 g_opt_stats.draws_skipped_frameskip);
         __android_log_print(ANDROID_LOG_INFO, "xemu-stall",
-                "RPBreaks:%d Finish:%d(vtx%d sc%d sd%d buf%d fb%d pres%d flip%d flu%d stl%d stlDef%d stlBat%d) InlClr:%d/%d PreDL:%d sd[ev%d noCb%d dl%d cDef%d pDl%d dDl%d] dlSrc[defFb%d ppdFb%d dirtyIf%d] dif[ovl%d ovlSh%d exp%d expSh%d blt%d flu%d dds%d oth%d]",
+                "RPBreaks:%d Finish:%d(vtx%d sc%d sd%d buf%d fb%d pres%d flip%d flu%d stl%d stlDef%d stlBat%d) InlClr:%d/%d PreDL:%d sd[ev%d noCb%d dl%d cDef%d cDefC%d pDl%d dDl%d] dlSrc[defFb%d ppdFb%d dirtyIf%d] dif[ovl%d ovlSh%d exp%d expSh%d blt%d flu%d dds%d oth%d]",
                 g_opt_stats.render_pass_breaks,
                 g_opt_stats.finish_calls,
                 g_opt_stats.finish_vtx_dirty,
@@ -158,6 +158,7 @@ static void opt_stats_log_and_reset(void)
                 g_opt_stats.sd_eviction_nocb,
                 g_opt_stats.sd_dl_to_buf,
                 g_opt_stats.sd_complete_def,
+                g_opt_stats.sd_complete_def_coalesced,
                 g_opt_stats.sd_pending_dl,
                 g_opt_stats.sd_dirty_dl,
                 g_opt_stats.dl_from_def_fb,
@@ -2283,6 +2284,14 @@ void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
             r->gpu_ts_rp_counts[r->current_frame] = r->gpu_ts_rp_index;
         }
 
+        /* If deferred surface downloads are pending (recorded into the aux
+         * CB), mark them as submitted with this frame's fence so that
+         * later callers can wait on the fence instead of issuing a
+         * separate pgraph_vk_finish(SURFACE_DOWN). */
+        if (r->num_deferred_downloads > 0 && r->deferred_downloads_frame < 0) {
+            r->deferred_downloads_frame = r->current_frame;
+        }
+
         nv2a_profile_inc_counter(NV2A_PROF_QUEUE_SUBMIT);
         NV2A_PHASE_TIMER_BEGIN(finish_submit);
 
@@ -2341,6 +2350,13 @@ void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
                     r->pending_post_fence_opaque = NULL;
                 }
                 gpu_ts_readback(r, r->current_frame);
+
+                /* GPU done — complete any deferred downloads that were
+                 * submitted with this frame's aux CB. */
+                if (r->deferred_downloads_frame == r->current_frame) {
+                    NV2AState *d = container_of(pg, NV2AState, pgraph);
+                    pgraph_vk_complete_staged_downloads(d, r);
+                }
 
                 /* Immediate submit: GPU done, descriptor sets safe to
                  * reuse */
@@ -2407,6 +2423,12 @@ void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
                 qemu_event_destroy(&finish_event);
                 gpu_ts_readback(r, r->current_frame);
 
+                /* GPU done — complete any deferred downloads. */
+                if (r->deferred_downloads_frame == r->current_frame) {
+                    NV2AState *d = container_of(pg, NV2AState, pgraph);
+                    pgraph_vk_complete_staged_downloads(d, r);
+                }
+
                 /* Non-deferred: GPU done, descriptor sets safe to reuse */
                 r->descriptor_set_index = 0;
                 r->push_ubo_set_index = 0;
@@ -2472,6 +2494,13 @@ void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
                                          VK_TRUE, UINT64_MAX));
                 gpu_ts_readback(r, next_frame);
                 qatomic_set(&r->frame_submitted[next_frame], false);
+
+                /* Complete deferred downloads that were submitted with
+                 * this frame slot's aux CB. */
+                if (r->deferred_downloads_frame == next_frame) {
+                    NV2AState *d = container_of(pg, NV2AState, pgraph);
+                    pgraph_vk_complete_staged_downloads(d, r);
+                }
                 for (int i = 0; i < r->deferred_framebuffer_count[next_frame]; i++) {
                     vkDestroyFramebuffer(r->device,
                                          r->deferred_framebuffers[next_frame][i],
