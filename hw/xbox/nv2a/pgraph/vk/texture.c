@@ -503,6 +503,7 @@ static void upload_texture_image(PGRAPHState *pg, int texture_idx,
 
     VkDeviceSize staging_base = pgraph_vk_staging_alloc(pg, texture_data_size);
     if (staging_base == VK_WHOLE_SIZE) {
+        OPT_STAT_INC(buf_stg_full);
         pgraph_vk_finish(pg, VK_FINISH_REASON_NEED_BUFFER_SPACE);
         staging_base = pgraph_vk_staging_alloc(pg, texture_data_size);
         if (staging_base == VK_WHOLE_SIZE) {
@@ -625,6 +626,7 @@ static void copy_zeta_surface_to_texture(PGRAPHState *pg, SurfaceBinding *surfac
     }
 
     if (pgraph_vk_compute_needs_finish(r)) {
+        OPT_STAT_INC(buf_compute_full);
         pgraph_vk_finish(pg, VK_FINISH_REASON_NEED_BUFFER_SPACE);
         pgraph_vk_flush_all_frames(pg);
         pgraph_vk_compute_finish_complete(r);

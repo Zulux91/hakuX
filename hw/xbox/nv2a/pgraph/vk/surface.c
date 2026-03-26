@@ -604,6 +604,7 @@ static void download_surface_to_buffer(NV2AState *d, SurfaceBinding *surface,
 
 #if OPT_SURF_TO_TEX_INLINE
     if (compute_needs_finish) {
+        OPT_STAT_INC(buf_compute_full);
         pgraph_vk_finish(pg, VK_FINISH_REASON_NEED_BUFFER_SPACE);
         pgraph_vk_flush_all_frames(pg);
         r->compute.descriptor_set_index = 0;
@@ -613,6 +614,7 @@ static void download_surface_to_buffer(NV2AState *d, SurfaceBinding *surface,
         surface->draw_time >= r->command_buffer_start_time) {
         pgraph_vk_finish(pg, VK_FINISH_REASON_SURFACE_DOWN);
     } else if (compute_needs_finish) {
+        OPT_STAT_INC(buf_compute_full);
         pgraph_vk_finish(pg, VK_FINISH_REASON_NEED_BUFFER_SPACE);
         pgraph_vk_flush_all_frames(pg);
         r->compute.descriptor_set_index = 0;
@@ -2069,6 +2071,7 @@ void pgraph_vk_upload_surface_data(NV2AState *d, SurfaceBinding *surface,
 
     VkDeviceSize staging_base = pgraph_vk_staging_alloc(pg, uploaded_image_size);
     if (staging_base == VK_WHOLE_SIZE) {
+        OPT_STAT_INC(buf_stg_full);
         pgraph_vk_finish(pg, VK_FINISH_REASON_NEED_BUFFER_SPACE);
         staging_base = pgraph_vk_staging_alloc(pg, uploaded_image_size);
         if (staging_base == VK_WHOLE_SIZE) {

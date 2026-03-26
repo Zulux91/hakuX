@@ -171,6 +171,14 @@ static void opt_stats_log_and_reset(void)
                 g_opt_stats.dif_flush,
                 g_opt_stats.dif_dds_fb,
                 g_opt_stats.dif_other);
+        __android_log_print(ANDROID_LOG_INFO, "xemu-stall",
+                "buf_detail: ds%d ubo%d fb%d stg%d comp%d vtx%d",
+                g_opt_stats.buf_ds_full,
+                g_opt_stats.buf_ubo_full,
+                g_opt_stats.buf_fb_full,
+                g_opt_stats.buf_stg_full,
+                g_opt_stats.buf_compute_full,
+                g_opt_stats.buf_vtx_full);
         {
             extern struct FPUProfileCounters {
                 int x87_arith, x87_load_store, x87_transcendental, x87_stack;
@@ -729,6 +737,7 @@ static void create_frame_buffer(PGRAPHState *pg)
     }
 
     if (r->framebuffer_index >= ARRAY_SIZE(r->framebuffers)) {
+        OPT_STAT_INC(buf_fb_full);
         pgraph_vk_finish(pg, VK_FINISH_REASON_NEED_BUFFER_SPACE);
     }
 
@@ -2136,6 +2145,14 @@ void pgraph_vk_flush_all_frames(PGRAPHState *pg)
         }
     }
     pgraph_vk_reclaim_descriptor_overflow(r);
+
+    // All GPU work is complete — safe to reuse all descriptor sets
+    r->descriptor_set_index = 0;
+    r->push_ubo_set_index = 0;
+#if OPT_BINDLESS_TEXTURES
+    r->ubo_descriptor_set_index = 0;
+#endif
+    pgraph_vk_compute_finish_complete(r);
 }
 
 static void flush_reorder_window_internal(NV2AState *d);
@@ -2317,6 +2334,14 @@ void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
                 r->pending_post_fence_opaque = NULL;
             }
             gpu_ts_readback(r, r->current_frame);
+
+            /* Immediate submit: GPU done, descriptor sets safe to reuse */
+            r->descriptor_set_index = 0;
+            r->push_ubo_set_index = 0;
+#if OPT_BINDLESS_TEXTURES
+            r->ubo_descriptor_set_index = 0;
+#endif
+            pgraph_vk_compute_finish_complete(r);
         } else {
             QemuEvent finish_event;
             if (!deferred) {
@@ -2372,6 +2397,14 @@ void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
                 qemu_event_wait(&finish_event);
                 qemu_event_destroy(&finish_event);
                 gpu_ts_readback(r, r->current_frame);
+
+                /* Non-deferred: GPU done, descriptor sets safe to reuse */
+                r->descriptor_set_index = 0;
+                r->push_ubo_set_index = 0;
+#if OPT_BINDLESS_TEXTURES
+                r->ubo_descriptor_set_index = 0;
+#endif
+                pgraph_vk_compute_finish_complete(r);
             }
         }
 
@@ -2437,6 +2470,27 @@ void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
                 r->frame_staging[next_frame].vertex_inline_staging.buffer_offset = 0;
                 r->frame_staging[next_frame].uniform_staging.buffer_offset = 0;
                 r->frame_staging[next_frame].staging_src.buffer_offset = 0;
+            }
+
+            /* Oldest frame's fence has been waited — its descriptor sets
+             * are safe to reuse. Check if any other frame slot is still
+             * in flight; if not, we can reset indices to 0. */
+            {
+                bool any_in_flight = false;
+                for (int i = 0; i < r->num_active_frames; i++) {
+                    if (i != next_frame && r->frame_submitted[i]) {
+                        any_in_flight = true;
+                        break;
+                    }
+                }
+                if (!any_in_flight) {
+                    r->descriptor_set_index = 0;
+                    r->push_ubo_set_index = 0;
+#if OPT_BINDLESS_TEXTURES
+                    r->ubo_descriptor_set_index = 0;
+#endif
+                    pgraph_vk_compute_finish_complete(r);
+                }
             }
 
             {
@@ -5562,6 +5616,7 @@ void pgraph_vk_set_surface_dirty(PGRAPHState *pg, bool color, bool zeta)
 static bool ensure_buffer_space(PGRAPHState *pg, int index, VkDeviceSize size)
 {
     if (!pgraph_vk_buffer_has_space_for(pg, index, size, 1)) {
+        OPT_STAT_INC(buf_vtx_full);
         pgraph_vk_finish(pg, VK_FINISH_REASON_NEED_BUFFER_SPACE);
         return true;
     }

@@ -92,11 +92,11 @@ static MemoryBudget compute_memory_budget(PGRAPHVkState *r)
         size_t budget = b.renderer_budget;
         b.vertex_inline_cap = MAX(8 * mib, budget / 5);
         b.index_cap         = MAX(4 * mib, budget / 20);
-        b.staging_cap       = MAX(8 * mib, budget * 12 / 100);
-        b.perframe_vtx_cap  = MAX(8 * mib, budget * 8 / 100);
+        b.staging_cap       = MAX(16 * mib, budget * 18 / 100);
+        b.perframe_vtx_cap  = MAX(8 * mib, budget * 10 / 100);
         b.perframe_idx_cap  = MAX(2 * mib, budget / 50);
-        b.perframe_uni_cap  = MAX(4 * mib, budget / 25);
-        b.perframe_stg_cap  = MAX(8 * mib, budget * 8 / 100);
+        b.perframe_uni_cap  = MAX(8 * mib, budget * 6 / 100);
+        b.perframe_stg_cap  = MAX(16 * mib, budget * 12 / 100);
 
         size_t budget_mib = budget / mib;
         b.shader_module_cache_entries = budget_mib * 4;
@@ -320,9 +320,9 @@ bool pgraph_vk_init_buffers(NV2AState *d, Error **errp)
     int nframes = xemu_get_submit_frames();
 
     size_t uniform_size;
-    if (nframes >= 3)      uniform_size = 64 * mib;
-    else if (nframes == 2) uniform_size = 32 * mib;
-    else                   uniform_size = 16 * mib;
+    if (nframes >= 3)      uniform_size = 128 * mib;
+    else if (nframes == 2) uniform_size = 64 * mib;
+    else                   uniform_size = 32 * mib;
 
     r->storage_buffers[BUFFER_UNIFORM] = (StorageBuffer){
         .alloc_info = device_alloc_create_info,
@@ -375,18 +375,18 @@ bool pgraph_vk_init_buffers(NV2AState *d, Error **errp)
     if (nframes >= 3) {
         idx_max = 32 * mib;
         vtx_max = 128 * mib;
-        uni_max = 64 * mib;
-        stg_max = 128 * mib;
+        uni_max = 128 * mib;
+        stg_max = 256 * mib;
     } else if (nframes == 2) {
         idx_max = 16 * mib;
         vtx_max = 64 * mib;
-        uni_max = 32 * mib;
-        stg_max = 64 * mib;
+        uni_max = 64 * mib;
+        stg_max = 128 * mib;
     } else {
         idx_max = 8 * mib;
         vtx_max = 32 * mib;
-        uni_max = 16 * mib;
-        stg_max = 32 * mib;
+        uni_max = 32 * mib;
+        stg_max = 64 * mib;
     }
 
     idx_max = MIN(idx_max, mb.perframe_idx_cap);

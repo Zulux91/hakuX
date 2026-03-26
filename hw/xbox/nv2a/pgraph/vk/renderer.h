@@ -48,7 +48,7 @@
 
 #define OPT_DYNAMIC_STATES      1
 #define OPT_DYNAMIC_BLEND       1
-#define NUM_GFX_DESCRIPTOR_SETS 16384
+#define NUM_GFX_DESCRIPTOR_SETS 65536
 #define OPT_DRAW_MERGE_MAX      128
 #define OPT_VALIDATE_GEN_COUNTERS 0
 #define REORDER_WINDOW_MAX       64
@@ -139,6 +139,12 @@ struct OptBisectStats {
     int dif_dds_fb;
     int dif_other;
     int finish_buf_space;
+    int buf_ds_full;
+    int buf_ubo_full;
+    int buf_fb_full;
+    int buf_stg_full;
+    int buf_compute_full;
+    int buf_vtx_full;
     int finish_fb_dirty;
     int finish_present;
     int finish_flip;
@@ -829,7 +835,7 @@ typedef struct PGRAPHVkComputeState {
     // Direct depth pack: samples depth image + reads stencil from buffer
     VkDescriptorPool direct_descriptor_pool;
     VkDescriptorSetLayout direct_descriptor_set_layout;
-    VkDescriptorSet direct_descriptor_sets[512];
+    VkDescriptorSet direct_descriptor_sets[4096];
     int direct_descriptor_set_index;
     VkPipelineLayout direct_pipeline_layout;
     VkSampler direct_depth_sampler;
@@ -1017,7 +1023,7 @@ typedef struct PGRAPHVkState {
     VkFence aux_fence;
     bool in_aux_command_buffer;
 
-#define MAX_FRAMEBUFFERS 256
+#define MAX_FRAMEBUFFERS 512
     VkFramebuffer framebuffers[MAX_FRAMEBUFFERS];
     int framebuffer_index;
     bool framebuffer_dirty;

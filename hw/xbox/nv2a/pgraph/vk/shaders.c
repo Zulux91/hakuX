@@ -578,6 +578,7 @@ void pgraph_vk_update_descriptor_sets(PGRAPHState *pg)
         !(*ds_index_ptr);
 
     if (need_new_descriptor_set && *ds_index_ptr >= *ds_count_ptr) {
+        OPT_STAT_INC(buf_ds_full);
         pgraph_vk_finish(pg, VK_FINISH_REASON_NEED_BUFFER_SPACE);
         pgraph_vk_flush_all_frames(pg);
         *ds_index_ptr = 0;
@@ -587,6 +588,7 @@ void pgraph_vk_update_descriptor_sets(PGRAPHState *pg)
         if (!pgraph_vk_buffer_has_space_for(
                 pg, BUFFER_UNIFORM_STAGING, ubo_buffer_total_size,
                 r->device_props.limits.minUniformBufferOffsetAlignment)) {
+            OPT_STAT_INC(buf_ubo_full);
             pgraph_vk_finish(pg, VK_FINISH_REASON_NEED_BUFFER_SPACE);
         }
 
@@ -643,6 +645,7 @@ void pgraph_vk_update_descriptor_sets(PGRAPHState *pg)
     OPT_STAT_INC(desc_rebind_full);
 
     if (*ds_index_ptr >= *ds_count_ptr) {
+        OPT_STAT_INC(buf_ds_full);
         pgraph_vk_finish(pg, VK_FINISH_REASON_NEED_BUFFER_SPACE);
         pgraph_vk_flush_all_frames(pg);
         *ds_index_ptr = 0;
