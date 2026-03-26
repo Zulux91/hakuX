@@ -188,8 +188,10 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
   private fun togglePauseMenu() {
     val overlay = pauseMenuOverlay ?: return
     if (overlay.isShowing()) {
+      nativeResumeEmulation()
       overlay.dismiss()
     } else {
+      nativePauseEmulation()
       overlay.show()
     }
   }

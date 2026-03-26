@@ -1423,15 +1423,19 @@ void xemu_android_display_loop(void)
         if (g_android_should_quit || qemu_shutdown_requested_get() != SHUTDOWN_CAUSE_NONE) {
             break;
         }
+        if (g_android_vm_pause_requested) {
+            qemu_mutex_lock_main_loop();
+            bql_lock();
+            if (runstate_is_running()) {
+                vm_stop(RUN_STATE_PAUSED);
+            }
+            g_android_vm_pause_requested = false;
+            bql_unlock();
+            qemu_mutex_unlock_main_loop();
+        }
         if (g_android_paused || sdl2_console[0].hidden) {
             qemu_mutex_lock_main_loop();
             bql_lock();
-            if (g_android_vm_pause_requested) {
-                if (runstate_is_running()) {
-                    vm_stop(RUN_STATE_PAUSED);
-                }
-                g_android_vm_pause_requested = false;
-            }
             sdl2_poll_events(&sdl2_console[0]);
             bql_unlock();
             qemu_mutex_unlock_main_loop();

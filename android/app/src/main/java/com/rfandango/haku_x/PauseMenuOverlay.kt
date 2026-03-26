@@ -36,21 +36,9 @@ class PauseMenuOverlay(context: Context) : FrameLayout(context) {
             elevation = dpToPx(8f)
         }
 
-        val titleText = TextView(context).apply {
-            text = "Emulation Menu"
-            setTextColor(Color.WHITE)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
-            typeface = Typeface.DEFAULT_BOLD
-            gravity = Gravity.CENTER
-        }
-        card.addView(titleText, LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.WRAP_CONTENT,
-            LinearLayout.LayoutParams.WRAP_CONTENT
-        ).apply { bottomMargin = dpToPx(24f).toInt() })
-
-        val exitButton = createMenuButton(context, "Exit Emulation").apply {
+        val exitButton = createMenuButton(context, "Exit").apply {
             val bg = (background as GradientDrawable)
-            bg.setColor(Color.argb(200, 180, 40, 40))
+            bg.setColor(Color.argb(230, 90, 90, 90))
             setOnClickListener { onExitEmulation?.invoke() }
         }
         card.addView(exitButton, createButtonParams())
