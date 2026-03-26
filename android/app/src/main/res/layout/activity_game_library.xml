@@ -63,15 +63,6 @@
               android:src="@android:drawable/ic_menu_preferences"
               android:tint="@color/xemu_green" />
 
-            <ImageButton
-              android:id="@+id/btn_library_about"
-              android:layout_width="40dp"
-              android:layout_height="40dp"
-              android:background="?attr/selectableItemBackgroundBorderless"
-              android:contentDescription="@string/library_about_button_desc"
-              android:padding="6dp"
-              android:src="@android:drawable/ic_dialog_info"
-              android:tint="@color/xemu_green" />
           </LinearLayout>
 
           <TextView

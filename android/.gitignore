@@ -5,6 +5,11 @@ local.properties
 *.iml
 /.idea/
 
+# Signing
+key.properties
+*.keystore
+*.jks
+
 # Android app outputs
 app/build/
 app/.cxx/

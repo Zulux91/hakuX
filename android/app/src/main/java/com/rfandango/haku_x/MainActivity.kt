@@ -17,10 +17,8 @@ import android.view.View
 import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.widget.FrameLayout
-import android.widget.Button
 import android.widget.RelativeLayout
 import android.widget.TextView
-import android.widget.Toast
 import android.view.KeyEvent
 import org.libsdl.app.SDLActivity
 
@@ -37,37 +35,14 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
   private var fpsTextView: TextView? = null
   private val fpsHandler = Handler(Looper.getMainLooper())
   private val fpsUpdateInterval = 1000L
-  private var driverInfoStr = ""
-
   private val fpsRunnable = object : Runnable {
     override fun run() {
-      val currentFps = nativeGetFps()
-      if (driverInfoStr.isEmpty() || driverInfoStr.contains("initializing")) {
-        try {
-          val info = nativeGetDriverInfo()
-          if (!info.contains("initializing")) {
-            driverInfoStr = info
-          }
-        } catch (_: Exception) {}
-      }
-      val pacing = try { nativeGetFramePacing() } catch (_: Exception) { "" }
-      val shaderStats = try { nativeGetShaderStats() } catch (_: Exception) { "" }
-      val sb = StringBuilder("FPS: $currentFps")
-      if (driverInfoStr.isNotEmpty()) sb.append(" | $driverInfoStr")
-      if (pacing.isNotEmpty()) sb.append("\n$pacing")
-      if (shaderStats.isNotEmpty()) sb.append("\n$shaderStats")
-      fpsTextView?.text = sb.toString()
+      fpsTextView?.text = "FPS: ${nativeGetFps()}"
       fpsHandler.postDelayed(this, fpsUpdateInterval)
     }
   }
 
   private external fun nativeGetFps(): Int
-  private external fun nativeGetDriverInfo(): String
-  private external fun nativeGetFramePacing(): String
-  private external fun nativeGetShaderStats(): String
-  private external fun nativeCaptureFrame(): Boolean
-  private external fun nativeDumpRenderTarget(): Unit
-  private external fun nativeDumpDiagFrame(): Unit
   private external fun nativePauseEmulation(): Unit
   private external fun nativeResumeEmulation(): Unit
   private external fun nativeExitEmulation(): Unit
@@ -141,7 +116,6 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
       setShadowLayer(2f, 1f, 1f, Color.BLACK)
       setPadding(16, 8, 16, 8)
       setBackgroundColor(Color.argb(100, 0, 0, 0))
-      maxLines = 4
     }
     val params = RelativeLayout.LayoutParams(
       RelativeLayout.LayoutParams.WRAP_CONTENT,
@@ -151,36 +125,6 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
       addRule(RelativeLayout.ALIGN_PARENT_START)
     }
     mLayout?.addView(fpsTextView, params)
-
-    val captureBtn = Button(this).apply {
-      text = "RDoc"
-      setTextColor(Color.WHITE)
-      setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
-      setBackgroundColor(Color.argb(160, 180, 0, 0))
-      setPadding(16, 4, 16, 4)
-      minHeight = 0
-      minimumHeight = 0
-      setOnClickListener {
-        val ok = try { nativeCaptureFrame() } catch (_: Exception) { false }
-        val msg = if (ok) "RenderDoc: capturing next frame" else "RenderDoc not connected"
-        Toast.makeText(this@MainActivity, msg, Toast.LENGTH_SHORT).show()
-      }
-      setOnLongClickListener {
-        try { nativeDumpDiagFrame() } catch (_: Exception) {}
-        Toast.makeText(this@MainActivity, "Diag capture: next frame", Toast.LENGTH_SHORT).show()
-        true
-      }
-    }
-    val captureParams = RelativeLayout.LayoutParams(
-      RelativeLayout.LayoutParams.WRAP_CONTENT,
-      RelativeLayout.LayoutParams.WRAP_CONTENT
-    ).apply {
-      addRule(RelativeLayout.ALIGN_PARENT_TOP)
-      addRule(RelativeLayout.ALIGN_PARENT_END)
-      topMargin = 8
-      marginEnd = 8
-    }
-    mLayout?.addView(captureBtn, captureParams)
   }
 
   private fun setupPauseMenu() {
