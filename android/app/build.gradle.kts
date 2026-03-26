@@ -117,6 +117,7 @@ dependencies {
   implementation("androidx.documentfile:documentfile:1.0.1")
   implementation("io.coil-kt:coil:2.7.0")
   implementation("com.google.android.material:material:1.14.0-alpha07")
+  implementation("androidx.swiperefreshlayout:swiperefreshlayout:1.1.0")
 }
 
 kotlin {

@@ -32,6 +32,7 @@
   <string name="library_convert_iso">Convert ISO to XISO</string>
   <string name="library_view_list">List</string>
   <string name="library_view_cover_grid">Cover Grid</string>
+  <string name="library_search_hint">Search games</string>
   <string name="library_box_art_lookup">Look up box art online</string>
   <string name="library_folder_value">Folder: %1$s</string>
   <string name="library_no_folder">No folder selected</string>

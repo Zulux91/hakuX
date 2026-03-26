@@ -2,6 +2,8 @@ package com.rfandango.haku_x
 
 import android.content.Intent
 import android.content.res.Configuration
+import android.text.Editable
+import android.text.TextWatcher
 import android.net.Uri
 import android.os.Bundle
 import android.view.LayoutInflater
@@ -68,6 +70,7 @@ class GameLibraryActivity : AppCompatActivity() {
   private var gamesFolderUri: Uri? = null
   private var scanGeneration = 0
   private var currentGames: List<GameEntry> = emptyList()
+  private var searchFilter = ""
   private var useCoverGrid = false
   private var boxArtLookupEnabled = true
   @Volatile private var isConvertingIso = false
@@ -96,6 +99,12 @@ class GameLibraryActivity : AppCompatActivity() {
     btnSettings.setOnClickListener {
       startActivity(Intent(this, SettingsActivity::class.java))
     }
+    findViewById<androidx.swiperefreshlayout.widget.SwipeRefreshLayout>(R.id.library_swipe_refresh).apply {
+      setOnRefreshListener {
+        loadGames()
+        isRefreshing = false
+      }
+    }
     viewModeToggle.addOnButtonCheckedListener { _, checkedId, isChecked ->
       if (!isChecked) {
         return@addOnButtonCheckedListener
@@ -116,6 +125,15 @@ class GameLibraryActivity : AppCompatActivity() {
         renderGames()
       }
     }
+    findViewById<com.google.android.material.textfield.TextInputEditText>(R.id.library_search)
+      .addTextChangedListener(object : TextWatcher {
+        override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+        override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+        override fun afterTextChanged(s: Editable?) {
+          searchFilter = s?.toString()?.trim() ?: ""
+          renderGames()
+        }
+      })
     if (!isFolderReady(gamesFolderUri)) {
       Toast.makeText(this, getString(R.string.library_no_folder), Toast.LENGTH_SHORT).show()
       return
@@ -163,7 +181,8 @@ class GameLibraryActivity : AppCompatActivity() {
   }
 
   private fun renderGames() {
-    val games = currentGames
+    val games = if (searchFilter.isEmpty()) currentGames
+      else currentGames.filter { it.title.contains(searchFilter, ignoreCase = true) }
     syncDisplayModeUi()
     gamesListContainer.removeAllViews()
     gamesGridContainer.removeAllViews()
