@@ -12,6 +12,9 @@ import com.google.android.material.button.MaterialButton
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.materialswitch.MaterialSwitch
 import android.util.Log
+import android.widget.ArrayAdapter
+import android.widget.AutoCompleteTextView
+import com.google.android.material.textfield.TextInputLayout
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
@@ -21,6 +24,60 @@ import java.nio.ByteOrder
 
 class SettingsActivity : AppCompatActivity() {
   private val prefs by lazy { getSharedPreferences("x1box_prefs", MODE_PRIVATE) }
+
+  private data class EepromLanguageOption(val value: XboxEepromEditor.Language, val labelRes: Int)
+  private data class EepromVideoOption(val value: XboxEepromEditor.VideoStandard, val labelRes: Int)
+  private data class EepromAspectRatioOption(val value: XboxEepromEditor.AspectRatio, val labelRes: Int)
+  private data class EepromRefreshRateOption(val value: XboxEepromEditor.RefreshRate, val labelRes: Int)
+
+  private val eepromLanguageOptions = listOf(
+    EepromLanguageOption(XboxEepromEditor.Language.ENGLISH, R.string.settings_eeprom_language_english),
+    EepromLanguageOption(XboxEepromEditor.Language.JAPANESE, R.string.settings_eeprom_language_japanese),
+    EepromLanguageOption(XboxEepromEditor.Language.GERMAN, R.string.settings_eeprom_language_german),
+    EepromLanguageOption(XboxEepromEditor.Language.FRENCH, R.string.settings_eeprom_language_french),
+    EepromLanguageOption(XboxEepromEditor.Language.SPANISH, R.string.settings_eeprom_language_spanish),
+    EepromLanguageOption(XboxEepromEditor.Language.ITALIAN, R.string.settings_eeprom_language_italian),
+    EepromLanguageOption(XboxEepromEditor.Language.KOREAN, R.string.settings_eeprom_language_korean),
+    EepromLanguageOption(XboxEepromEditor.Language.CHINESE, R.string.settings_eeprom_language_chinese),
+    EepromLanguageOption(XboxEepromEditor.Language.PORTUGUESE, R.string.settings_eeprom_language_portuguese),
+  )
+  private val eepromVideoOptions = listOf(
+    EepromVideoOption(XboxEepromEditor.VideoStandard.NTSC_M, R.string.settings_eeprom_video_standard_ntsc_m),
+    EepromVideoOption(XboxEepromEditor.VideoStandard.NTSC_J, R.string.settings_eeprom_video_standard_ntsc_j),
+    EepromVideoOption(XboxEepromEditor.VideoStandard.PAL_I, R.string.settings_eeprom_video_standard_pal_i),
+    EepromVideoOption(XboxEepromEditor.VideoStandard.PAL_M, R.string.settings_eeprom_video_standard_pal_m),
+  )
+  private val eepromAspectRatioOptions = listOf(
+    EepromAspectRatioOption(XboxEepromEditor.AspectRatio.NORMAL, R.string.settings_eeprom_aspect_ratio_normal),
+    EepromAspectRatioOption(XboxEepromEditor.AspectRatio.WIDESCREEN, R.string.settings_eeprom_aspect_ratio_widescreen),
+    EepromAspectRatioOption(XboxEepromEditor.AspectRatio.LETTERBOX, R.string.settings_eeprom_aspect_ratio_letterbox),
+  )
+  private val eepromRefreshRateOptions = listOf(
+    EepromRefreshRateOption(XboxEepromEditor.RefreshRate.DEFAULT, R.string.settings_eeprom_refresh_rate_default),
+    EepromRefreshRateOption(XboxEepromEditor.RefreshRate.HZ_60, R.string.settings_eeprom_refresh_rate_60),
+    EepromRefreshRateOption(XboxEepromEditor.RefreshRate.HZ_50, R.string.settings_eeprom_refresh_rate_50),
+  )
+
+  private lateinit var tvEepromStatus: TextView
+  private lateinit var inputEepromLanguage: TextInputLayout
+  private lateinit var inputEepromVideoStandard: TextInputLayout
+  private lateinit var inputEepromAspectRatio: TextInputLayout
+  private lateinit var inputEepromRefreshRate: TextInputLayout
+  private lateinit var dropdownEepromLanguage: AutoCompleteTextView
+  private lateinit var dropdownEepromVideoStandard: AutoCompleteTextView
+  private lateinit var dropdownEepromAspectRatio: AutoCompleteTextView
+  private lateinit var dropdownEepromRefreshRate: AutoCompleteTextView
+  private lateinit var switchEeprom480p: MaterialSwitch
+  private lateinit var switchEeprom720p: MaterialSwitch
+  private lateinit var switchEeprom1080i: MaterialSwitch
+
+  private var selectedEepromLanguage = XboxEepromEditor.Language.ENGLISH
+  private var selectedEepromVideoStandard = XboxEepromEditor.VideoStandard.NTSC_M
+  private var selectedEepromAspectRatio = XboxEepromEditor.AspectRatio.NORMAL
+  private var selectedEepromRefreshRate = XboxEepromEditor.RefreshRate.DEFAULT
+  private var eepromEditable = false
+  private var eepromMissing = false
+  private var eepromError = false
 
   private lateinit var driverStatusText: TextView
   private lateinit var gpuNotSupportedText: TextView
@@ -46,6 +103,19 @@ class SettingsActivity : AppCompatActivity() {
     btnSelectDriver = findViewById(R.id.btn_select_driver)
     btnResetDriver = findViewById(R.id.btn_reset_driver)
     switchShowFps = findViewById(R.id.switch_show_fps)
+
+    tvEepromStatus = findViewById(R.id.tv_eeprom_status)
+    inputEepromLanguage = findViewById(R.id.input_eeprom_language)
+    inputEepromVideoStandard = findViewById(R.id.input_eeprom_video_standard)
+    inputEepromAspectRatio = findViewById(R.id.input_eeprom_aspect_ratio)
+    inputEepromRefreshRate = findViewById(R.id.input_eeprom_refresh_rate)
+    dropdownEepromLanguage = findViewById(R.id.dropdown_eeprom_language)
+    dropdownEepromVideoStandard = findViewById(R.id.dropdown_eeprom_video_standard)
+    dropdownEepromAspectRatio = findViewById(R.id.dropdown_eeprom_aspect_ratio)
+    dropdownEepromRefreshRate = findViewById(R.id.dropdown_eeprom_refresh_rate)
+    switchEeprom480p = findViewById(R.id.switch_eeprom_480p)
+    switchEeprom720p = findViewById(R.id.switch_eeprom_720p)
+    switchEeprom1080i = findViewById(R.id.switch_eeprom_1080i)
 
     findViewById<View>(R.id.btn_settings_back).setOnClickListener { finish() }
 
@@ -196,6 +266,11 @@ class SettingsActivity : AppCompatActivity() {
     setupFilteringPicker()
     setupAspectRatioPicker()
     setupEnvVars()
+    setupEepromEditor()
+
+    findViewById<MaterialButton>(R.id.btn_save_eeprom).setOnClickListener {
+      applyEepromEdits()
+    }
 
     refreshDriverStatus()
   }
@@ -541,6 +616,158 @@ class SettingsActivity : AppCompatActivity() {
         }
       }
     }.start()
+  }
+
+  private fun resolveEepromFile(): File {
+    val base = getExternalFilesDir(null) ?: filesDir
+    return File(File(base, "x1box"), "eeprom.bin")
+  }
+
+  private fun setupEepromEditor() {
+    val languageLabels = eepromLanguageOptions.map { getString(it.labelRes) }
+    val videoLabels = eepromVideoOptions.map { getString(it.labelRes) }
+    val aspectRatioLabels = eepromAspectRatioOptions.map { getString(it.labelRes) }
+    val refreshRateLabels = eepromRefreshRateOptions.map { getString(it.labelRes) }
+
+    dropdownEepromLanguage.setAdapter(ArrayAdapter(this, android.R.layout.simple_list_item_1, languageLabels))
+    dropdownEepromVideoStandard.setAdapter(ArrayAdapter(this, android.R.layout.simple_list_item_1, videoLabels))
+    dropdownEepromAspectRatio.setAdapter(ArrayAdapter(this, android.R.layout.simple_list_item_1, aspectRatioLabels))
+    dropdownEepromRefreshRate.setAdapter(ArrayAdapter(this, android.R.layout.simple_list_item_1, refreshRateLabels))
+
+    dropdownEepromLanguage.setOnItemClickListener { _, _, position, _ ->
+      selectedEepromLanguage = eepromLanguageOptions[position].value
+    }
+    dropdownEepromVideoStandard.setOnItemClickListener { _, _, position, _ ->
+      selectedEepromVideoStandard = eepromVideoOptions[position].value
+    }
+    dropdownEepromAspectRatio.setOnItemClickListener { _, _, position, _ ->
+      selectedEepromAspectRatio = eepromAspectRatioOptions[position].value
+    }
+    dropdownEepromRefreshRate.setOnItemClickListener { _, _, position, _ ->
+      selectedEepromRefreshRate = eepromRefreshRateOptions[position].value
+    }
+
+    val eepromFile = resolveEepromFile()
+    if (!eepromFile.isFile) {
+      eepromEditable = false
+      eepromMissing = true
+      setEepromEditorEnabled(false)
+      setEepromDefaults()
+      tvEepromStatus.text = getString(R.string.settings_eeprom_status_missing, eepromFile.absolutePath)
+      return
+    }
+
+    try {
+      val snapshot = XboxEepromEditor.load(eepromFile)
+      eepromEditable = true
+      eepromMissing = false
+      eepromError = false
+      setEepromEditorEnabled(true)
+      setEepromLanguageSelection(snapshot.language)
+      setEepromVideoSelection(snapshot.videoStandard)
+      setEepromVideoSettingsSelection(snapshot.videoSettings)
+
+      val hasUnknownValues =
+        snapshot.rawLanguage != snapshot.language.id ||
+        snapshot.rawVideoStandard != snapshot.videoStandard.id ||
+        snapshot.hasManagedVideoSettingsMismatch
+      tvEepromStatus.text = if (hasUnknownValues) {
+        getString(R.string.settings_eeprom_status_unknown, eepromFile.absolutePath)
+      } else {
+        getString(R.string.settings_eeprom_status_ready, eepromFile.absolutePath)
+      }
+    } catch (_: IllegalArgumentException) {
+      eepromEditable = false
+      eepromError = true
+      setEepromEditorEnabled(false)
+      setEepromDefaults()
+      tvEepromStatus.text = getString(R.string.settings_eeprom_status_invalid, eepromFile.absolutePath)
+    } catch (_: Exception) {
+      eepromEditable = false
+      eepromError = true
+      setEepromEditorEnabled(false)
+      setEepromDefaults()
+      tvEepromStatus.text = getString(R.string.settings_eeprom_status_error, eepromFile.absolutePath)
+    }
+  }
+
+  private fun applyEepromEdits() {
+    if (eepromMissing) {
+      Toast.makeText(this, getString(R.string.settings_eeprom_status_missing, resolveEepromFile().absolutePath), Toast.LENGTH_LONG).show()
+      return
+    }
+    if (eepromError || !eepromEditable) {
+      Toast.makeText(this, getString(R.string.settings_eeprom_save_failed), Toast.LENGTH_LONG).show()
+      return
+    }
+    try {
+      val changed = XboxEepromEditor.apply(
+        resolveEepromFile(),
+        selectedEepromLanguage,
+        selectedEepromVideoStandard,
+        XboxEepromEditor.VideoSettings(
+          allow480p = switchEeprom480p.isChecked,
+          allow720p = switchEeprom720p.isChecked,
+          allow1080i = switchEeprom1080i.isChecked,
+          aspectRatio = selectedEepromAspectRatio,
+          refreshRate = selectedEepromRefreshRate,
+        ),
+      )
+      Toast.makeText(this,
+        if (changed) getString(R.string.settings_eeprom_saved)
+        else getString(R.string.settings_eeprom_no_changes),
+        Toast.LENGTH_SHORT).show()
+    } catch (e: Exception) {
+      Log.e("SettingsActivity", "EEPROM save failed", e)
+      Toast.makeText(this, getString(R.string.settings_eeprom_save_failed), Toast.LENGTH_LONG).show()
+    }
+  }
+
+  private fun setEepromEditorEnabled(enabled: Boolean) {
+    inputEepromLanguage.isEnabled = enabled
+    inputEepromVideoStandard.isEnabled = enabled
+    inputEepromAspectRatio.isEnabled = enabled
+    inputEepromRefreshRate.isEnabled = enabled
+    dropdownEepromLanguage.isEnabled = enabled
+    dropdownEepromVideoStandard.isEnabled = enabled
+    dropdownEepromAspectRatio.isEnabled = enabled
+    dropdownEepromRefreshRate.isEnabled = enabled
+    switchEeprom480p.isEnabled = enabled
+    switchEeprom720p.isEnabled = enabled
+    switchEeprom1080i.isEnabled = enabled
+  }
+
+  private fun setEepromDefaults() {
+    setEepromLanguageSelection(selectedEepromLanguage)
+    setEepromVideoSelection(selectedEepromVideoStandard)
+    setEepromVideoSettingsSelection(XboxEepromEditor.VideoSettings(
+      allow480p = false, allow720p = false, allow1080i = false,
+      aspectRatio = selectedEepromAspectRatio, refreshRate = selectedEepromRefreshRate,
+    ))
+  }
+
+  private fun setEepromLanguageSelection(language: XboxEepromEditor.Language) {
+    selectedEepromLanguage = language
+    val option = eepromLanguageOptions.firstOrNull { it.value == language } ?: eepromLanguageOptions.first()
+    dropdownEepromLanguage.setText(getString(option.labelRes), false)
+  }
+
+  private fun setEepromVideoSelection(video: XboxEepromEditor.VideoStandard) {
+    selectedEepromVideoStandard = video
+    val option = eepromVideoOptions.firstOrNull { it.value == video } ?: eepromVideoOptions.first()
+    dropdownEepromVideoStandard.setText(getString(option.labelRes), false)
+  }
+
+  private fun setEepromVideoSettingsSelection(videoSettings: XboxEepromEditor.VideoSettings) {
+    switchEeprom480p.isChecked = videoSettings.allow480p
+    switchEeprom720p.isChecked = videoSettings.allow720p
+    switchEeprom1080i.isChecked = videoSettings.allow1080i
+    selectedEepromAspectRatio = videoSettings.aspectRatio
+    val arOption = eepromAspectRatioOptions.firstOrNull { it.value == videoSettings.aspectRatio } ?: eepromAspectRatioOptions.first()
+    dropdownEepromAspectRatio.setText(getString(arOption.labelRes), false)
+    selectedEepromRefreshRate = videoSettings.refreshRate
+    val rrOption = eepromRefreshRateOptions.firstOrNull { it.value == videoSettings.refreshRate } ?: eepromRefreshRateOptions.first()
+    dropdownEepromRefreshRate.setText(getString(rrOption.labelRes), false)
   }
 
   private external fun nativeGetFpSafe(): Boolean

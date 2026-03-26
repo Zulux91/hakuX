@@ -175,4 +175,45 @@
   <string name="settings_env_vars_desc">Set custom environment variables applied at startup. One per line: KEY=VALUE. Requires app restart.</string>
   <string name="settings_env_vars_hint">e.g. MESA_VK_WSI_DEBUG=sw</string>
   <string name="settings_env_vars_save">Save</string>
+
+  <!-- EEPROM Settings -->
+  <string name="settings_section_eeprom">EEPROM Settings</string>
+  <string name="settings_eeprom_desc">Edit Xbox system language and video settings stored in eeprom.bin.</string>
+  <string name="settings_eeprom_language">Language</string>
+  <string name="settings_eeprom_language_english">English</string>
+  <string name="settings_eeprom_language_japanese">Japanese</string>
+  <string name="settings_eeprom_language_german">German</string>
+  <string name="settings_eeprom_language_french">French</string>
+  <string name="settings_eeprom_language_spanish">Spanish</string>
+  <string name="settings_eeprom_language_italian">Italian</string>
+  <string name="settings_eeprom_language_korean">Korean</string>
+  <string name="settings_eeprom_language_chinese">Chinese</string>
+  <string name="settings_eeprom_language_portuguese">Portuguese</string>
+  <string name="settings_eeprom_video_standard">Video Standard</string>
+  <string name="settings_eeprom_video_standard_ntsc_m">NTSC-M</string>
+  <string name="settings_eeprom_video_standard_ntsc_j">NTSC-J</string>
+  <string name="settings_eeprom_video_standard_pal_i">PAL-I</string>
+  <string name="settings_eeprom_video_standard_pal_m">PAL-M</string>
+  <string name="settings_eeprom_resolution_modes">Resolution Modes</string>
+  <string name="settings_eeprom_resolution_480p">Enable 480p</string>
+  <string name="settings_eeprom_resolution_720p">Enable 720p</string>
+  <string name="settings_eeprom_resolution_1080i">Enable 1080i</string>
+  <string name="settings_eeprom_aspect_ratio">Aspect Ratio</string>
+  <string name="settings_eeprom_aspect_ratio_normal">Normal (4:3)</string>
+  <string name="settings_eeprom_aspect_ratio_widescreen">Widescreen (16:9)</string>
+  <string name="settings_eeprom_aspect_ratio_letterbox">Letterbox</string>
+  <string name="settings_eeprom_refresh_rate">Refresh Rate</string>
+  <string name="settings_eeprom_refresh_rate_default">Default / Unset</string>
+  <string name="settings_eeprom_refresh_rate_60">60 Hz</string>
+  <string name="settings_eeprom_refresh_rate_50">50 Hz</string>
+  <string name="settings_eeprom_status_ready">EEPROM: %1$s</string>
+  <string name="settings_eeprom_status_missing">EEPROM not found at %1$s. Launch a game once to create it.</string>
+  <string name="settings_eeprom_status_invalid">EEPROM is invalid at %1$s.</string>
+  <string name="settings_eeprom_status_error">Failed to read EEPROM at %1$s.</string>
+  <string name="settings_eeprom_status_unknown">EEPROM: %1$s (contains unknown values; saving will normalize them)</string>
+  <string name="settings_eeprom_hint">Updates language and video settings in eeprom.bin. HD modes depend on the game, cable, and video standard. Restart emulation after saving.</string>
+  <string name="settings_eeprom_save">Save EEPROM</string>
+  <string name="settings_eeprom_saved">EEPROM saved</string>
+  <string name="settings_eeprom_save_failed">EEPROM save failed</string>
+  <string name="settings_eeprom_no_changes">No EEPROM changes to save</string>
 </resources>
