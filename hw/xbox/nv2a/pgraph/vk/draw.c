@@ -137,7 +137,7 @@ static void opt_stats_log_and_reset(void)
                 g_opt_stats.draws_skipped_pending,
                 g_opt_stats.draws_skipped_frameskip);
         __android_log_print(ANDROID_LOG_INFO, "xemu-stall",
-                "RPBreaks:%d Finish:%d(vtx%d sc%d sd%d buf%d fb%d pres%d flip%d flu%d stl%d stlDef%d stlBat%d) InlClr:%d/%d PreDL:%d",
+                "RPBreaks:%d Finish:%d(vtx%d sc%d sd%d buf%d fb%d pres%d flip%d flu%d stl%d stlDef%d stlBat%d) InlClr:%d/%d PreDL:%d sd[ev%d noCb%d dl%d cDef%d pDl%d dDl%d] dlSrc[defFb%d ppdFb%d dirtyIf%d] dif[ovl%d ovlSh%d exp%d expSh%d blt%d flu%d dds%d oth%d]",
                 g_opt_stats.render_pass_breaks,
                 g_opt_stats.finish_calls,
                 g_opt_stats.finish_vtx_dirty,
@@ -153,7 +153,24 @@ static void opt_stats_log_and_reset(void)
                 g_opt_stats.stall_batched,
                 g_opt_stats.inline_clear_hits,
                 g_opt_stats.inline_clear_misses,
-                g_opt_stats.predownload_hits);
+                g_opt_stats.predownload_hits,
+                g_opt_stats.sd_eviction,
+                g_opt_stats.sd_eviction_nocb,
+                g_opt_stats.sd_dl_to_buf,
+                g_opt_stats.sd_complete_def,
+                g_opt_stats.sd_pending_dl,
+                g_opt_stats.sd_dirty_dl,
+                g_opt_stats.dl_from_def_fb,
+                g_opt_stats.dl_from_ppd_fb,
+                g_opt_stats.dl_from_dirty_if,
+                g_opt_stats.dif_overlap,
+                g_opt_stats.dif_overlap_sh,
+                g_opt_stats.dif_expire,
+                g_opt_stats.dif_expire_sh,
+                g_opt_stats.dif_blit,
+                g_opt_stats.dif_flush,
+                g_opt_stats.dif_dds_fb,
+                g_opt_stats.dif_other);
         {
             extern struct FPUProfileCounters {
                 int x87_arith, x87_load_store, x87_transcendental, x87_stack;
@@ -514,8 +531,6 @@ void pgraph_vk_init_pipelines(PGRAPHState *pg)
     };
 
     for (int i = 0; i < NUM_SUBMIT_FRAMES; i++) {
-        VK_CHECK(vkCreateSemaphore(r->device, &semaphore_info, NULL,
-                                   &r->frame_semaphores[i]));
         VK_CHECK(vkCreateFence(r->device, &fence_info, NULL,
                                &r->frame_fences[i]));
     }
@@ -528,7 +543,6 @@ void pgraph_vk_init_pipelines(PGRAPHState *pg)
     r->stall_chain_pending = false;
 
     r->current_frame = 0;
-    r->command_buffer_semaphore = r->frame_semaphores[0];
     r->command_buffer_fence = r->frame_fences[0];
 }
 
@@ -553,7 +567,6 @@ void pgraph_vk_finalize_pipelines(PGRAPHState *pg)
         }
         r->deferred_framebuffer_count[i] = 0;
         vkDestroyFence(r->device, r->frame_fences[i], NULL);
-        vkDestroySemaphore(r->device, r->frame_semaphores[i], NULL);
     }
     vkDestroyFence(r->device, r->aux_fence, NULL);
     vkDestroySemaphore(r->device, r->stall_chain_semaphore, NULL);
@@ -2142,7 +2155,6 @@ void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
         r->current_frame = 0;
         r->command_buffer = r->command_buffers[0];
         r->aux_command_buffer = r->command_buffers[1];
-        r->command_buffer_semaphore = r->frame_semaphores[0];
         r->command_buffer_fence = r->frame_fences[0];
     }
 
@@ -2198,12 +2210,28 @@ void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
         r->sync_range_max = 0;
 #endif
         flush_memory_buffer(pg, cmd);
-        VK_CHECK(vkEndCommandBuffer(r->aux_command_buffer));
-        r->in_aux_command_buffer = false;
 
+        /* Execution barrier between aux CB (staging copies) and main CB
+         * (draws).  Both CBs are submitted in a single VkSubmitInfo, so
+         * this barrier's second synchronization scope covers the main CB's
+         * commands (they are later in submission order). */
         VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_TRANSFER_BIT |
                                          VK_PIPELINE_STAGE_VERTEX_INPUT_BIT |
                                          VK_PIPELINE_STAGE_VERTEX_SHADER_BIT;
+        VkMemoryBarrier aux_main_barrier = {
+            .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+            .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+            .dstAccessMask = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT |
+                             VK_ACCESS_UNIFORM_READ_BIT |
+                             VK_ACCESS_INDEX_READ_BIT |
+                             VK_ACCESS_TRANSFER_READ_BIT,
+        };
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_TRANSFER_BIT, wait_stage,
+            0, 1, &aux_main_barrier, 0, NULL, 0, NULL);
+
+        VK_CHECK(vkEndCommandBuffer(r->aux_command_buffer));
+        r->in_aux_command_buffer = false;
         if (r->gpu_ts_supported) {
             r->gpu_ts_rp_counts[r->current_frame] = r->gpu_ts_rp_index;
         }
@@ -2223,40 +2251,31 @@ void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
         if (r->is_render_thread_context) {
             /* Render thread path: always synchronous, consume chain if
              * pending but never signal it. */
-            VkSemaphore aux_wait_sems[1];
-            VkPipelineStageFlags aux_wait_stages[1];
-            uint32_t aux_wait_count = 0;
+            VkSemaphore wait_sems[1];
+            VkPipelineStageFlags wait_stages[1];
+            uint32_t wait_count = 0;
             if (r->stall_chain_pending) {
-                aux_wait_sems[0] = r->stall_chain_semaphore;
-                aux_wait_stages[0] = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
-                aux_wait_count = 1;
+                wait_sems[0] = r->stall_chain_semaphore;
+                wait_stages[0] = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+                wait_count = 1;
                 r->stall_chain_pending = false;
             }
 
-            VkSubmitInfo submit_infos[] = {
-                {
-                    .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-                    .commandBufferCount = 1,
-                    .pCommandBuffers = &r->aux_command_buffer,
-                    .waitSemaphoreCount = aux_wait_count,
-                    .pWaitSemaphores = aux_wait_sems,
-                    .pWaitDstStageMask = aux_wait_stages,
-                    .signalSemaphoreCount = 1,
-                    .pSignalSemaphores = &r->command_buffer_semaphore,
-                },
-                {
-                    .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-                    .commandBufferCount = 1,
-                    .pCommandBuffers = &r->command_buffer,
-                    .waitSemaphoreCount = 1,
-                    .pWaitSemaphores = &r->command_buffer_semaphore,
-                    .pWaitDstStageMask = &wait_stage,
-                }
+            VkCommandBuffer cbs[] = {
+                r->aux_command_buffer, r->command_buffer
+            };
+            VkSubmitInfo submit_info = {
+                .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+                .commandBufferCount = ARRAY_SIZE(cbs),
+                .pCommandBuffers = cbs,
+                .waitSemaphoreCount = wait_count,
+                .pWaitSemaphores = wait_sems,
+                .pWaitDstStageMask = wait_stages,
             };
 
             vkResetFences(r->device, 1, &r->command_buffer_fence);
-            VK_CHECK(vkQueueSubmit(r->queue, ARRAY_SIZE(submit_infos),
-                                   submit_infos, r->command_buffer_fence));
+            VK_CHECK(vkQueueSubmit(r->queue, 1, &submit_info,
+                                   r->command_buffer_fence));
             qatomic_inc(&r->submit_count);
 
             VK_CHECK(vkWaitForFences(r->device, 1, &r->command_buffer_fence,
@@ -2279,8 +2298,6 @@ void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
             cmd->finish.reason = finish_reason;
             cmd->finish.aux_command_buffer = r->aux_command_buffer;
             cmd->finish.command_buffer = r->command_buffer;
-            cmd->finish.semaphore = r->command_buffer_semaphore;
-            cmd->finish.wait_stage = wait_stage;
             cmd->finish.fence = r->command_buffer_fence;
             cmd->finish.frame_index = r->current_frame;
 
@@ -2431,7 +2448,6 @@ void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
             r->current_frame = next_frame;
             r->command_buffer = r->command_buffers[next_frame * 2];
             r->aux_command_buffer = r->command_buffers[next_frame * 2 + 1];
-            r->command_buffer_semaphore = r->frame_semaphores[next_frame];
             r->command_buffer_fence = r->frame_fences[next_frame];
         } /* !is_render_thread_context */
 

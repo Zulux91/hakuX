@@ -47,27 +47,17 @@ static void *submit_worker_func(void *opaque)
 
         qemu_mutex_unlock(&r->submit_worker.lock);
 
-        VkSubmitInfo submit_infos[] = {
-            {
-                .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-                .commandBufferCount = 1,
-                .pCommandBuffers = &job->aux_command_buffer,
-                .signalSemaphoreCount = 1,
-                .pSignalSemaphores = &job->semaphore,
-            },
-            {
-                .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-                .commandBufferCount = 1,
-                .pCommandBuffers = &job->command_buffer,
-                .waitSemaphoreCount = 1,
-                .pWaitSemaphores = &job->semaphore,
-                .pWaitDstStageMask = &job->wait_stage,
-            }
+        VkCommandBuffer cbs[] = {
+            job->aux_command_buffer, job->command_buffer
+        };
+        VkSubmitInfo submit_info = {
+            .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            .commandBufferCount = ARRAY_SIZE(cbs),
+            .pCommandBuffers = cbs,
         };
 
         vkResetFences(r->device, 1, &job->fence);
-        VK_CHECK(vkQueueSubmit(r->queue, ARRAY_SIZE(submit_infos),
-                               submit_infos, job->fence));
+        VK_CHECK(vkQueueSubmit(r->queue, 1, &submit_info, job->fence));
         qatomic_set(&r->frame_submitted[job->frame_index], true);
         qatomic_inc(&r->submit_count);
 

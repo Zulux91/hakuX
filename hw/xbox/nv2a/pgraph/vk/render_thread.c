@@ -112,52 +112,41 @@ void pgraph_vk_snapshot_state(PGRAPHState *pg, RenderCommandSnapshot *snap)
 
 static void process_finish(PGRAPHVkState *r, RenderCommand *cmd)
 {
-    /* Build aux CB submit info, optionally waiting on chain semaphore */
-    VkSemaphore aux_wait_sems[1];
-    VkPipelineStageFlags aux_wait_stages[1];
-    uint32_t aux_wait_count = 0;
+    VkSemaphore wait_sems[1];
+    VkPipelineStageFlags wait_stages[1];
+    uint32_t wait_count = 0;
 
     if (cmd->finish.chain_wait) {
-        aux_wait_sems[0] = cmd->finish.chain_semaphore;
-        aux_wait_stages[0] = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
-        aux_wait_count = 1;
+        wait_sems[0] = cmd->finish.chain_semaphore;
+        wait_stages[0] = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+        wait_count = 1;
     }
 
-    /* Build main CB submit info, optionally signaling chain semaphore */
-    VkSemaphore main_signal_sems[1];
-    uint32_t main_signal_count = 0;
+    VkSemaphore signal_sems[1];
+    uint32_t signal_count = 0;
 
     if (cmd->finish.chain_signal) {
-        main_signal_sems[0] = cmd->finish.chain_semaphore;
-        main_signal_count = 1;
+        signal_sems[0] = cmd->finish.chain_semaphore;
+        signal_count = 1;
     }
 
-    VkSubmitInfo submit_infos[] = {
-        {
-            .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-            .commandBufferCount = 1,
-            .pCommandBuffers = &cmd->finish.aux_command_buffer,
-            .waitSemaphoreCount = aux_wait_count,
-            .pWaitSemaphores = aux_wait_sems,
-            .pWaitDstStageMask = aux_wait_stages,
-            .signalSemaphoreCount = 1,
-            .pSignalSemaphores = &cmd->finish.semaphore,
-        },
-        {
-            .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-            .commandBufferCount = 1,
-            .pCommandBuffers = &cmd->finish.command_buffer,
-            .waitSemaphoreCount = 1,
-            .pWaitSemaphores = &cmd->finish.semaphore,
-            .pWaitDstStageMask = &cmd->finish.wait_stage,
-            .signalSemaphoreCount = main_signal_count,
-            .pSignalSemaphores = main_signal_sems,
-        }
+    VkCommandBuffer cbs[] = {
+        cmd->finish.aux_command_buffer, cmd->finish.command_buffer
+    };
+    VkSubmitInfo submit_info = {
+        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+        .commandBufferCount = ARRAY_SIZE(cbs),
+        .pCommandBuffers = cbs,
+        .waitSemaphoreCount = wait_count,
+        .pWaitSemaphores = wait_sems,
+        .pWaitDstStageMask = wait_stages,
+        .signalSemaphoreCount = signal_count,
+        .pSignalSemaphores = signal_sems,
     };
 
     vkResetFences(r->device, 1, &cmd->finish.fence);
-    VK_CHECK(vkQueueSubmit(r->queue, ARRAY_SIZE(submit_infos),
-                           submit_infos, cmd->finish.fence));
+    VK_CHECK(vkQueueSubmit(r->queue, 1, &submit_info,
+                           cmd->finish.fence));
     qatomic_set(&r->frame_submitted[cmd->finish.frame_index], true);
     qatomic_inc(&r->submit_count);
 

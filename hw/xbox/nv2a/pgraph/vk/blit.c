@@ -129,6 +129,7 @@ void pgraph_vk_image_blit(NV2AState *d)
 
     SurfaceBinding *surf_src = pgraph_vk_surface_get(d, source_addr);
     if (surf_src) {
+        OPT_STAT_INC(dif_blit);
         pgraph_vk_surface_download_if_dirty(d, surf_src);
     }
 
@@ -166,6 +167,7 @@ void pgraph_vk_image_blit(NV2AState *d)
     if (surf_dest) {
         if (adjusted_height < surf_dest->height ||
             row_pixels < surf_dest->width) {
+            OPT_STAT_INC(dif_blit);
             pgraph_vk_surface_download_if_dirty(d, surf_dest);
         } else {
             // The blit will completely replace the surface so any pending

@@ -121,6 +121,23 @@ struct OptBisectStats {
     int finish_vtx_dirty;
     int finish_surf_create;
     int finish_surf_down;
+    int sd_eviction;
+    int sd_eviction_nocb;
+    int sd_dl_to_buf;
+    int sd_complete_def;
+    int sd_pending_dl;
+    int sd_dirty_dl;
+    int dl_from_def_fb;
+    int dl_from_ppd_fb;
+    int dl_from_dirty_if;
+    int dif_overlap;
+    int dif_overlap_sh;
+    int dif_expire;
+    int dif_expire_sh;
+    int dif_blit;
+    int dif_flush;
+    int dif_dds_fb;
+    int dif_other;
     int finish_buf_space;
     int finish_fb_dirty;
     int finish_present;
@@ -292,6 +309,7 @@ typedef struct DeferredSurfaceDownload {
     SurfaceFormatInfo host_fmt;
     BasicSurfaceFormatInfo fmt;
     bool use_compute_to_swizzle;
+    SurfaceBinding *surface; /* Source surface for flag cleanup at completion */
 } DeferredSurfaceDownload;
 
 typedef struct ShaderModuleInfo {
@@ -417,8 +435,6 @@ typedef void (*SubmitPostFenceCallback)(struct PGRAPHVkState *r,
 struct SubmitJob {
     VkCommandBuffer aux_command_buffer;
     VkCommandBuffer command_buffer;
-    VkSemaphore semaphore;
-    VkPipelineStageFlags wait_stage;
     VkFence fence;
     int frame_index;
     bool deferred;
@@ -576,8 +592,6 @@ typedef struct RenderCommand {
             QemuEvent *completion;
             VkCommandBuffer aux_command_buffer;
             VkCommandBuffer command_buffer;
-            VkSemaphore semaphore;
-            VkPipelineStageFlags wait_stage;
             VkFence fence;
             int frame_index;
             bool deferred;
@@ -972,7 +986,6 @@ typedef struct PGRAPHVkState {
     VkQueue queue;
     VkCommandPool command_pool;
     VkCommandBuffer command_buffers[NUM_SUBMIT_FRAMES * 2];
-    VkSemaphore frame_semaphores[NUM_SUBMIT_FRAMES];
     VkFence frame_fences[NUM_SUBMIT_FRAMES];
     bool frame_submitted[NUM_SUBMIT_FRAMES];
     bool frame_enqueued[NUM_SUBMIT_FRAMES];
@@ -981,7 +994,6 @@ typedef struct PGRAPHVkState {
     int current_frame;
 
     VkCommandBuffer command_buffer;
-    VkSemaphore command_buffer_semaphore;
     VkFence command_buffer_fence;
     unsigned int command_buffer_start_time;
     unsigned int last_stall_draw_time;
