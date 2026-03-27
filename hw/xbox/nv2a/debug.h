@@ -425,10 +425,11 @@ extern int renderdoc_capture_frames;
 extern bool renderdoc_trace_frames;
 
 void nv2a_dbg_set_rt_dump_path(const char *dir);
-void nv2a_dbg_trigger_rt_dump(void);
 
+void nv2a_dbg_trigger_diag_frames(int num_frames);
 void nv2a_dbg_trigger_diag_frame(void);
 bool nv2a_dbg_diag_frame_active(void);
+bool nv2a_dbg_diag_frame_pending(void);
 
 typedef struct NV2AState NV2AState;
 typedef struct PGRAPHState PGRAPHState;

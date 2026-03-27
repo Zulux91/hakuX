@@ -1294,15 +1294,9 @@ Java_com_rfandango_haku_1x_MainActivity_nativeCaptureFrame(JNIEnv *, jobject)
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_rfandango_haku_1x_MainActivity_nativeDumpRenderTarget(JNIEnv *env, jobject)
+Java_com_rfandango_haku_1x_MainActivity_nativeDumpDiagFrames(JNIEnv *, jobject, jint numFrames)
 {
-    nv2a_dbg_trigger_rt_dump();
-}
-
-extern "C" JNIEXPORT void JNICALL
-Java_com_rfandango_haku_1x_MainActivity_nativeDumpDiagFrame(JNIEnv *, jobject)
-{
-    nv2a_dbg_trigger_diag_frame();
+    nv2a_dbg_trigger_diag_frames((int)numFrames);
 }
 
 extern "C" char g_vulkan_driver_info[256];

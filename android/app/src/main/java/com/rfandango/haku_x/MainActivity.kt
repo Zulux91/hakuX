@@ -37,7 +37,11 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
   private val fpsUpdateInterval = 1000L
   private val fpsRunnable = object : Runnable {
     override fun run() {
-      fpsTextView?.text = "FPS: ${nativeGetFps()}"
+      try {
+        fpsTextView?.text = "FPS: ${nativeGetFps()}"
+      } catch (_: Throwable) {
+        fpsTextView?.text = "FPS: --"
+      }
       fpsHandler.postDelayed(this, fpsUpdateInterval)
     }
   }
@@ -46,6 +50,7 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
   private external fun nativePauseEmulation(): Unit
   private external fun nativeResumeEmulation(): Unit
   private external fun nativeExitEmulation(): Unit
+  private external fun nativeDumpDiagFrames(numFrames: Int): Unit
 
   override fun loadLibraries() {
     super.loadLibraries()
@@ -142,6 +147,12 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
       }
       onDismiss = {
         togglePauseMenu()
+      }
+      onDiagCapture = { numFrames ->
+        nativeDumpDiagFrames(numFrames)
+      }
+      isDebugToolsEnabled = {
+        prefs.getBoolean("debug_tools", false)
       }
     }
     val overlayParams = RelativeLayout.LayoutParams(

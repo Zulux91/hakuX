@@ -321,6 +321,12 @@ class SettingsActivity : AppCompatActivity() {
       prefs.edit().putBoolean("validation_layers", checked).apply()
     }
 
+    val switchDebugTools = findViewById<MaterialSwitch>(R.id.switch_debug_tools)
+    switchDebugTools.isChecked = prefs.getBoolean("debug_tools", false)
+    switchDebugTools.setOnCheckedChangeListener { _, checked ->
+      prefs.edit().putBoolean("debug_tools", checked).apply()
+    }
+
     findViewById<MaterialButton>(R.id.btn_clear_cache).setOnClickListener {
       confirmClearCache()
     }

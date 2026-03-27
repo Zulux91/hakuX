@@ -17,6 +17,13 @@ class PauseMenuOverlay(context: Context) : FrameLayout(context) {
 
     var onExitEmulation: (() -> Unit)? = null
     var onDismiss: (() -> Unit)? = null
+    var onDiagCapture: ((Int) -> Unit)? = null
+    var isDebugToolsEnabled: (() -> Boolean)? = null
+
+    private val card: LinearLayout
+    private var debugSection: LinearLayout? = null
+    private var debugButton: Button? = null
+    private var debugExpanded = false
 
     init {
         setBackgroundColor(Color.argb(160, 0, 0, 0))
@@ -24,7 +31,7 @@ class PauseMenuOverlay(context: Context) : FrameLayout(context) {
         isClickable = true
         isFocusable = true
 
-        val card = LinearLayout(context).apply {
+        card = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
             val bg = GradientDrawable().apply {
@@ -60,6 +67,8 @@ class PauseMenuOverlay(context: Context) : FrameLayout(context) {
     }
 
     fun show() {
+        rebuildDebugSection()
+        debugExpanded = false
         visibility = View.VISIBLE
     }
 
@@ -68,6 +77,63 @@ class PauseMenuOverlay(context: Context) : FrameLayout(context) {
     }
 
     fun isShowing(): Boolean = visibility == View.VISIBLE
+
+    private fun rebuildDebugSection() {
+        // Remove old debug UI
+        debugSection?.let { card.removeView(it) }
+        debugSection = null
+        debugButton?.let { card.removeView(it) }
+        debugButton = null
+
+        val enabled = isDebugToolsEnabled?.invoke() ?: false
+        if (!enabled) return
+
+        // Add "Debug" button
+        debugButton = createMenuButton(context, "\uD83D\uDD27 Debug Capture").apply {
+            val bg = (background as GradientDrawable)
+            bg.setColor(Color.argb(200, 50, 80, 120))
+            setOnClickListener { toggleDebugSection() }
+        }
+        card.addView(debugButton, createButtonParams())
+
+        // Prepare expandable section (hidden initially)
+        debugSection = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+
+            val capture1 = createCaptureButton(context, "Capture 1 Frame", 1)
+            addView(capture1, createButtonParams())
+
+            val capture5 = createCaptureButton(context, "Capture 5 Frames", 5)
+            addView(capture5, createButtonParams())
+
+            val capture10 = createCaptureButton(context, "Capture 10 Frames", 10)
+            addView(capture10, createButtonParams())
+        }
+        card.addView(debugSection, createButtonParams())
+    }
+
+    private fun toggleDebugSection() {
+        debugExpanded = !debugExpanded
+        debugSection?.visibility = if (debugExpanded) View.VISIBLE else View.GONE
+    }
+
+    private fun createCaptureButton(context: Context, label: String, frames: Int): Button {
+        return createMenuButton(context, label).apply {
+            val bg = (background as GradientDrawable)
+            bg.setColor(Color.argb(200, 40, 100, 70))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            setOnClickListener {
+                android.util.Log.i("xemu-diag", "capture: dismissing first (resume), then setting $frames frame pending")
+                onDismiss?.invoke()
+                // Post with delay to let the game produce a few frames first
+                postDelayed({
+                    android.util.Log.i("xemu-diag", "capture: now setting $frames frame pending")
+                    onDiagCapture?.invoke(frames)
+                }, 2000)
+            }
+        }
+    }
 
     private fun createMenuButton(context: Context, label: String): Button {
         return Button(context).apply {

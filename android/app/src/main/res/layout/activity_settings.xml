@@ -578,6 +578,23 @@
             android:textAppearance="@style/TextAppearance.Material3.BodySmall"
             android:textColor="@color/xemu_text_muted" />
 
+          <!-- Debug Tools -->
+          <com.google.android.material.materialswitch.MaterialSwitch
+            android:id="@+id/switch_debug_tools"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:text="Debug Tools"
+            android:textColor="@color/xemu_text_muted" />
+          <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
+            android:layout_marginTop="2dp"
+            android:text="Show diagnostic frame capture in pause menu"
+            android:textAppearance="@style/TextAppearance.Material3.BodySmall"
+            android:textColor="@color/xemu_text_muted" />
+
           <!-- Clear Shader Cache -->
           <com.google.android.material.button.MaterialButton
             android:id="@+id/btn_clear_shader_cache"

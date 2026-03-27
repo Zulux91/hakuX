@@ -20,6 +20,7 @@
 #include "hw/xbox/nv2a/nv2a_int.h"
 #include "renderer.h"
 #include "qemu/error-report.h"
+#include "qemu/fast-hash.h"
 #include "ui/xemu-settings.h"
 
 extern bool xemu_get_frame_skip(void);
@@ -343,17 +344,17 @@ static void pgraph_vk_process_pending(NV2AState *d)
     qemu_mutex_lock(&d->pfifo.lock);
 }
 
+#ifdef __ANDROID__
+#define DIAG_LOG(...) __android_log_print(ANDROID_LOG_INFO, "xemu-diag", __VA_ARGS__)
+#else
+#define DIAG_LOG(...) fprintf(stderr, "xemu-diag: " __VA_ARGS__)
+#endif
+
 static char rt_dump_dir[512] = "";
-static volatile int rt_dump_pending = 0;
 
 void nv2a_dbg_set_rt_dump_path(const char *dir)
 {
     snprintf(rt_dump_dir, sizeof(rt_dump_dir), "%s", dir);
-}
-
-void nv2a_dbg_trigger_rt_dump(void)
-{
-    qatomic_set(&rt_dump_pending, 1);
 }
 
 static void dump_surface_ppm(NV2AState *d, SurfaceBinding *surface,
@@ -372,6 +373,7 @@ static void dump_surface_ppm(NV2AState *d, SurfaceBinding *surface,
 
     FILE *f = fopen(path, "wb");
     if (!f) {
+        DIAG_LOG("dump_surface_ppm: cannot open %s (errno=%d)\n", path, errno);
         return;
     }
 
@@ -400,66 +402,93 @@ static void dump_surface_ppm(NV2AState *d, SurfaceBinding *surface,
     fclose(f);
 }
 
-static void maybe_dump_render_target(NV2AState *d)
-{
-    if (!qatomic_read(&rt_dump_pending)) {
-        return;
-    }
-    qatomic_set(&rt_dump_pending, 0);
-
-    PGRAPHState *pg = &d->pgraph;
-    PGRAPHVkState *r = pg->vk_renderer_state;
-    SurfaceBinding *surface = r->color_binding;
-
-    if (!surface || !surface->color) {
-        fprintf(stderr, "rt_dump: no color surface bound\n");
-        return;
-    }
-
-    if (!surface->width || !surface->height || !surface->fmt.bytes_per_pixel) {
-        fprintf(stderr, "rt_dump: invalid surface dimensions\n");
-        return;
-    }
-
-    char path[600];
-    if (rt_dump_dir[0]) {
-        mkdir(rt_dump_dir, 0755);
-        snprintf(path, sizeof(path), "%s/rt_dump_%u.ppm", rt_dump_dir,
-                 g_nv2a_stats.frame_count);
-    } else {
-        snprintf(path, sizeof(path), "/tmp/rt_dump_%u.ppm",
-                 g_nv2a_stats.frame_count);
-    }
-
-    dump_surface_ppm(d, surface, path);
-    fprintf(stderr, "rt_dump: saved %ux%u to %s\n",
-            surface->width, surface->height, path);
-}
-
 /*
- * Per-draw-call diagnostic frame capture
+ * Multi-frame per-draw-call diagnostic capture
+ *
+ * Captures N consecutive frames with full render state, shader source,
+ * and frame-to-frame diffs. Output is a single JSON session file designed
+ * to be fed to Claude for rendering issue analysis.
  */
 
+#include <time.h>
+
 #define DIAG_MAX_DRAWS 4096
-#define DIAG_JSON_INITIAL_CAP (256 * 1024)
+#define DIAG_MAX_FRAMES 64
+#define DIAG_JSON_INITIAL_CAP (512 * 1024)
 
 static volatile int diag_frame_pending = 0;
 static volatile int diag_frame_active = 0;
 static int diag_draw_index = 0;
 static unsigned int diag_frame_num = 0;
 
+/* Multi-frame state */
+static int diag_frames_remaining = 0;
+static int diag_total_frames = 0;
+static int diag_current_frame_index = 0;
+static unsigned int diag_session_id = 0;
+static char diag_session_dir[700] = "";
+
 static char *diag_json_buf = NULL;
 static size_t diag_json_len = 0;
 static size_t diag_json_cap = 0;
 
+/* Per-draw fingerprint for frame diffs */
+typedef struct DiagDrawFingerprint {
+    uint64_t shader_hash;
+    uint64_t state_hash;
+} DiagDrawFingerprint;
+
+static DiagDrawFingerprint diag_cur_fingerprints[DIAG_MAX_DRAWS];
+static DiagDrawFingerprint diag_prev_fingerprints[DIAG_MAX_DRAWS];
+static int diag_prev_draw_count = 0;
+
+/* Diff accumulation buffer */
+static char *diag_diff_buf = NULL;
+static size_t diag_diff_len = 0;
+static size_t diag_diff_cap = 0;
+static bool diag_first_diff = true;
+
+/* Shader source dedup table */
+#define DIAG_MAX_SHADERS 512
+typedef struct DiagShaderEntry {
+    uint64_t hash;
+    char *vsh_glsl;
+    char *psh_glsl;
+    char *geom_glsl;
+} DiagShaderEntry;
+
+static DiagShaderEntry diag_shaders[DIAG_MAX_SHADERS];
+static int diag_shader_count = 0;
+
+/* Per-frame JSON buffers (each frame's draw_calls array) */
+static char **diag_frame_bufs = NULL;
+static size_t *diag_frame_lens = NULL;
+static unsigned int *diag_frame_nums = NULL;
+static int *diag_frame_draw_counts = NULL;
+
+void nv2a_dbg_trigger_diag_frames(int num_frames)
+{
+    if (num_frames < 1) num_frames = 1;
+    if (num_frames > DIAG_MAX_FRAMES) num_frames = DIAG_MAX_FRAMES;
+    DIAG_LOG("trigger_diag_frames called: num_frames=%d\n", num_frames);
+    qatomic_set(&diag_frame_pending, num_frames);
+    DIAG_LOG("diag_frame_pending set to %d\n", num_frames);
+}
+
 void nv2a_dbg_trigger_diag_frame(void)
 {
-    qatomic_set(&diag_frame_pending, 1);
+    DIAG_LOG("trigger_diag_frame called (single frame)\n");
+    nv2a_dbg_trigger_diag_frames(1);
 }
 
 bool nv2a_dbg_diag_frame_active(void)
 {
     return qatomic_read(&diag_frame_active) != 0;
+}
+
+bool nv2a_dbg_diag_frame_pending(void)
+{
+    return qatomic_read(&diag_frame_pending) != 0;
 }
 
 static void diag_json_ensure(size_t needed)
@@ -491,29 +520,250 @@ static void diag_json_append(const char *fmt, ...)
     va_end(ap2);
 }
 
-static void diag_write_json(void)
+static void diag_diff_ensure(size_t needed)
 {
-    char dir[600];
-    if (rt_dump_dir[0]) {
-        snprintf(dir, sizeof(dir), "%s", rt_dump_dir);
-    } else {
-        snprintf(dir, sizeof(dir), "/tmp");
+    if (diag_diff_len + needed <= diag_diff_cap) {
+        return;
     }
-    mkdir(dir, 0755);
+    size_t new_cap = diag_diff_cap ? diag_diff_cap * 2 : 4096;
+    while (new_cap < diag_diff_len + needed) {
+        new_cap *= 2;
+    }
+    diag_diff_buf = g_realloc(diag_diff_buf, new_cap);
+    diag_diff_cap = new_cap;
+}
 
-    char path[700];
-    snprintf(path, sizeof(path), "%s/diag_frame_%u.json", dir, diag_frame_num);
+static void diag_diff_append(const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    va_list ap2;
+    va_copy(ap2, ap);
+    int n = vsnprintf(NULL, 0, fmt, ap);
+    va_end(ap);
+    if (n > 0) {
+        diag_diff_ensure((size_t)n + 1);
+        vsnprintf(diag_diff_buf + diag_diff_len, (size_t)n + 1, fmt, ap2);
+        diag_diff_len += (size_t)n;
+    }
+    va_end(ap2);
+}
 
+/* JSON-escape a string (handles \n, \t, \\, \", control chars) */
+static void diag_json_append_escaped(const char *s)
+{
+    if (!s) {
+        diag_json_append("null");
+        return;
+    }
+    diag_json_append("\"");
+    for (const char *p = s; *p; p++) {
+        switch (*p) {
+        case '"':  diag_json_append("\\\""); break;
+        case '\\': diag_json_append("\\\\"); break;
+        case '\n': diag_json_append("\\n"); break;
+        case '\r': diag_json_append("\\r"); break;
+        case '\t': diag_json_append("\\t"); break;
+        default:
+            if ((unsigned char)*p < 0x20) {
+                diag_json_append("\\u%04x", (unsigned char)*p);
+            } else {
+                diag_json_ensure(2);
+                diag_json_buf[diag_json_len++] = *p;
+                diag_json_buf[diag_json_len] = '\0';
+            }
+        }
+    }
+    diag_json_append("\"");
+}
+
+static const char *diag_get_dump_base_dir(void)
+{
+    const char *dir;
+    if (rt_dump_dir[0]) {
+        dir = rt_dump_dir;
+    } else {
+        dir = xemu_settings_get_base_path();
+    }
+    DIAG_LOG("dump base dir: %s\n", dir ? dir : "(null)");
+    return dir;
+}
+
+static void diag_init_session(unsigned int start_frame, int num_frames)
+{
+    DIAG_LOG("init_session: start_frame=%u num_frames=%d\n",
+             start_frame, num_frames);
+
+    diag_session_id = start_frame;
+    diag_total_frames = num_frames;
+    diag_frames_remaining = num_frames;
+    diag_current_frame_index = 0;
+    diag_shader_count = 0;
+    diag_prev_draw_count = 0;
+    diag_diff_len = 0;
+    diag_first_diff = true;
+
+    /* Create session directory */
+    const char *base = diag_get_dump_base_dir();
+    snprintf(diag_session_dir, sizeof(diag_session_dir),
+             "%s/diag_session_%u", base, diag_session_id);
+
+    /* Recursive mkdir — create all intermediate directories */
+    {
+        char tmp[700];
+        snprintf(tmp, sizeof(tmp), "%s", diag_session_dir);
+        for (char *p = tmp + 1; *p; p++) {
+            if (*p == '/') {
+                *p = '\0';
+                int r = mkdir(tmp, 0755);
+                DIAG_LOG("mkdir '%s' -> %d (errno=%d)\n", tmp, r,
+                         (r < 0 && errno != EEXIST) ? errno : 0);
+                *p = '/';
+            }
+        }
+        int r = mkdir(tmp, 0755);
+        DIAG_LOG("mkdir '%s' -> %d (errno=%d)\n", tmp, r,
+                 (r < 0 && errno != EEXIST) ? errno : 0);
+    }
+
+    /* Allocate per-frame buffers */
+    diag_frame_bufs = g_new0(char *, num_frames);
+    diag_frame_lens = g_new0(size_t, num_frames);
+    diag_frame_nums = g_new0(unsigned int, num_frames);
+    diag_frame_draw_counts = g_new0(int, num_frames);
+
+    DIAG_LOG("init_session complete, session_dir=%s\n", diag_session_dir);
+}
+
+static void diag_cleanup_session(void)
+{
+    if (diag_frame_bufs) {
+        for (int i = 0; i < diag_total_frames; i++) {
+            g_free(diag_frame_bufs[i]);
+        }
+        g_free(diag_frame_bufs);
+        diag_frame_bufs = NULL;
+    }
+    g_free(diag_frame_lens);
+    diag_frame_lens = NULL;
+    g_free(diag_frame_nums);
+    diag_frame_nums = NULL;
+    g_free(diag_frame_draw_counts);
+    diag_frame_draw_counts = NULL;
+
+    for (int i = 0; i < diag_shader_count; i++) {
+        g_free(diag_shaders[i].vsh_glsl);
+        g_free(diag_shaders[i].psh_glsl);
+        g_free(diag_shaders[i].geom_glsl);
+    }
+    diag_shader_count = 0;
+}
+
+static int diag_find_or_add_shader(uint64_t hash, const char *vsh,
+                                    const char *psh, const char *geom)
+{
+    for (int i = 0; i < diag_shader_count; i++) {
+        if (diag_shaders[i].hash == hash) {
+            return i;
+        }
+    }
+    if (diag_shader_count >= DIAG_MAX_SHADERS) {
+        return -1;
+    }
+    int idx = diag_shader_count++;
+    diag_shaders[idx].hash = hash;
+    diag_shaders[idx].vsh_glsl = vsh ? g_strdup(vsh) : NULL;
+    diag_shaders[idx].psh_glsl = psh ? g_strdup(psh) : NULL;
+    diag_shaders[idx].geom_glsl = geom ? g_strdup(geom) : NULL;
+    return idx;
+}
+
+static void diag_write_session_json(void)
+{
+    DIAG_LOG("write_session_json: building JSON, %d frames, %d shaders\n",
+             diag_total_frames, diag_shader_count);
+
+    /* Build final JSON into diag_json_buf */
+    diag_json_len = 0;
+
+    diag_json_append("{\n");
+
+    /* capture_info */
+    time_t now = time(NULL);
+    struct tm *tm = localtime(&now);
+    char timestamp[64];
+    strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%S", tm);
+
+    diag_json_append(
+        "  \"capture_info\": {\n"
+        "    \"frame_count\": %d,\n"
+        "    \"start_frame\": %u,\n"
+        "    \"timestamp\": \"%s\"\n"
+        "  },\n",
+        diag_total_frames, diag_session_id, timestamp);
+
+    /* shaders */
+    diag_json_append("  \"shaders\": {\n");
+    for (int i = 0; i < diag_shader_count; i++) {
+        diag_json_append("%s    \"0x%016" PRIx64 "\": {\n",
+                         i > 0 ? ",\n" : "",
+                         diag_shaders[i].hash);
+        diag_json_append("      \"vertex\": ");
+        diag_json_append_escaped(diag_shaders[i].vsh_glsl);
+        diag_json_append(",\n      \"fragment\": ");
+        diag_json_append_escaped(diag_shaders[i].psh_glsl);
+        diag_json_append(",\n      \"geometry\": ");
+        diag_json_append_escaped(diag_shaders[i].geom_glsl);
+        diag_json_append("\n    }");
+    }
+    diag_json_append("\n  },\n");
+
+    /* frames */
+    diag_json_append("  \"frames\": [\n");
+    for (int i = 0; i < diag_total_frames; i++) {
+        diag_json_append(
+            "%s    {\n"
+            "      \"frame_number\": %u,\n"
+            "      \"frame_index\": %d,\n"
+            "      \"draw_count\": %d,\n"
+            "      \"draw_calls\": [\n",
+            i > 0 ? ",\n" : "",
+            diag_frame_nums[i], i, diag_frame_draw_counts[i]);
+        if (diag_frame_bufs[i] && diag_frame_lens[i] > 0) {
+            diag_json_ensure(diag_frame_lens[i]);
+            memcpy(diag_json_buf + diag_json_len, diag_frame_bufs[i],
+                   diag_frame_lens[i]);
+            diag_json_len += diag_frame_lens[i];
+        }
+        diag_json_append("\n      ]\n    }");
+    }
+    diag_json_append("\n  ],\n");
+
+    /* frame_diffs */
+    diag_json_append("  \"frame_diffs\": [\n");
+    if (diag_diff_buf && diag_diff_len > 0) {
+        diag_json_ensure(diag_diff_len);
+        memcpy(diag_json_buf + diag_json_len, diag_diff_buf, diag_diff_len);
+        diag_json_len += diag_diff_len;
+    }
+    diag_json_append("\n  ]\n}\n");
+
+    /* Write to file */
+    char path[800];
+    snprintf(path, sizeof(path), "%s/diag_session.json", diag_session_dir);
+
+    DIAG_LOG("writing JSON to: %s\n", path);
     FILE *f = fopen(path, "w");
     if (!f) {
-        fprintf(stderr, "diag: cannot write %s\n", path);
+        DIAG_LOG("ERROR: cannot open %s for writing (errno=%d)\n", path, errno);
         return;
     }
     if (diag_json_buf && diag_json_len > 0) {
-        fwrite(diag_json_buf, 1, diag_json_len, f);
+        size_t written = fwrite(diag_json_buf, 1, diag_json_len, f);
+        DIAG_LOG("fwrite: %zu of %zu bytes written\n", written, diag_json_len);
     }
     fclose(f);
-    fprintf(stderr, "diag: wrote %zu bytes to %s\n", diag_json_len, path);
+    DIAG_LOG("wrote %zu bytes to %s\n", diag_json_len, path);
 }
 
 static const char *diag_stencil_op_name(uint32_t op)
@@ -613,6 +863,11 @@ void nv2a_diag_log_draw_call(NV2AState *d, PGRAPHState *pg,
     PGRAPHVkState *r = pg->vk_renderer_state;
     int idx = diag_draw_index++;
 
+    if (idx == 0 || (idx % 100) == 0) {
+        DIAG_LOG("log_draw_call: frame_idx=%d draw=%d type=%s count=%d\n",
+                 diag_current_frame_index, idx, type, count);
+    }
+
     uint32_t control_0 = pgraph_vk_reg_r(pg, NV_PGRAPH_CONTROL_0);
     uint32_t control_1 = pgraph_vk_reg_r(pg, NV_PGRAPH_CONTROL_1);
     uint32_t control_2 = pgraph_vk_reg_r(pg, NV_PGRAPH_CONTROL_2);
@@ -657,31 +912,74 @@ void nv2a_diag_log_draw_call(NV2AState *d, PGRAPHState *pg,
         }
     }
 
+    /* Compute shader hash and capture source */
+    uint64_t shader_hash = 0;
+    if (r->shader_binding) {
+        shader_hash = fast_hash((const uint8_t *)&r->shader_binding->state,
+                                sizeof(ShaderState));
+        const char *vsh_src = (r->shader_binding->vsh.module_info &&
+                               r->shader_binding->vsh.module_info->glsl)
+                              ? r->shader_binding->vsh.module_info->glsl : NULL;
+        const char *psh_src = (r->shader_binding->psh.module_info &&
+                               r->shader_binding->psh.module_info->glsl)
+                              ? r->shader_binding->psh.module_info->glsl : NULL;
+        const char *geom_src = (r->shader_binding->geom.module_info &&
+                                r->shader_binding->geom.module_info->glsl)
+                               ? r->shader_binding->geom.module_info->glsl : NULL;
+        diag_find_or_add_shader(shader_hash, vsh_src, psh_src, geom_src);
+    }
+
+    /* Compute state fingerprint for diff detection */
+    struct {
+        uint32_t control_0, control_1, control_2, blend_reg, setupraster;
+        uint32_t color_fmt, zeta_fmt;
+        uint32_t color_w, color_h, zeta_w, zeta_h;
+        uint32_t tex_fmt[NV2A_MAX_TEXTURES];
+        int prim_mode;
+    } state_block = {
+        control_0, control_1, control_2, blend_reg, setupraster,
+        r->color_binding ? r->color_binding->shape.color_format : 0,
+        r->zeta_binding ? r->zeta_binding->shape.zeta_format : 0,
+        r->color_binding ? r->color_binding->width : 0,
+        r->color_binding ? r->color_binding->height : 0,
+        r->zeta_binding ? r->zeta_binding->width : 0,
+        r->zeta_binding ? r->zeta_binding->height : 0,
+        {0}, pg->primitive_mode
+    };
+    for (int i = 0; i < NV2A_MAX_TEXTURES; i++) {
+        state_block.tex_fmt[i] = pgraph_vk_reg_r(pg, NV_PGRAPH_TEXFMT0 + i * 4);
+    }
+    diag_cur_fingerprints[idx].shader_hash = shader_hash;
+    diag_cur_fingerprints[idx].state_hash =
+        fast_hash((const uint8_t *)&state_block, sizeof(state_block));
+
     diag_json_append(
-        "%s  {\n"
-        "    \"draw_index\": %d,\n"
-        "    \"type\": \"%s\",\n"
-        "    \"count\": %d,\n"
-        "    \"primitive_mode\": \"%s\",\n"
-        "    \"blend\": {"
+        "%s        {\n"
+        "          \"draw_index\": %d,\n"
+        "          \"type\": \"%s\",\n"
+        "          \"count\": %d,\n"
+        "          \"primitive_mode\": \"%s\",\n"
+        "          \"shader_hash\": \"0x%016" PRIx64 "\",\n"
+        "          \"blend\": {"
             "\"enabled\": %s, \"src\": \"%s\", \"dst\": \"%s\", "
             "\"eq\": \"%s\"},\n"
-        "    \"depth\": {"
+        "          \"depth\": {"
             "\"test\": %s, \"write\": %s, \"func\": \"%s\"},\n"
-        "    \"stencil\": {"
+        "          \"stencil\": {"
             "\"test\": %s, \"func\": \"%s\", \"ref\": %u, "
             "\"mask_read\": %u, \"mask_write\": %u, "
             "\"op_fail\": \"%s\", \"op_zfail\": \"%s\", "
             "\"op_zpass\": \"%s\"},\n"
-        "    \"color_write_mask\": {"
+        "          \"color_write_mask\": {"
             "\"r\": %s, \"g\": %s, \"b\": %s, \"a\": %s},\n"
-        "    \"cull\": {"
+        "          \"cull\": {"
             "\"enabled\": %s, \"face\": \"%s\", \"front_ccw\": %s},\n",
         idx > 0 ? ",\n" : "",
         idx,
         type,
         count,
         diag_prim_name(pg->primitive_mode),
+        shader_hash,
         blend_en ? "true" : "false",
         diag_blend_factor_name(sfactor),
         diag_blend_factor_name(dfactor),
@@ -706,7 +1004,7 @@ void nv2a_diag_log_draw_call(NV2AState *d, PGRAPHState *pg,
 
     if (r->color_binding) {
         diag_json_append(
-            "    \"color_surface\": {"
+            "          \"color_surface\": {"
                 "\"format\": %u, \"width\": %u, \"height\": %u, "
                 "\"pitch\": %u, \"bpp\": %u},\n",
             r->color_binding->shape.color_format,
@@ -714,12 +1012,12 @@ void nv2a_diag_log_draw_call(NV2AState *d, PGRAPHState *pg,
             r->color_binding->pitch, r->color_binding->fmt.bytes_per_pixel
         );
     } else {
-        diag_json_append("    \"color_surface\": null,\n");
+        diag_json_append("          \"color_surface\": null,\n");
     }
 
     if (r->zeta_binding) {
         diag_json_append(
-            "    \"zeta_surface\": {"
+            "          \"zeta_surface\": {"
                 "\"format\": %u, \"width\": %u, \"height\": %u, "
                 "\"pitch\": %u, \"bpp\": %u},\n",
             r->zeta_binding->shape.zeta_format,
@@ -727,10 +1025,10 @@ void nv2a_diag_log_draw_call(NV2AState *d, PGRAPHState *pg,
             r->zeta_binding->pitch, r->zeta_binding->fmt.bytes_per_pixel
         );
     } else {
-        diag_json_append("    \"zeta_surface\": null,\n");
+        diag_json_append("          \"zeta_surface\": null,\n");
     }
 
-    diag_json_append("    \"textures\": [");
+    diag_json_append("          \"textures\": [");
     for (int i = 0; i < NV2A_MAX_TEXTURES; i++) {
         bool tex_en = pgraph_is_texture_enabled(pg, i);
         uint32_t tex_fmt = pgraph_vk_reg_r(pg, NV_PGRAPH_TEXFMT0 + i * 4);
@@ -751,37 +1049,55 @@ void nv2a_diag_log_draw_call(NV2AState *d, PGRAPHState *pg,
             1u << log_w, 1u << log_h
         );
     }
-    diag_json_append("]\n  }");
+    diag_json_append("],\n");
 
-    char dir[600];
-    if (rt_dump_dir[0]) {
-        snprintf(dir, sizeof(dir), "%s", rt_dump_dir);
-    } else {
-        snprintf(dir, sizeof(dir), "/tmp");
-    }
-    mkdir(dir, 0755);
-
+    /* Per-draw surface dumps */
     pgraph_vk_finish(pg, VK_FINISH_REASON_SURFACE_DOWN);
 
-    if (r->color_binding && r->color_binding->draw_dirty) {
-        pgraph_vk_surface_download_if_dirty(d, r->color_binding);
-        char path[700];
-        snprintf(path, sizeof(path), "%s/diag_%u_draw%d_color.ppm",
-                 dir, diag_frame_num, idx);
-        dump_surface_ppm(d, r->color_binding, path);
+    {
+        char color_fname[128] = "";
+        char depth_fname[128] = "";
+
+        if (r->color_binding && r->color_binding->draw_dirty) {
+            pgraph_vk_surface_download_if_dirty(d, r->color_binding);
+            snprintf(color_fname, sizeof(color_fname),
+                     "f%d_draw%d_color.ppm", diag_current_frame_index, idx);
+            char path[800];
+            snprintf(path, sizeof(path), "%s/%s", diag_session_dir, color_fname);
+            dump_surface_ppm(d, r->color_binding, path);
+        }
+
+        if (r->zeta_binding && r->zeta_binding->draw_dirty) {
+            pgraph_vk_surface_download_if_dirty(d, r->zeta_binding);
+            snprintf(depth_fname, sizeof(depth_fname),
+                     "f%d_draw%d_depth.ppm", diag_current_frame_index, idx);
+            char path[800];
+            snprintf(path, sizeof(path), "%s/%s", diag_session_dir, depth_fname);
+            dump_surface_ppm(d, r->zeta_binding, path);
+        }
+
+        if (color_fname[0]) {
+            diag_json_append("          \"color_image\": \"%s\",\n", color_fname);
+        } else {
+            diag_json_append("          \"color_image\": null,\n");
+        }
+        if (depth_fname[0]) {
+            diag_json_append("          \"depth_image\": \"%s\"\n", depth_fname);
+        } else {
+            diag_json_append("          \"depth_image\": null\n");
+        }
     }
 
-    if (r->zeta_binding && r->zeta_binding->draw_dirty) {
-        pgraph_vk_surface_download_if_dirty(d, r->zeta_binding);
-        char path[700];
-        snprintf(path, sizeof(path), "%s/diag_%u_draw%d_depth.ppm",
-                 dir, diag_frame_num, idx);
-        dump_surface_ppm(d, r->zeta_binding, path);
-    }
+    diag_json_append("        }");
 }
 
 static void pgraph_vk_flip_stall(NV2AState *d)
 {
+    if (qatomic_read(&diag_frame_pending) || qatomic_read(&diag_frame_active)) {
+        DIAG_LOG("flip_stall: ENTER pending=%d active=%d\n",
+                 qatomic_read(&diag_frame_pending),
+                 qatomic_read(&diag_frame_active));
+    }
 #ifdef XBOX
     {
         extern volatile int32_t *xbox_ram_fp_active_ptr;
@@ -801,8 +1117,11 @@ static void pgraph_vk_flip_stall(NV2AState *d)
 #endif
     {
         static int dbg_flip = 0;
-        if (dbg_flip < 30) {
+        if (dbg_flip < 30 || qatomic_read(&diag_frame_pending) || qatomic_read(&diag_frame_active)) {
             PGRAPHVkState *r = d->pgraph.vk_renderer_state;
+            DIAG_LOG("flip_stall entered: pending=%d active=%d\n",
+                     qatomic_read(&diag_frame_pending),
+                     qatomic_read(&diag_frame_active));
             DBG_LOG("[FLIP] flip_stall: in_cb=%d frame=%d submit=%d",
                     r->in_command_buffer, r->current_frame,
                     (int)r->submit_count);
@@ -849,34 +1168,131 @@ static void pgraph_vk_flip_stall(NV2AState *d)
     }
 
     if (qatomic_read(&diag_frame_active)) {
-        diag_json_append("\n]\n");
-        diag_write_json();
-        qatomic_set(&diag_frame_active, 0);
-        fprintf(stderr, "diag: frame %u capture complete (%d draw calls)\n",
-                diag_frame_num, diag_draw_index);
-#ifdef __ANDROID__
-        __android_log_print(ANDROID_LOG_INFO, "xemu-diag",
-                            "frame %u capture complete (%d draw calls)",
-                            diag_frame_num, diag_draw_index);
-#endif
+        DIAG_LOG("flip_stall: diag active, frame_idx=%d/%d, %d draws captured, json_len=%zu\n",
+                 diag_current_frame_index, diag_total_frames,
+                 diag_draw_index, diag_json_len);
+        /* Save current frame's draw call data */
+        int fi = diag_current_frame_index;
+        if (fi < diag_total_frames) {
+            diag_frame_bufs[fi] = diag_json_buf ? g_strndup(diag_json_buf, diag_json_len) : NULL;
+            diag_frame_lens[fi] = diag_json_len;
+            diag_frame_nums[fi] = diag_frame_num;
+            diag_frame_draw_counts[fi] = diag_draw_index;
+
+            /* Dump final framebuffer PPM for this frame */
+            PGRAPHVkState *diag_r = d->pgraph.vk_renderer_state;
+            pgraph_vk_finish(&d->pgraph, VK_FINISH_REASON_SURFACE_DOWN);
+            if (diag_r->color_binding && diag_r->color_binding->draw_dirty) {
+                pgraph_vk_surface_download_if_dirty(d, diag_r->color_binding);
+                char ppm_path[800];
+                snprintf(ppm_path, sizeof(ppm_path),
+                         "%s/frame_%d_final_color.ppm", diag_session_dir, fi);
+                dump_surface_ppm(d, diag_r->color_binding, ppm_path);
+            }
+            if (diag_r->zeta_binding && diag_r->zeta_binding->draw_dirty) {
+                pgraph_vk_surface_download_if_dirty(d, diag_r->zeta_binding);
+                char ppm_path[800];
+                snprintf(ppm_path, sizeof(ppm_path),
+                         "%s/frame_%d_final_depth.ppm", diag_session_dir, fi);
+                dump_surface_ppm(d, diag_r->zeta_binding, ppm_path);
+            }
+
+            /* Compute frame diff against previous frame */
+            if (fi > 0) {
+                int max_draws = diag_draw_index > diag_prev_draw_count
+                                ? diag_draw_index : diag_prev_draw_count;
+                int changed_count = 0;
+                char changed_list[4096] = "";
+                size_t cl_len = 0;
+                bool draw_count_changed =
+                    (diag_draw_index != diag_prev_draw_count);
+
+                for (int di = 0; di < max_draws; di++) {
+                    bool changed = false;
+                    if (di >= diag_draw_index || di >= diag_prev_draw_count) {
+                        changed = true;
+                    } else if (diag_cur_fingerprints[di].shader_hash !=
+                                   diag_prev_fingerprints[di].shader_hash ||
+                               diag_cur_fingerprints[di].state_hash !=
+                                   diag_prev_fingerprints[di].state_hash) {
+                        changed = true;
+                    }
+                    if (changed) {
+                        changed_count++;
+                        int n = snprintf(changed_list + cl_len,
+                                         sizeof(changed_list) - cl_len,
+                                         "%s%d", cl_len > 0 ? ", " : "", di);
+                        if (n > 0 && cl_len + n < sizeof(changed_list)) {
+                            cl_len += n;
+                        }
+                    }
+                }
+
+                diag_diff_append(
+                    "%s    {\n"
+                    "      \"from_frame\": %d,\n"
+                    "      \"to_frame\": %d,\n"
+                    "      \"draw_count_changed\": %s,\n"
+                    "      \"from_draw_count\": %d,\n"
+                    "      \"to_draw_count\": %d,\n"
+                    "      \"changed_draw_count\": %d,\n"
+                    "      \"draws_with_state_changes\": [%s],\n"
+                    "      \"summary\": \"%d draw(s) changed state out of %d total\"\n"
+                    "    }",
+                    diag_first_diff ? "" : ",\n",
+                    fi - 1, fi,
+                    draw_count_changed ? "true" : "false",
+                    diag_prev_draw_count, diag_draw_index,
+                    changed_count, changed_list,
+                    changed_count, max_draws);
+                diag_first_diff = false;
+            }
+
+            /* Save current fingerprints as previous for next frame */
+            memcpy(diag_prev_fingerprints, diag_cur_fingerprints,
+                   sizeof(DiagDrawFingerprint) * diag_draw_index);
+            diag_prev_draw_count = diag_draw_index;
+        }
+
+        diag_current_frame_index++;
+        diag_frames_remaining--;
+
+        DIAG_LOG("frame %u captured (%d/%d, %d draw calls)\n",
+                 diag_frame_num, diag_current_frame_index, diag_total_frames,
+                 diag_draw_index);
+
+        if (diag_frames_remaining <= 0) {
+            /* All frames captured — write session JSON and clean up */
+            DIAG_LOG("all frames done, writing session JSON...\n");
+            diag_write_session_json();
+            diag_cleanup_session();
+            qatomic_set(&diag_frame_active, 0);
+            DIAG_LOG("session %u complete\n", diag_session_id);
+        } else {
+            /* Reset for next frame */
+            DIAG_LOG("resetting for next frame, %d remaining\n",
+                     diag_frames_remaining);
+            diag_draw_index = 0;
+            diag_json_len = 0;
+            diag_frame_num = g_nv2a_stats.frame_count;
+        }
     }
 
-    if (qatomic_read(&diag_frame_pending)) {
-        qatomic_set(&diag_frame_pending, 0);
-        diag_frame_num = g_nv2a_stats.frame_count;
-        diag_draw_index = 0;
-        diag_json_len = 0;
-        diag_json_append("[\n");
-        qatomic_set(&diag_frame_active, 1);
-        fprintf(stderr, "diag: starting capture for frame %u\n",
-                diag_frame_num);
-#ifdef __ANDROID__
-        __android_log_print(ANDROID_LOG_INFO, "xemu-diag",
-                            "starting capture for frame %u", diag_frame_num);
-#endif
+    {
+        int pending = qatomic_read(&diag_frame_pending);
+        if (pending > 0) {
+            DIAG_LOG("flip_stall: pending=%d, starting capture\n", pending);
+            qatomic_set(&diag_frame_pending, 0);
+            diag_frame_num = g_nv2a_stats.frame_count;
+            diag_draw_index = 0;
+            diag_json_len = 0;
+            diag_init_session(diag_frame_num, pending);
+            qatomic_set(&diag_frame_active, 1);
+            DIAG_LOG("capture started: %d frames at frame %u\n",
+                     pending, diag_frame_num);
+        }
     }
 
-    maybe_dump_render_target(d);
     pgraph_vk_debug_frame_terminator();
 }
 

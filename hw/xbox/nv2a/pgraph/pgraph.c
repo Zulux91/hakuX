@@ -1763,6 +1763,14 @@ DEF_METHOD(NV097, FLIP_INCREMENT_WRITE)
 
     trace_nv2a_pgraph_flip_increment_write(old, new);
     pg->frame_time++;
+
+    /* Fallback: process diag capture at frame boundary when
+     * FLIP_STALL may not be called (after pause/resume). */
+    if (nv2a_dbg_diag_frame_pending() || nv2a_dbg_diag_frame_active()) {
+        d->pgraph.renderer->ops.surface_update(d, false, true, true);
+        d->pgraph.renderer->ops.flip_stall(d);
+        nv2a_profile_flip_stall();
+    }
 }
 
 DEF_METHOD(NV097, FLIP_STALL)

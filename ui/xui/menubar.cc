@@ -82,6 +82,7 @@ void ProcessKeyboardShortcuts(void)
         nv2a_dbg_renderdoc_capture_frames(num_frames, io.KeyCtrl);
     }
 #endif
+
 }
 
 void ShowMainMenu()

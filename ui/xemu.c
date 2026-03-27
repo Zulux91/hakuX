@@ -55,6 +55,7 @@
 
 #include "hw/xbox/smbus.h" // For eject, drive tray
 #include "hw/xbox/nv2a/nv2a.h"
+#include "hw/xbox/nv2a/nv2a_int.h"
 #include "hw/xbox/nv2a/debug.h"
 #include "ui/xemu-notifications.h"
 
@@ -1450,6 +1451,9 @@ void xemu_android_display_loop(void)
             break;
         }
         if (g_android_vm_pause_requested) {
+            __android_log_print(ANDROID_LOG_INFO, "xemu-diag",
+                "display_loop: pause requested, running=%d",
+                runstate_is_running());
             qemu_mutex_lock_main_loop();
             bql_lock();
             if (runstate_is_running()) {
@@ -1458,6 +1462,57 @@ void xemu_android_display_loop(void)
             g_android_vm_pause_requested = false;
             bql_unlock();
             qemu_mutex_unlock_main_loop();
+            __android_log_print(ANDROID_LOG_INFO, "xemu-diag",
+                "display_loop: paused, running=%d", runstate_is_running());
+        }
+        if (g_android_vm_resume_requested) {
+            __android_log_print(ANDROID_LOG_INFO, "xemu-diag",
+                "display_loop: resume requested, running=%d paused=%d hidden=%d",
+                runstate_is_running(), g_android_paused,
+                sdl2_console[0].hidden);
+            qemu_mutex_lock_main_loop();
+            bql_lock();
+            if (!runstate_is_running()) {
+                /* Clear flip stall to prevent deadlock after pause/resume.
+                 * The VBLANK handler may not have fired while paused, leaving
+                 * the FIFO stuck waiting for a flip that will never complete. */
+                vm_start();
+
+                /* Unstick GPU after pause: clear all stall conditions
+                 * and kick the FIFO thread to resume command processing. */
+                extern NV2AState *g_nv2a;
+                extern void pfifo_kick(NV2AState *d);
+                NV2AState *nv2a = g_nv2a;
+                if (nv2a) {
+                    __android_log_print(ANDROID_LOG_INFO, "xemu-diag",
+                        "display_loop: unsticking GPU: flip=%d nop=%d ctx=%d flip_active=%d",
+                        qatomic_read(&nv2a->pgraph.waiting_for_flip),
+                        qatomic_read(&nv2a->pgraph.waiting_for_nop),
+                        qatomic_read(&nv2a->pgraph.waiting_for_context_switch),
+                        nv2a->flip_active);
+                    qatomic_set(&nv2a->pgraph.waiting_for_flip, false);
+                    qatomic_set(&nv2a->pgraph.waiting_for_nop, false);
+                    qatomic_set(&nv2a->pgraph.waiting_for_context_switch, false);
+                    nv2a->flip_active = false;
+                    nv2a->vblank_deferred = false;
+
+                    /* Re-arm VBLANK timer */
+                    int64_t now_ns = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
+                    nv2a->vblank_next_target_ns = now_ns;
+                    timer_mod(nv2a->vblank_timer, now_ns);
+
+                    qemu_mutex_lock(&nv2a->pfifo.lock);
+                    pfifo_kick(nv2a);
+                    qemu_mutex_unlock(&nv2a->pfifo.lock);
+                    __android_log_print(ANDROID_LOG_INFO, "xemu-diag",
+                        "display_loop: GPU unstuck, FIFO kicked, vblank rearmed");
+                }
+            }
+            g_android_vm_resume_requested = false;
+            bql_unlock();
+            qemu_mutex_unlock_main_loop();
+            __android_log_print(ANDROID_LOG_INFO, "xemu-diag",
+                "display_loop: resumed, running=%d", runstate_is_running());
         }
         if (g_android_paused || sdl2_console[0].hidden) {
             qemu_mutex_lock_main_loop();
@@ -1467,16 +1522,6 @@ void xemu_android_display_loop(void)
             qemu_mutex_unlock_main_loop();
             SDL_Delay(16);
             continue;
-        }
-        if (g_android_vm_resume_requested) {
-            qemu_mutex_lock_main_loop();
-            bql_lock();
-            if (!runstate_is_running()) {
-                vm_start();
-            }
-            g_android_vm_resume_requested = false;
-            bql_unlock();
-            qemu_mutex_unlock_main_loop();
         }
         sdl2_gl_refresh(&sdl2_console[0].dcl);
 #ifdef __ANDROID__
