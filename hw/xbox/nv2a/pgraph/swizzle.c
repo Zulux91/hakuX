@@ -25,6 +25,10 @@
 #include <assert.h>
 #include <stdbool.h>
 
+#ifdef __aarch64__
+#include <arm_neon.h>
+#endif
+
 #include "swizzle.h"
 
 /*
@@ -69,6 +73,81 @@ static void generate_swizzle_masks(unsigned int width,
     *mask_z = z;
 }
 
+static inline uint32_t swizzle_increment_offset(uint32_t offset, uint32_t mask)
+{
+    return (offset - mask) & mask;
+}
+
+#ifdef __aarch64__
+/*
+ * In 2D Morton order, each aligned 2x2 RGBA8 block maps to 16 contiguous
+ * bytes in swizzled memory. That lets us move four pixels at a time with a
+ * single NEON load/store pair while keeping the existing scalar path for
+ * everything else.
+ */
+static inline void swizzle_box_neon_2d_rgba8(const uint8_t *src_buf,
+                                             unsigned int width,
+                                             unsigned int height,
+                                             uint8_t *dst_buf,
+                                             unsigned int row_pitch,
+                                             uint32_t mask_x,
+                                             uint32_t mask_y)
+{
+    uint32_t off_y = 0;
+
+    for (unsigned int y = 0; y < height; y += 2) {
+        const uint8_t *src_row0 = src_buf + y * row_pitch;
+        const uint8_t *src_row1 = src_row0 + row_pitch;
+        uint32_t off_x = 0;
+
+        for (unsigned int x = 0; x < width; x += 2) {
+            uint8x8_t row0 = vld1_u8(src_row0 + x * 4);
+            uint8x8_t row1 = vld1_u8(src_row1 + x * 4);
+
+            vst1q_u8(dst_buf + ((size_t)off_y + off_x) * 4,
+                     vcombine_u8(row0, row1));
+
+            off_x = swizzle_increment_offset(off_x, mask_x);
+            off_x = swizzle_increment_offset(off_x, mask_x);
+        }
+
+        off_y = swizzle_increment_offset(off_y, mask_y);
+        off_y = swizzle_increment_offset(off_y, mask_y);
+    }
+}
+
+static inline void unswizzle_box_neon_2d_rgba8(const uint8_t *src_buf,
+                                               unsigned int width,
+                                               unsigned int height,
+                                               uint8_t *dst_buf,
+                                               unsigned int row_pitch,
+                                               uint32_t mask_x,
+                                               uint32_t mask_y)
+{
+    uint32_t off_y = 0;
+
+    for (unsigned int y = 0; y < height; y += 2) {
+        uint8_t *dst_row0 = dst_buf + y * row_pitch;
+        uint8_t *dst_row1 = dst_row0 + row_pitch;
+        uint32_t off_x = 0;
+
+        for (unsigned int x = 0; x < width; x += 2) {
+            uint8x16_t block =
+                vld1q_u8(src_buf + ((size_t)off_y + off_x) * 4);
+
+            vst1_u8(dst_row0 + x * 4, vget_low_u8(block));
+            vst1_u8(dst_row1 + x * 4, vget_high_u8(block));
+
+            off_x = swizzle_increment_offset(off_x, mask_x);
+            off_x = swizzle_increment_offset(off_x, mask_x);
+        }
+
+        off_y = swizzle_increment_offset(off_y, mask_y);
+        off_y = swizzle_increment_offset(off_y, mask_y);
+    }
+}
+#endif
+
 static inline void swizzle_box_internal(
     const uint8_t *src_buf,
     unsigned int width,
@@ -81,6 +160,14 @@ static inline void swizzle_box_internal(
 {
     uint32_t mask_x, mask_y, mask_z;
     generate_swizzle_masks(width, height, depth, &mask_x, &mask_y, &mask_z);
+
+#ifdef __aarch64__
+    if (bytes_per_pixel == 4 && depth == 1 && width >= 2 && height >= 2) {
+        swizzle_box_neon_2d_rgba8(src_buf, width, height, dst_buf, row_pitch,
+                                  mask_x, mask_y);
+        return;
+    }
+#endif
 
     /*
      * Map linear texture to swizzled texture using swizzle masks.
@@ -106,12 +193,12 @@ static inline void swizzle_box_internal(
                  * Equivalent to:
                  * off_x = (off_x + (~mask_x + 1)) & mask_x;
                  */
-                off_x = (off_x - mask_x) & mask_x;
+                off_x = swizzle_increment_offset(off_x, mask_x);
             }
-            off_y = (off_y - mask_y) & mask_y;
+            off_y = swizzle_increment_offset(off_y, mask_y);
         }
         src_buf += slice_pitch;
-        off_z = (off_z - mask_z) & mask_z;
+        off_z = swizzle_increment_offset(off_z, mask_z);
     }
 }
 
@@ -128,6 +215,14 @@ static inline void unswizzle_box_internal(
     uint32_t mask_x, mask_y, mask_z;
     generate_swizzle_masks(width, height, depth, &mask_x, &mask_y, &mask_z);
 
+#ifdef __aarch64__
+    if (bytes_per_pixel == 4 && depth == 1 && width >= 2 && height >= 2) {
+        unswizzle_box_neon_2d_rgba8(src_buf, width, height, dst_buf, row_pitch,
+                                    mask_x, mask_y);
+        return;
+    }
+#endif
+
     int x, y, z;
     int off_z = 0;
     for (z = 0; z < depth; z++) {
@@ -141,12 +236,12 @@ static inline void unswizzle_box_internal(
                 uint8_t *dst = dst_tmp + x * bytes_per_pixel;
                 memcpy(dst, src, bytes_per_pixel);
 
-                off_x = (off_x - mask_x) & mask_x;
+                off_x = swizzle_increment_offset(off_x, mask_x);
             }
-            off_y = (off_y - mask_y) & mask_y;
+            off_y = swizzle_increment_offset(off_y, mask_y);
         }
         dst_buf += slice_pitch;
-        off_z = (off_z - mask_z) & mask_z;
+        off_z = swizzle_increment_offset(off_z, mask_z);
     }
 }
 
