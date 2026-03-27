@@ -141,7 +141,8 @@ static GLuint create_gl_shader(GLenum gl_shader_type,
         g_free(log);
 
         NV2A_GL_DGROUP_END();
-        abort();
+        glDeleteShader(shader);
+        return 0;
     }
 
     NV2A_GL_DGROUP_END();
@@ -296,7 +297,12 @@ static void generate_shaders(PGRAPHGLState *r, ShaderBinding *binding)
         GLchar log[2048];
         glGetProgramInfoLog(program, 2048, NULL, log);
         fprintf(stderr, "nv2a: shader linking failed: %s\n", log);
-        abort();
+#ifdef __ANDROID__
+        __android_log_print(ANDROID_LOG_ERROR, "hakuX",
+                            "nv2a: shader linking failed: %s", log);
+#endif
+        glDeleteProgram(program);
+        return;
     }
 
     glUseProgram(program);
@@ -316,7 +322,11 @@ static void generate_shaders(PGRAPHGLState *r, ShaderBinding *binding)
         GLchar log[1024];
         glGetProgramInfoLog(program, 1024, NULL, log);
         fprintf(stderr, "nv2a: shader validation failed: %s\n", log);
-        abort();
+#ifdef __ANDROID__
+        __android_log_print(ANDROID_LOG_WARN, "hakuX",
+                            "nv2a: shader validation failed: %s", log);
+#endif
+        /* Continue anyway — validation failures are often non-fatal */
     }
 
     update_shader_uniform_locs(binding);
