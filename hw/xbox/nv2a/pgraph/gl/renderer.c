@@ -91,6 +91,9 @@ static void pgraph_gl_init(NV2AState *d, Error **errp)
     pg->gl_renderer_state = g_malloc0(sizeof(*pg->gl_renderer_state));
     PGRAPHGLState *r = pg->gl_renderer_state;
 
+    /* Initialize GL state cache to unknown (-1) */
+    memset(&r->gl_cache, -1, sizeof(r->gl_cache));
+
     /* fire up opengl */
 #ifdef __ANDROID__
     if (!g_nv2a_context_render) {

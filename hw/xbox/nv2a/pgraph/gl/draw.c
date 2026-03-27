@@ -44,6 +44,75 @@ static inline void android_log_gl_errors(const char *ctx)
 }
 #endif
 
+/* GL state cache helpers — skip redundant glEnable/glDisable/etc calls */
+static inline void gl_cache_enable(PGRAPHGLState *r, GLenum cap, int *field)
+{
+    if (*field != 1) { glEnable(cap); *field = 1; }
+}
+static inline void gl_cache_disable(PGRAPHGLState *r, GLenum cap, int *field)
+{
+    if (*field != 0) { glDisable(cap); *field = 0; }
+}
+static inline void gl_cache_set_cap(PGRAPHGLState *r, GLenum cap, int *field, bool enable)
+{
+    if (enable) { gl_cache_enable(r, cap, field); }
+    else { gl_cache_disable(r, cap, field); }
+}
+static inline void gl_cache_blend_func(PGRAPHGLState *r, GLenum s, GLenum d)
+{
+    if (r->gl_cache.blend_sfactor != s || r->gl_cache.blend_dfactor != d) {
+        glBlendFunc(s, d);
+        r->gl_cache.blend_sfactor = s;
+        r->gl_cache.blend_dfactor = d;
+    }
+}
+static inline void gl_cache_blend_equation(PGRAPHGLState *r, GLenum eq)
+{
+    if (r->gl_cache.blend_equation != eq) {
+        glBlendEquation(eq);
+        r->gl_cache.blend_equation = eq;
+    }
+}
+static inline void gl_cache_depth_func(PGRAPHGLState *r, GLenum func)
+{
+    if (r->gl_cache.depth_func != func) {
+        glDepthFunc(func);
+        r->gl_cache.depth_func = func;
+    }
+}
+static inline void gl_cache_cull_face(PGRAPHGLState *r, GLenum mode)
+{
+    if (r->gl_cache.cull_mode != mode) {
+        glCullFace(mode);
+        r->gl_cache.cull_mode = mode;
+    }
+}
+static inline void gl_cache_front_face(PGRAPHGLState *r, GLenum mode)
+{
+    if (r->gl_cache.front_face != mode) {
+        glFrontFace(mode);
+        r->gl_cache.front_face = mode;
+    }
+}
+static inline void gl_cache_scissor(PGRAPHGLState *r, GLint x, GLint y, GLint w, GLint h)
+{
+    if (r->gl_cache.scissor_rect[0] != x || r->gl_cache.scissor_rect[1] != y ||
+        r->gl_cache.scissor_rect[2] != w || r->gl_cache.scissor_rect[3] != h) {
+        glScissor(x, y, w, h);
+        r->gl_cache.scissor_rect[0] = x; r->gl_cache.scissor_rect[1] = y;
+        r->gl_cache.scissor_rect[2] = w; r->gl_cache.scissor_rect[3] = h;
+    }
+}
+static inline void gl_cache_viewport(PGRAPHGLState *r, GLint x, GLint y, GLint w, GLint h)
+{
+    if (r->gl_cache.viewport[0] != x || r->gl_cache.viewport[1] != y ||
+        r->gl_cache.viewport[2] != w || r->gl_cache.viewport[3] != h) {
+        glViewport(x, y, w, h);
+        r->gl_cache.viewport[0] = x; r->gl_cache.viewport[1] = y;
+        r->gl_cache.viewport[2] = w; r->gl_cache.viewport[3] = h;
+    }
+}
+
 void pgraph_gl_clear_surface(NV2AState *d, uint32_t parameter)
 {
     PGRAPHState *pg = &d->pgraph;
@@ -185,20 +254,20 @@ void pgraph_gl_draw_begin(NV2AState *d)
                            NV_PGRAPH_CONTROL_1_STENCIL_MASK_WRITE));
 
     if (pgraph_reg_r(pg, NV_PGRAPH_BLEND) & NV_PGRAPH_BLEND_EN) {
-        glEnable(GL_BLEND);
+        gl_cache_enable(r, GL_BLEND, &r->gl_cache.blend);
         uint32_t sfactor = GET_MASK(pgraph_reg_r(pg, NV_PGRAPH_BLEND),
                                     NV_PGRAPH_BLEND_SFACTOR);
         uint32_t dfactor = GET_MASK(pgraph_reg_r(pg, NV_PGRAPH_BLEND),
                                     NV_PGRAPH_BLEND_DFACTOR);
         assert(sfactor < ARRAY_SIZE(pgraph_blend_factor_gl_map));
         assert(dfactor < ARRAY_SIZE(pgraph_blend_factor_gl_map));
-        glBlendFunc(pgraph_blend_factor_gl_map[sfactor],
-                    pgraph_blend_factor_gl_map[dfactor]);
+        gl_cache_blend_func(r, pgraph_blend_factor_gl_map[sfactor],
+                               pgraph_blend_factor_gl_map[dfactor]);
 
         uint32_t equation = GET_MASK(pgraph_reg_r(pg, NV_PGRAPH_BLEND),
                                      NV_PGRAPH_BLEND_EQN);
         assert(equation < ARRAY_SIZE(pgraph_blend_equation_gl_map));
-        glBlendEquation(pgraph_blend_equation_gl_map[equation]);
+        gl_cache_blend_equation(r, pgraph_blend_equation_gl_map[equation]);
 
         uint32_t blend_color = pgraph_reg_r(pg, NV_PGRAPH_BLENDCOLOR);
         float gl_blend_color[4];
@@ -206,7 +275,7 @@ void pgraph_gl_draw_begin(NV2AState *d)
         glBlendColor(gl_blend_color[0], gl_blend_color[1], gl_blend_color[2],
                      gl_blend_color[3]);
     } else {
-        glDisable(GL_BLEND);
+        gl_cache_disable(r, GL_BLEND, &r->gl_cache.blend);
     }
 
     /* Face culling */
@@ -215,35 +284,34 @@ void pgraph_gl_draw_begin(NV2AState *d)
         uint32_t cull_face = GET_MASK(pgraph_reg_r(pg, NV_PGRAPH_SETUPRASTER),
                                       NV_PGRAPH_SETUPRASTER_CULLCTRL);
         assert(cull_face < ARRAY_SIZE(pgraph_cull_face_gl_map));
-        glCullFace(pgraph_cull_face_gl_map[cull_face]);
-        glEnable(GL_CULL_FACE);
+        gl_cache_cull_face(r, pgraph_cull_face_gl_map[cull_face]);
+        gl_cache_enable(r, GL_CULL_FACE, &r->gl_cache.cull_face);
     } else {
-        glDisable(GL_CULL_FACE);
+        gl_cache_disable(r, GL_CULL_FACE, &r->gl_cache.cull_face);
     }
 
     /* Front-face select */
-    /* Winding is reverse here because clip-space y-coordinates are inverted */
-    glFrontFace(pgraph_reg_r(pg, NV_PGRAPH_SETUPRASTER)
-                    & NV_PGRAPH_SETUPRASTER_FRONTFACE
-                        ? GL_CW : GL_CCW);
+    gl_cache_front_face(r, pgraph_reg_r(pg, NV_PGRAPH_SETUPRASTER)
+                               & NV_PGRAPH_SETUPRASTER_FRONTFACE
+                                   ? GL_CW : GL_CCW);
 
     /* Polygon offset is handled in geometry and fragment shaders explicitly */
     glDisable(GL_POLYGON_OFFSET_FILL);
-#ifndef __ANDROID__ /* GL_POLYGON_OFFSET_LINE/POINT not valid in GLES 3.x */
+#ifndef __ANDROID__
     glDisable(GL_POLYGON_OFFSET_LINE);
     glDisable(GL_POLYGON_OFFSET_POINT);
 #endif
 
     /* Depth testing */
     if (depth_test) {
-        glEnable(GL_DEPTH_TEST);
+        gl_cache_enable(r, GL_DEPTH_TEST, &r->gl_cache.depth_test);
 
         uint32_t depth_func = GET_MASK(pgraph_reg_r(pg, NV_PGRAPH_CONTROL_0),
                                        NV_PGRAPH_CONTROL_0_ZFUNC);
         assert(depth_func < ARRAY_SIZE(pgraph_depth_func_gl_map));
-        glDepthFunc(pgraph_depth_func_gl_map[depth_func]);
+        gl_cache_depth_func(r, pgraph_depth_func_gl_map[depth_func]);
     } else {
-        glDisable(GL_DEPTH_TEST);
+        gl_cache_disable(r, GL_DEPTH_TEST, &r->gl_cache.depth_test);
     }
 
 #ifndef __ANDROID__
@@ -256,7 +324,7 @@ void pgraph_gl_draw_begin(NV2AState *d)
 #endif
 
     if (stencil_test) {
-        glEnable(GL_STENCIL_TEST);
+        gl_cache_enable(r, GL_STENCIL_TEST, &r->gl_cache.stencil_test);
 
         uint32_t stencil_func = GET_MASK(pgraph_reg_r(pg, NV_PGRAPH_CONTROL_1),
                                     NV_PGRAPH_CONTROL_1_STENCIL_FUNC);
@@ -287,17 +355,13 @@ void pgraph_gl_draw_begin(NV2AState *d)
             pgraph_stencil_op_gl_map[op_zpass]);
 
     } else {
-        glDisable(GL_STENCIL_TEST);
+        gl_cache_disable(r, GL_STENCIL_TEST, &r->gl_cache.stencil_test);
     }
 
     /* Dither */
-    /* FIXME: GL implementation dependent */
-    if (pgraph_reg_r(pg, NV_PGRAPH_CONTROL_0) &
-            NV_PGRAPH_CONTROL_0_DITHERENABLE) {
-        glEnable(GL_DITHER);
-    } else {
-        glDisable(GL_DITHER);
-    }
+    gl_cache_set_cap(r, GL_DITHER, &r->gl_cache.dither,
+                     pgraph_reg_r(pg, NV_PGRAPH_CONTROL_0) &
+                         NV_PGRAPH_CONTROL_0_DITHERENABLE);
 
 #ifndef __ANDROID__
     /* GL_PROGRAM_POINT_SIZE is not a valid enum in GLES 3.x;
@@ -331,10 +395,9 @@ void pgraph_gl_draw_begin(NV2AState *d)
     unsigned int vp_width = pg->surface_binding_dim.width,
                  vp_height = pg->surface_binding_dim.height;
     pgraph_apply_scaling_factor(pg, &vp_width, &vp_height);
-    glViewport(0, 0, vp_width, vp_height);
+    gl_cache_viewport(r, 0, 0, vp_width, vp_height);
 
     /* Surface clip */
-    /* FIXME: Consider moving to PSH w/ window clip */
     unsigned int xmin = pg->surface_shape.clip_x,
                  ymin = pg->surface_shape.clip_y;
 
@@ -346,8 +409,8 @@ void pgraph_gl_draw_begin(NV2AState *d)
     pgraph_apply_scaling_factor(pg, &xmin, &ymin);
     pgraph_apply_scaling_factor(pg, &scissor_width, &scissor_height);
 
-    glEnable(GL_SCISSOR_TEST);
-    glScissor(xmin, ymin, scissor_width, scissor_height);
+    gl_cache_enable(r, GL_SCISSOR_TEST, &r->gl_cache.scissor_test);
+    gl_cache_scissor(r, xmin, ymin, scissor_width, scissor_height);
 
     /* Visibility testing */
     bool zpass_query_enabled = pg->zpass_pixel_count_enable;

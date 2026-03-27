@@ -60,85 +60,34 @@ static void gl_log_errors(const char *ctx)
 #endif
 
 #ifdef __ANDROID__
+/* Minimal GL state save/restore for display blit.
+ * Only save what render_display() modifies and what can't be
+ * reconstructed by pgraph_gl_draw_begin() on the next draw call.
+ * The draw path sets blend/depth/scissor/stencil/cull unconditionally,
+ * so we don't need to preserve those. */
 typedef struct AndroidDisplayGLState {
     GLint framebuffer;
-    GLint program;
-    GLint vertex_array;
-    GLint array_buffer;
-    GLint active_texture;
-    GLint texture_2d_unit0;
     GLint viewport[4];
-    GLboolean color_mask[4];
-    GLfloat clear_color[4];
-    GLboolean scissor_test;
-    GLboolean blend;
-    GLboolean stencil_test;
-    GLboolean cull_face;
-    GLboolean depth_test;
 } AndroidDisplayGLState;
 
-static void android_display_capture_gl_state(AndroidDisplayGLState *state)
+static void android_display_save_state(AndroidDisplayGLState *state)
 {
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &state->framebuffer);
-    glGetIntegerv(GL_CURRENT_PROGRAM, &state->program);
-    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &state->vertex_array);
-    glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &state->array_buffer);
-    glGetIntegerv(GL_ACTIVE_TEXTURE, &state->active_texture);
-    glActiveTexture(GL_TEXTURE0);
-    glGetIntegerv(GL_TEXTURE_BINDING_2D, &state->texture_2d_unit0);
-    glActiveTexture(state->active_texture);
     glGetIntegerv(GL_VIEWPORT, state->viewport);
-    glGetBooleanv(GL_COLOR_WRITEMASK, state->color_mask);
-    glGetFloatv(GL_COLOR_CLEAR_VALUE, state->clear_color);
-    state->scissor_test = glIsEnabled(GL_SCISSOR_TEST);
-    state->blend = glIsEnabled(GL_BLEND);
-    state->stencil_test = glIsEnabled(GL_STENCIL_TEST);
-    state->cull_face = glIsEnabled(GL_CULL_FACE);
-    state->depth_test = glIsEnabled(GL_DEPTH_TEST);
 }
 
-static void android_display_restore_gl_state(
-    const AndroidDisplayGLState *state)
+static void android_display_restore_state(const AndroidDisplayGLState *state)
 {
     glBindFramebuffer(GL_FRAMEBUFFER, state->framebuffer);
-    glUseProgram(state->program);
-    glBindVertexArray(state->vertex_array);
-    glBindBuffer(GL_ARRAY_BUFFER, state->array_buffer);
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, state->texture_2d_unit0);
-    glActiveTexture(state->active_texture);
     glViewport(state->viewport[0], state->viewport[1],
                state->viewport[2], state->viewport[3]);
-    glColorMask(state->color_mask[0], state->color_mask[1],
-                state->color_mask[2], state->color_mask[3]);
-    glClearColor(state->clear_color[0], state->clear_color[1],
-                 state->clear_color[2], state->clear_color[3]);
-
-    if (state->scissor_test) {
-        glEnable(GL_SCISSOR_TEST);
-    } else {
-        glDisable(GL_SCISSOR_TEST);
-    }
-    if (state->blend) {
-        glEnable(GL_BLEND);
-    } else {
-        glDisable(GL_BLEND);
-    }
-    if (state->stencil_test) {
-        glEnable(GL_STENCIL_TEST);
-    } else {
-        glDisable(GL_STENCIL_TEST);
-    }
-    if (state->cull_face) {
-        glEnable(GL_CULL_FACE);
-    } else {
-        glDisable(GL_CULL_FACE);
-    }
-    if (state->depth_test) {
-        glEnable(GL_DEPTH_TEST);
-    } else {
-        glDisable(GL_DEPTH_TEST);
-    }
+    /* Reset capabilities to safe defaults — the NV2A draw path
+     * will set them to the correct values on the next draw call. */
+    glDisable(GL_BLEND);
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_DEPTH_TEST);
+    glUseProgram(0);
+    glBindVertexArray(0);
 }
 #endif
 
@@ -609,10 +558,10 @@ void pgraph_gl_sync(NV2AState *d)
 
         glo_set_current(g_nv2a_context_render);
         GL_ASSERT_NO_ERROR("pgraph_gl_sync: pre-render");
-        android_display_capture_gl_state(&state);
+        android_display_save_state(&state);
         render_display(d, surface);
         GL_ASSERT_NO_ERROR("pgraph_gl_sync: render display");
-        android_display_restore_gl_state(&state);
+        android_display_restore_state(&state);
         gl_fence();
         GL_ASSERT_NO_ERROR("pgraph_gl_sync: render finish");
     }

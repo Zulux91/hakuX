@@ -2391,6 +2391,43 @@ static void surface_copy_expand_row(uint8_t *out, uint8_t *in,
                                     unsigned int bytes_per_pixel,
                                     unsigned int factor)
 {
+#ifdef __aarch64__
+    /* NEON fast path: duplicate each 32-bit pixel by factor 2 */
+    if (bytes_per_pixel == 4 && factor == 2 && width >= 4) {
+        const uint32_t *in32 = (const uint32_t *)in;
+        uint32_t *out32 = (uint32_t *)out;
+        unsigned int x = 0;
+        for (; x + 4 <= width; x += 4) {
+            uint32x4_t pixels = vld1q_u32(in32 + x);
+            uint32x4x2_t zipped = vzipq_u32(pixels, pixels);
+            vst1q_u32(out32 + x * 2, zipped.val[0]);
+            vst1q_u32(out32 + x * 2 + 4, zipped.val[1]);
+        }
+        /* Scalar tail */
+        for (; x < width; x++) {
+            out32[x * 2] = in32[x];
+            out32[x * 2 + 1] = in32[x];
+        }
+        return;
+    }
+    /* NEON fast path: duplicate each 16-bit pixel by factor 2 */
+    if (bytes_per_pixel == 2 && factor == 2 && width >= 8) {
+        const uint16_t *in16 = (const uint16_t *)in;
+        uint16_t *out16 = (uint16_t *)out;
+        unsigned int x = 0;
+        for (; x + 8 <= width; x += 8) {
+            uint16x8_t pixels = vld1q_u16(in16 + x);
+            uint16x8x2_t zipped = vzipq_u16(pixels, pixels);
+            vst1q_u16(out16 + x * 2, zipped.val[0]);
+            vst1q_u16(out16 + x * 2 + 8, zipped.val[1]);
+        }
+        for (; x < width; x++) {
+            out16[x * 2] = in16[x];
+            out16[x * 2 + 1] = in16[x];
+        }
+        return;
+    }
+#endif
     if (bytes_per_pixel == 4) {
         for (unsigned int x = 0; x < width; x++) {
             for (unsigned int i = 0; i < factor; i++) {
