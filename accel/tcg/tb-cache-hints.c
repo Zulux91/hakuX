@@ -158,7 +158,7 @@ void tb_cache_record_hint(const TranslationBlock *tb)
         dedup_table    = g_new0(uint32_t, TB_CACHE_HASH_BUCKETS);
         recorded_count = 0;
 #ifdef __ANDROID__
-        __android_log_print(ANDROID_LOG_INFO, "tb-cache",
+        __android_log_print(ANDROID_LOG_INFO, "hakuX-tb",
                             "recording started (max %d hints)",
                             TB_CACHE_MAX_HINTS);
 #endif
@@ -414,7 +414,7 @@ void tb_cache_prewarm(CPUState *cpu)
              translated, tier1_count, skipped);
 
 #ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_INFO, "tb-cache",
+    __android_log_print(ANDROID_LOG_INFO, "hakuX-tb",
                         "prewarm: translated %d (tier1=%d), skipped %d",
                         translated, tier1_count, skipped);
 #endif
@@ -477,7 +477,7 @@ void tb_cache_do_log_stats(void)
                   : 0;
 
 #ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_INFO, "tb-cache",
+    __android_log_print(ANDROID_LOG_INFO, "hakuX-tb",
                         "hits=%" PRIu64 " misses=%" PRIu64
                         " rate=%d%%  |  total: recorded=%d"
                         " prewarmed=%d lookups=%" PRIu64,
@@ -546,7 +546,7 @@ void tb_cache_rewarm_after_flush(CPUState *cpu)
     }
 
 #ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_INFO, "tb-cache",
+    __android_log_print(ANDROID_LOG_INFO, "hakuX-tb",
                         "post-flush rewarm: re-translated %d/%d blocks (tier1=%d)",
                         translated, total, tier1_count);
 #endif

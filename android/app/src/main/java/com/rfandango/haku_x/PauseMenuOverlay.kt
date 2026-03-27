@@ -124,11 +124,11 @@ class PauseMenuOverlay(context: Context) : FrameLayout(context) {
             bg.setColor(Color.argb(200, 40, 100, 70))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
             setOnClickListener {
-                android.util.Log.i("xemu-diag", "capture: dismissing first (resume), then setting $frames frame pending")
+                android.util.Log.i("hakuX-diag", "capture: dismissing first (resume), then setting $frames frame pending")
                 onDismiss?.invoke()
                 // Post with delay to let the game produce a few frames first
                 postDelayed({
-                    android.util.Log.i("xemu-diag", "capture: now setting $frames frame pending")
+                    android.util.Log.i("hakuX-diag", "capture: now setting $frames frame pending")
                     onDiagCapture?.invoke(frames)
                 }, 2000)
             }

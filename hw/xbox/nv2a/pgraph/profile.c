@@ -254,9 +254,9 @@ void nv2a_profile_flip_stall(void)
     if ((g_nv2a_stats.frame_count % 60) == 0) {
         char buf[512];
         nv2a_profile_get_phase_timing_str(buf, sizeof(buf));
-        __android_log_print(ANDROID_LOG_INFO, "xemu-phase", "%s", buf);
+        __android_log_print(ANDROID_LOG_INFO, "hakuX-phase", "%s", buf);
         nv2a_profile_get_cpu_timing_str(buf, sizeof(buf));
-        __android_log_print(ANDROID_LOG_INFO, "xemu-cpu", "%s", buf);
+        __android_log_print(ANDROID_LOG_INFO, "hakuX-cpu", "%s", buf);
         nv2a_profile_get_vsync_timing_str(buf, sizeof(buf));
         __android_log_print(ANDROID_LOG_INFO, "xemu-vsync", "%s", buf);
         nv2a_profile_get_surf_timing_str(buf, sizeof(buf));

@@ -26,7 +26,7 @@
 extern bool xemu_get_frame_skip(void);
 #ifdef __ANDROID__
 #include <android/log.h>
-#define DBG_LOG(...) __android_log_print(ANDROID_LOG_INFO, "xemu-vk-dbg", __VA_ARGS__)
+#define DBG_LOG(...) __android_log_print(ANDROID_LOG_INFO, "hakuX-vk-dbg", __VA_ARGS__)
 #else
 #define DBG_LOG(...) fprintf(stderr, __VA_ARGS__)
 #endif
@@ -98,7 +98,7 @@ static void check_driver_identity_and_wipe_caches(PGRAPHVkState *r)
 
         VK_LOG("Driver changed -- wiping shader and pipeline caches");
 #ifdef __ANDROID__
-        __android_log_print(ANDROID_LOG_INFO, "xemu-vk",
+        __android_log_print(ANDROID_LOG_INFO, "hakuX-vk",
             "Driver identity mismatch: wiping spv_cache and pipeline cache "
             "(vendor=%04x device=%04x driverVer=%08x)",
             current.vendor_id, current.device_id, current.driver_version);
@@ -167,12 +167,12 @@ static void pgraph_vk_init(NV2AState *d, Error **errp)
     bool use_external_memory = pgraph_vk_gl_external_memory_available();
     if (!use_external_memory) {
 #ifdef __ANDROID__
-        __android_log_print(ANDROID_LOG_WARN, "xemu-android",
+        __android_log_print(ANDROID_LOG_WARN, "hakuX",
                             "pgraph_vk_init: external memory interop unavailable, using download fallback");
 #endif
     }
 #ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+    __android_log_print(ANDROID_LOG_INFO, "hakuX",
                         "pgraph_vk_init: external memory interop=%s",
                         use_external_memory ? "enabled" : "disabled");
 #endif
@@ -345,7 +345,7 @@ static void pgraph_vk_process_pending(NV2AState *d)
 }
 
 #ifdef __ANDROID__
-#define DIAG_LOG(...) __android_log_print(ANDROID_LOG_INFO, "xemu-diag", __VA_ARGS__)
+#define DIAG_LOG(...) __android_log_print(ANDROID_LOG_INFO, "hakuX-diag", __VA_ARGS__)
 #else
 #define DIAG_LOG(...) fprintf(stderr, "xemu-diag: " __VA_ARGS__)
 #endif

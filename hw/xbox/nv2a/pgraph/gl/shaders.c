@@ -51,7 +51,7 @@ static void android_log_shader_stage_errors(const char *ctx)
     GLenum err;
 
     while ((err = glGetError()) != GL_NO_ERROR) {
-        __android_log_print(ANDROID_LOG_WARN, "xemu-android",
+        __android_log_print(ANDROID_LOG_WARN, "hakuX",
                             "GL error 0x%X at %s", err, ctx);
     }
 }
@@ -61,7 +61,7 @@ static void android_log_apply_uniform_entry_errors(const char *uniform_set)
     GLenum err;
 
     while ((err = glGetError()) != GL_NO_ERROR) {
-        __android_log_print(ANDROID_LOG_WARN, "xemu-android",
+        __android_log_print(ANDROID_LOG_WARN, "hakuX",
                             "GL error 0x%X before apply_uniform_updates:%s",
                             err, uniform_set);
     }
@@ -75,7 +75,7 @@ static void android_log_uniform_update_errors(const char *uniform_set,
 
     while ((err = glGetError()) != GL_NO_ERROR) {
         __android_log_print(
-            ANDROID_LOG_WARN, "xemu-android",
+            ANDROID_LOG_WARN, "hakuX",
             "GL error 0x%X at apply_uniform_updates:%s.%s type=%s count=%zu "
             "loc=%d",
             err, uniform_set, info->name,
@@ -95,7 +95,7 @@ static void log_shader_source_with_line_numbers(const char *name,
         size_t len = line_end ? (size_t)(line_end - line) : strlen(line);
 
 #ifdef __ANDROID__
-        __android_log_print(ANDROID_LOG_ERROR, "xemu-android",
+        __android_log_print(ANDROID_LOG_ERROR, "hakuX",
                             "%s %4d | %.*s", name, line_no, (int)len, line);
 #endif
         fprintf(stderr, "%s %4d | %.*s\n", name, line_no, (int)len, line);

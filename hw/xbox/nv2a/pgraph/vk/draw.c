@@ -136,7 +136,7 @@ static void opt_stats_log_and_reset(void)
                 g_opt_stats.reorder_reject_zpass,
                 g_opt_stats.draws_skipped_pending,
                 g_opt_stats.draws_skipped_frameskip);
-        __android_log_print(ANDROID_LOG_INFO, "xemu-stall",
+        __android_log_print(ANDROID_LOG_INFO, "hakuX-stall",
                 "RPBreaks:%d Finish:%d(vtx%d sc%d sd%d buf%d fb%d pres%d flip%d flu%d stl%d stlDef%d stlBat%d) InlClr:%d/%d PreDL:%d sd[ev%d noCb%d dl%d cDef%d cDefC%d pDl%d dDl%d] dlSrc[defFb%d ppdFb%d dirtyIf%d] dif[ovl%d ovlSh%d exp%d expSh%d blt%d flu%d dds%d oth%d]",
                 g_opt_stats.render_pass_breaks,
                 g_opt_stats.finish_calls,
@@ -172,7 +172,7 @@ static void opt_stats_log_and_reset(void)
                 g_opt_stats.dif_flush,
                 g_opt_stats.dif_dds_fb,
                 g_opt_stats.dif_other);
-        __android_log_print(ANDROID_LOG_INFO, "xemu-stall",
+        __android_log_print(ANDROID_LOG_INFO, "hakuX-stall",
                 "buf_detail: ds%d ubo%d fb%d stg%d comp%d vtx%d",
                 g_opt_stats.buf_ds_full,
                 g_opt_stats.buf_ubo_full,

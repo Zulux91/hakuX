@@ -169,7 +169,7 @@ const char *xemu_settings_get_base_path(void)
     }
     base_path = base ? strdup(base) : strdup("");
     SDL_free(base);
-    __android_log_print(ANDROID_LOG_INFO, "xemu-settings",
+    __android_log_print(ANDROID_LOG_INFO, "hakuX-config",
                         "xemu_settings_get_base_path: %s", base_path);
     return base_path;
 }

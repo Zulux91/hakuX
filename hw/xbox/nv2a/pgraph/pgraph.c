@@ -1016,7 +1016,7 @@ void nv2a_android_early_context_init(void)
     pgraph_gl_force_register();
 #endif
 #ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+    __android_log_print(ANDROID_LOG_INFO, "hakuX",
                         "nv2a_android_early_context_init: renderer=%d",
                         g_config.display.renderer);
 #endif
@@ -1024,7 +1024,7 @@ void nv2a_android_early_context_init(void)
         g_config.display.renderer = get_default_renderer();
         if (!renderers[g_config.display.renderer]) {
 #ifdef __ANDROID__
-            __android_log_print(ANDROID_LOG_ERROR, "xemu-android",
+            __android_log_print(ANDROID_LOG_ERROR, "hakuX",
                                 "nv2a_android_early_context_init: no renderer available");
 #endif
             fprintf(stderr, "Warning: No available renderer\n");
@@ -1054,7 +1054,7 @@ static bool attempt_renderer_init(PGRAPHState *pg)
 
     Error *local_err = NULL;
 #ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+    __android_log_print(ANDROID_LOG_INFO, "hakuX",
                         "attempt_renderer_init: renderer=%d name=%s",
                         g_config.display.renderer,
                         pg->renderer->name);
@@ -1065,7 +1065,7 @@ static bool attempt_renderer_init(PGRAPHState *pg)
     if (local_err) {
         const char *msg = error_get_pretty(local_err);
 #ifdef __ANDROID__
-        __android_log_print(ANDROID_LOG_ERROR, "xemu-android",
+        __android_log_print(ANDROID_LOG_ERROR, "hakuX",
                             "attempt_renderer_init failed: %s", msg ? msg : "(null)");
 #endif
         xemu_queue_error_message(msg);

@@ -220,7 +220,7 @@ static GLuint android_gl_compile_shader(GLenum type, const char *src)
 {
     GLuint shader = glCreateShader(type);
     if (!shader) {
-        __android_log_print(ANDROID_LOG_ERROR, "xemu-android",
+        __android_log_print(ANDROID_LOG_ERROR, "hakuX",
                             "android_gl_compile_shader: glCreateShader failed");
         return 0;
     }
@@ -232,7 +232,7 @@ static GLuint android_gl_compile_shader(GLenum type, const char *src)
         char log[1024] = {0};
         GLsizei len = 0;
         glGetShaderInfoLog(shader, (GLsizei)sizeof(log) - 1, &len, log);
-        __android_log_print(ANDROID_LOG_ERROR, "xemu-android",
+        __android_log_print(ANDROID_LOG_ERROR, "hakuX",
                             "shader compile failed: %s", log);
         glDeleteShader(shader);
         return 0;
@@ -286,7 +286,7 @@ static bool android_blit_init(void)
         char log[1024] = {0};
         GLsizei len = 0;
         glGetProgramInfoLog(prog, (GLsizei)sizeof(log) - 1, &len, log);
-        __android_log_print(ANDROID_LOG_ERROR, "xemu-android",
+        __android_log_print(ANDROID_LOG_ERROR, "hakuX",
                             "shader link failed: %s", log);
         glDeleteProgram(prog);
         return false;
@@ -787,14 +787,14 @@ static void handle_windowevent(SDL_Event *ev)
     case SDL_WINDOWEVENT_RESTORED:
 #ifdef __ANDROID__
         g_android_paused = false;
-        __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+        __android_log_print(ANDROID_LOG_INFO, "hakuX",
                             "android: window restored");
 #endif
         break;
     case SDL_WINDOWEVENT_MINIMIZED:
 #ifdef __ANDROID__
         g_android_paused = true;
-        __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+        __android_log_print(ANDROID_LOG_INFO, "hakuX",
                             "android: window minimized");
 #endif
         break;
@@ -808,7 +808,7 @@ static void handle_windowevent(SDL_Event *ev)
                 qemu_system_shutdown_request(SHUTDOWN_CAUSE_HOST_UI);
 #ifdef __ANDROID__
                 g_android_should_quit = true;
-                __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+                __android_log_print(ANDROID_LOG_INFO, "hakuX",
                                     "android: window close requested");
 #endif
             }
@@ -821,7 +821,7 @@ static void handle_windowevent(SDL_Event *ev)
         scon->hidden = false;
 #ifdef __ANDROID__
         g_android_paused = false;
-        __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+        __android_log_print(ANDROID_LOG_INFO, "hakuX",
                             "android: window shown");
 #endif
         break;
@@ -829,7 +829,7 @@ static void handle_windowevent(SDL_Event *ev)
         scon->hidden = true;
 #ifdef __ANDROID__
         g_android_paused = true;
-        __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+        __android_log_print(ANDROID_LOG_INFO, "hakuX",
                             "android: window hidden");
 #endif
         break;
@@ -889,7 +889,7 @@ void sdl2_poll_events(struct sdl2_console *scon)
                 qemu_system_shutdown_request(SHUTDOWN_CAUSE_HOST_UI);
 #ifdef __ANDROID__
                 g_android_should_quit = true;
-                __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+                __android_log_print(ANDROID_LOG_INFO, "hakuX",
                                     "android: SDL_QUIT");
 #endif
             }
@@ -914,7 +914,7 @@ void sdl2_poll_events(struct sdl2_console *scon)
         case SDL_APP_WILLENTERFOREGROUND:
         case SDL_APP_DIDENTERFOREGROUND:
             g_android_paused = false;
-            __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+            __android_log_print(ANDROID_LOG_INFO, "hakuX",
                                 "android: app foreground");
             break;
 #endif
@@ -1016,7 +1016,7 @@ static const DisplayChangeListenerOps dcl_gl_ops = {
 static void sdl2_display_very_early_init(DisplayOptions *o)
 {
 #ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+    __android_log_print(ANDROID_LOG_INFO, "hakuX",
                         "sdl2_display_very_early_init: start");
 #endif
 #if defined(__linux__) && !defined(__ANDROID__)
@@ -1034,7 +1034,7 @@ static void sdl2_display_very_early_init(DisplayOptions *o)
 
 #ifdef __ANDROID__
     SDL_setenv("SDL_AUDIODRIVER", "aaudio", 0);
-    __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+    __android_log_print(ANDROID_LOG_INFO, "hakuX",
                         "SDL_AUDIODRIVER=%s", SDL_getenv("SDL_AUDIODRIVER"));
 #endif
 
@@ -1183,7 +1183,7 @@ static void sdl2_display_very_early_init(DisplayOptions *o)
         exit(1);
     }
 #ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+    __android_log_print(ANDROID_LOG_INFO, "hakuX",
                         "sdl2_display_very_early_init: GL context current");
 #endif
 
@@ -1215,15 +1215,15 @@ static void sdl2_display_very_early_init(DisplayOptions *o)
         const char *exts = (const char *)glGetString(GL_EXTENSIONS);
         g_android_gl_bgra_supported = sdl2_gl_has_extension(exts, "GL_EXT_texture_format_BGRA8888") ||
                                       sdl2_gl_has_extension(exts, "GL_EXT_texture_format_BGRA8888_OES");
-        __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+        __android_log_print(ANDROID_LOG_INFO, "hakuX",
                             "GL_VENDOR=%s", vendor ? vendor : "(null)");
-        __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+        __android_log_print(ANDROID_LOG_INFO, "hakuX",
                             "GL_RENDERER=%s", renderer ? renderer : "(null)");
-        __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+        __android_log_print(ANDROID_LOG_INFO, "hakuX",
                             "GL_VERSION=%s", version ? version : "(null)");
-        __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+        __android_log_print(ANDROID_LOG_INFO, "hakuX",
                             "GLSL_VERSION=%s", sl ? sl : "(null)");
-        __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+        __android_log_print(ANDROID_LOG_INFO, "hakuX",
                             "GL_EXT_texture_format_BGRA8888=%s",
                             g_android_gl_bgra_supported ? "yes" : "no");
     }
@@ -1240,7 +1240,7 @@ static void sdl2_display_very_early_init(DisplayOptions *o)
 #endif
 
 #ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+    __android_log_print(ANDROID_LOG_INFO, "hakuX",
                         "sdl2_display_very_early_init: done");
 #endif
     // FIXME: atexit(sdl_cleanup);
@@ -1252,7 +1252,7 @@ static void sdl2_display_early_init(DisplayOptions *o)
     display_opengl = 1;
 
 #ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+    __android_log_print(ANDROID_LOG_INFO, "hakuX",
                         "sdl2_display_early_init");
 #endif
 #ifdef __ANDROID__
@@ -1274,7 +1274,7 @@ static void sdl2_display_init(DisplayState *ds, DisplayOptions *o)
 
     assert(o->type == DISPLAY_TYPE_XEMU);
 #ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+    __android_log_print(ANDROID_LOG_INFO, "hakuX",
                         "sdl2_display_init: begin");
 #else
     SDL_GL_MakeCurrent(m_window, m_context);
@@ -1348,7 +1348,7 @@ static void sdl2_display_init(DisplayState *ds, DisplayOptions *o)
     qemu_sem_post(&display_init_sem);
 
 #ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+    __android_log_print(ANDROID_LOG_INFO, "hakuX",
                         "sdl2_display_init: posted display_init_sem");
 #endif
 }
@@ -1382,7 +1382,7 @@ void xemu_android_display_preinit(void)
     sdl2_display_very_early_init(NULL);
     if (SDL_GL_MakeCurrent(m_window, m_context) != 0) {
 #ifdef __ANDROID__
-        __android_log_print(ANDROID_LOG_ERROR, "xemu-android",
+        __android_log_print(ANDROID_LOG_ERROR, "hakuX",
                             "xemu_android_display_preinit: make current failed: %s",
                             SDL_GetError());
 #endif
@@ -1391,7 +1391,7 @@ void xemu_android_display_preinit(void)
     // Cache EGL state now while GL context is current on this thread
     extern void glo_android_cache_current_egl_state(void);
     glo_android_cache_current_egl_state();
-    __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+    __android_log_print(ANDROID_LOG_INFO, "hakuX",
                         "xemu_android_display_preinit: cached EGL state");
 #endif
     nv2a_android_early_context_init();
@@ -1401,12 +1401,12 @@ void xemu_android_display_preinit(void)
 void xemu_android_display_wait_ready(void)
 {
 #ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+    __android_log_print(ANDROID_LOG_INFO, "hakuX",
                         "xemu_android_display_wait_ready: waiting");
 #endif
     qemu_sem_wait(&display_init_sem);
 #ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+    __android_log_print(ANDROID_LOG_INFO, "hakuX",
                         "xemu_android_display_wait_ready: ready");
 #endif
 }
@@ -1418,7 +1418,7 @@ void xemu_android_display_loop(void)
     g_android_paused = false;
     g_android_vm_pause_requested = false;
     g_android_vm_resume_requested = false;
-    __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+    __android_log_print(ANDROID_LOG_INFO, "hakuX",
                         "xemu_android_display_loop: start");
 #endif
     if (sdl_render_thread_id == 0) {
@@ -1427,7 +1427,7 @@ void xemu_android_display_loop(void)
     if (SDL_GL_GetCurrentContext() != m_context) {
         if (SDL_GL_MakeCurrent(m_window, m_context) != 0) {
 #ifdef __ANDROID__
-            __android_log_print(ANDROID_LOG_ERROR, "xemu-android",
+            __android_log_print(ANDROID_LOG_ERROR, "hakuX",
                                 "xemu_android_display_loop: make current failed: %s",
                                 SDL_GetError());
 #endif
@@ -1453,7 +1453,7 @@ void xemu_android_display_loop(void)
             break;
         }
         if (g_android_vm_pause_requested) {
-            __android_log_print(ANDROID_LOG_INFO, "xemu-diag",
+            __android_log_print(ANDROID_LOG_INFO, "hakuX-diag",
                 "display_loop: pause requested, running=%d",
                 runstate_is_running());
             qemu_mutex_lock_main_loop();
@@ -1464,11 +1464,11 @@ void xemu_android_display_loop(void)
             g_android_vm_pause_requested = false;
             bql_unlock();
             qemu_mutex_unlock_main_loop();
-            __android_log_print(ANDROID_LOG_INFO, "xemu-diag",
+            __android_log_print(ANDROID_LOG_INFO, "hakuX-diag",
                 "display_loop: paused, running=%d", runstate_is_running());
         }
         if (g_android_vm_resume_requested) {
-            __android_log_print(ANDROID_LOG_INFO, "xemu-diag",
+            __android_log_print(ANDROID_LOG_INFO, "hakuX-diag",
                 "display_loop: resume requested, running=%d paused=%d hidden=%d",
                 runstate_is_running(), g_android_paused,
                 sdl2_console[0].hidden);
@@ -1486,7 +1486,7 @@ void xemu_android_display_loop(void)
                 extern void pfifo_kick(NV2AState *d);
                 NV2AState *nv2a = g_nv2a;
                 if (nv2a) {
-                    __android_log_print(ANDROID_LOG_INFO, "xemu-diag",
+                    __android_log_print(ANDROID_LOG_INFO, "hakuX-diag",
                         "display_loop: unsticking GPU: flip=%d nop=%d ctx=%d flip_active=%d",
                         qatomic_read(&nv2a->pgraph.waiting_for_flip),
                         qatomic_read(&nv2a->pgraph.waiting_for_nop),
@@ -1506,14 +1506,14 @@ void xemu_android_display_loop(void)
                     qemu_mutex_lock(&nv2a->pfifo.lock);
                     pfifo_kick(nv2a);
                     qemu_mutex_unlock(&nv2a->pfifo.lock);
-                    __android_log_print(ANDROID_LOG_INFO, "xemu-diag",
+                    __android_log_print(ANDROID_LOG_INFO, "hakuX-diag",
                         "display_loop: GPU unstuck, FIFO kicked, vblank rearmed");
                 }
             }
             g_android_vm_resume_requested = false;
             bql_unlock();
             qemu_mutex_unlock_main_loop();
-            __android_log_print(ANDROID_LOG_INFO, "xemu-diag",
+            __android_log_print(ANDROID_LOG_INFO, "hakuX-diag",
                 "display_loop: resumed, running=%d", runstate_is_running());
         }
         if (g_android_paused || sdl2_console[0].hidden) {
@@ -1717,7 +1717,7 @@ void sdl2_gl_refresh(DisplayChangeListener *dcl)
     }
     if (g_android_paused || scon->hidden) {
         if ((g_android_frame_counter++ % 120) == 0) {
-            __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+            __android_log_print(ANDROID_LOG_INFO, "hakuX",
                                 "refresh paused: hidden=%d paused=%d runstate=%d",
                                 scon->hidden ? 1 : 0,
                                 g_android_paused ? 1 : 0,
@@ -1783,7 +1783,7 @@ void sdl2_gl_refresh(DisplayChangeListener *dcl)
     if (SDL_GL_MakeCurrent(scon->real_window, scon->winctx) != 0 ||
         SDL_GL_GetCurrentContext() == NULL) {
 #ifdef __ANDROID__
-        __android_log_print(ANDROID_LOG_ERROR, "xemu-android",
+        __android_log_print(ANDROID_LOG_ERROR, "hakuX",
                             "sdl2_gl_refresh: make current failed: %s",
                             SDL_GetError());
         g_android_paused = true;
@@ -1808,16 +1808,16 @@ void sdl2_gl_refresh(DisplayChangeListener *dcl)
         const char *env = SDL_getenv("XEMU_ANDROID_FORCE_CPU_BLIT");
         if (!env) {
             force_cpu_blit_mode = -1;
-            __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+            __android_log_print(ANDROID_LOG_INFO, "hakuX",
                                 "refresh: CPU blit mode auto");
         } else if (strcmp(env, "1") == 0 || strcmp(env, "true") == 0 ||
                    strcmp(env, "TRUE") == 0) {
             force_cpu_blit_mode = 1;
-            __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+            __android_log_print(ANDROID_LOG_INFO, "hakuX",
                                 "refresh: forcing CPU blit path");
         } else {
             force_cpu_blit_mode = 0;
-            __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+            __android_log_print(ANDROID_LOG_INFO, "hakuX",
                                 "refresh: CPU blit disabled via env");
         }
     }
@@ -1853,7 +1853,7 @@ void sdl2_gl_refresh(DisplayChangeListener *dcl)
                                        &g_android_cpu_buf_size,
                                        &rb_w, &rb_h)) {
             if ((g_android_frame_counter % 120) == 0) {
-                __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+                __android_log_print(ANDROID_LOG_INFO, "hakuX",
                                     "refresh: using readback %dx%d", rb_w, rb_h);
                 if (g_android_cpu_buf && rb_w > 0 && rb_h > 0) {
                     uint32_t tl = 0, mid = 0, br = 0;
@@ -1871,7 +1871,7 @@ void sdl2_gl_refresh(DisplayChangeListener *dcl)
                     if (tl_off + 4 <= g_android_cpu_buf_size) {
                         memcpy(&tl, g_android_cpu_buf + tl_off, sizeof(tl));
                     }
-                    __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+                    __android_log_print(ANDROID_LOG_INFO, "hakuX",
                                         "readback sample tl=%08x mid=%08x br=%08x",
                                         tl, mid, br);
                 }
@@ -1896,11 +1896,11 @@ void sdl2_gl_refresh(DisplayChangeListener *dcl)
             tex = g_android_cpu_tex;
             flip_required = true;
         } else if ((g_android_frame_counter % 120) == 0) {
-            __android_log_print(ANDROID_LOG_WARN, "xemu-android",
+            __android_log_print(ANDROID_LOG_WARN, "hakuX",
                                 "refresh: no readback available yet");
         }
         if ((g_android_frame_counter % 120) == 0) {
-            __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+            __android_log_print(ANDROID_LOG_INFO, "hakuX",
                                 "refresh: force CPU blit path");
         }
     } else {
@@ -1908,7 +1908,7 @@ void sdl2_gl_refresh(DisplayChangeListener *dcl)
 #ifdef XEMU_ANDROID_GL_DEBUG
         if (tex != 0 && glIsTexture(tex) == GL_FALSE) {
             if ((g_android_frame_counter % 120) == 0) {
-                __android_log_print(ANDROID_LOG_WARN, "xemu-android",
+                __android_log_print(ANDROID_LOG_WARN, "hakuX",
                                     "refresh: nv2a tex %u not valid in display context",
                                     (unsigned)tex);
             }
@@ -1922,7 +1922,7 @@ void sdl2_gl_refresh(DisplayChangeListener *dcl)
 #ifdef __ANDROID__
     android_log_gl_error("refresh-get-fb");
     if ((g_android_frame_counter % 120) == 0) {
-        __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+        __android_log_print(ANDROID_LOG_INFO, "hakuX",
                             "refresh frame=%llu tex=%u flip=%d surface=%p size=%dx%d runstate=%d",
                             (unsigned long long)g_android_frame_counter,
                             (unsigned)tex,
@@ -1948,7 +1948,7 @@ void sdl2_gl_refresh(DisplayChangeListener *dcl)
         flip_required = true;
 #ifdef __ANDROID__
         if ((g_android_frame_counter % 120) == 0) {
-            __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+            __android_log_print(ANDROID_LOG_INFO, "hakuX",
                                 "refresh no nv2a fb, using surface texture=%u",
                                 (unsigned)tex);
         }

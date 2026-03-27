@@ -760,7 +760,7 @@ static bool create_logical_device(PGRAPHState *pg, Error **errp)
                 desired_features[i].available == VK_TRUE ? "available" : "missing",
                 desired_features[i].required ? " (required)" : "");
 #ifdef __ANDROID__
-        __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+        __android_log_print(ANDROID_LOG_INFO, "hakuX",
                             "vk feature %s: %s%s",
                             desired_features[i].name,
                             desired_features[i].available == VK_TRUE ? "available" : "missing",
@@ -772,7 +772,7 @@ static bool create_logical_device(PGRAPHState *pg, Error **errp)
                     "Error: Device does not support required feature %s\n",
                     desired_features[i].name);
 #ifdef __ANDROID__
-            __android_log_print(ANDROID_LOG_ERROR, "xemu-android",
+            __android_log_print(ANDROID_LOG_ERROR, "hakuX",
                                 "vk required feature missing: %s",
                                 desired_features[i].name);
 #endif
@@ -901,7 +901,7 @@ static bool create_logical_device(PGRAPHState *pg, Error **errp)
                     r->tex_push_offset, r->max_vertex_push_attrs,
                     di_props.maxPerStageDescriptorUpdateAfterBindSampledImages);
 #ifdef __ANDROID__
-            __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+            __android_log_print(ANDROID_LOG_INFO, "hakuX",
                 "Bindless textures: enabled (push_offset=%u, max_vtx_attrs=%d)",
                 r->tex_push_offset, r->max_vertex_push_attrs);
 #endif
@@ -913,7 +913,7 @@ static bool create_logical_device(PGRAPHState *pg, Error **errp)
                     di_query.descriptorBindingSampledImageUpdateAfterBind,
                     di_props.maxPerStageDescriptorUpdateAfterBindSampledImages);
 #ifdef __ANDROID__
-            __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+            __android_log_print(ANDROID_LOG_INFO, "hakuX",
                 "Bindless textures: disabled (missing features)");
 #endif
         }
@@ -947,7 +947,7 @@ static bool create_logical_device(PGRAPHState *pg, Error **errp)
     }
 
 #ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+    __android_log_print(ANDROID_LOG_INFO, "hakuX",
                         "vk init stage: vkCreateDevice");
 #endif
     result = vkCreateDevice(r->physical_device, &device_create_info, NULL,
@@ -965,7 +965,7 @@ static bool create_logical_device(PGRAPHState *pg, Error **errp)
     }
 
 #ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+    __android_log_print(ANDROID_LOG_INFO, "hakuX",
                         "vk init stage: vkCreateDevice done");
 #endif
 
@@ -1058,7 +1058,7 @@ static bool init_allocator(PGRAPHState *pg, Error **errp)
     };
 
 #ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+    __android_log_print(ANDROID_LOG_INFO, "hakuX",
                         "vk init stage: vmaCreateAllocator");
 #endif
     result = vmaCreateAllocator(&create_info, &r->allocator);
@@ -1067,7 +1067,7 @@ static bool init_allocator(PGRAPHState *pg, Error **errp)
         return false;
     }
 #ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+    __android_log_print(ANDROID_LOG_INFO, "hakuX",
                         "vk init stage: vmaCreateAllocator done");
 #endif
 
@@ -1079,14 +1079,14 @@ void pgraph_vk_init_instance(PGRAPHState *pg, Error **errp)
     bool ok = false;
 
 #ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+    __android_log_print(ANDROID_LOG_INFO, "hakuX",
                         "vk init stage: create_instance");
 #endif
     if (!create_instance(pg, errp)) {
         goto done;
     }
 #ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+    __android_log_print(ANDROID_LOG_INFO, "hakuX",
                         "vk init stage: select_physical_device");
 #endif
     if (!select_physical_device(pg, errp)) {
@@ -1097,14 +1097,14 @@ void pgraph_vk_init_instance(PGRAPHState *pg, Error **errp)
         pg->vk_renderer_state->device_props.apiVersion);
 
 #ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+    __android_log_print(ANDROID_LOG_INFO, "hakuX",
                         "vk init stage: create_logical_device");
 #endif
     if (!create_logical_device(pg, errp)) {
         goto done;
     }
 #ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+    __android_log_print(ANDROID_LOG_INFO, "hakuX",
                         "vk init stage: init_allocator");
 #endif
     if (!init_allocator(pg, errp)) {
@@ -1116,7 +1116,7 @@ void pgraph_vk_init_instance(PGRAPHState *pg, Error **errp)
 done:
     if (ok) {
 #ifdef __ANDROID__
-        __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+        __android_log_print(ANDROID_LOG_INFO, "hakuX",
                             "vk init stage: complete");
 #endif
         return;

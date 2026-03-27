@@ -23,7 +23,7 @@
 #include <math.h>
 #ifdef __ANDROID__
 #include <android/log.h>
-#define DBG_LOG(...) __android_log_print(ANDROID_LOG_INFO, "xemu-vk-dbg", __VA_ARGS__)
+#define DBG_LOG(...) __android_log_print(ANDROID_LOG_INFO, "hakuX-vk-dbg", __VA_ARGS__)
 #else
 #define DBG_LOG(...) fprintf(stderr, __VA_ARGS__)
 #endif
@@ -73,7 +73,7 @@ static bool load_ahb_interop_symbols(VkDevice device)
                             p_glEGLImageTargetTexture2DOES &&
                             p_vkGetAndroidHardwareBufferPropertiesANDROID;
 
-    __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+    __android_log_print(ANDROID_LOG_INFO, "hakuX",
                         "AHB interop: %s", ahb_interop_available ? "available" : "NOT available");
     return ahb_interop_available;
 }
@@ -784,7 +784,7 @@ static bool create_single_display_image_resources(PGRAPHState *pg,
         };
         int ret = AHardwareBuffer_allocate(&ahb_desc, &img->ahb);
         if (ret != 0) {
-            __android_log_print(ANDROID_LOG_ERROR, "xemu-android",
+            __android_log_print(ANDROID_LOG_ERROR, "hakuX",
                                 "display: AHardwareBuffer_allocate failed (%d)", ret);
             return false;
         }
@@ -795,7 +795,7 @@ static bool create_single_display_image_resources(PGRAPHState *pg,
         VkResult result = p_vkGetAndroidHardwareBufferPropertiesANDROID(
             r->device, img->ahb, &ahb_props);
         if (result != VK_SUCCESS) {
-            __android_log_print(ANDROID_LOG_ERROR, "xemu-android",
+            __android_log_print(ANDROID_LOG_ERROR, "hakuX",
                                 "display: vkGetAndroidHardwareBufferProperties failed (%d)", result);
             destroy_single_display_image(pg, img);
             return false;
@@ -822,7 +822,7 @@ static bool create_single_display_image_resources(PGRAPHState *pg,
         };
         result = vkCreateImage(r->device, &image_create_info, NULL, &img->image);
         if (result != VK_SUCCESS) {
-            __android_log_print(ANDROID_LOG_ERROR, "xemu-android",
+            __android_log_print(ANDROID_LOG_ERROR, "hakuX",
                                 "display: vkCreateImage (AHB) failed (%d)", result);
             destroy_single_display_image(pg, img);
             return false;
@@ -836,7 +836,7 @@ static bool create_single_display_image_resources(PGRAPHState *pg,
                 pg, ahb_props.memoryTypeBits, 0);
         }
         if (memory_type_index == 0xFFFFFFFF) {
-            __android_log_print(ANDROID_LOG_ERROR, "xemu-android",
+            __android_log_print(ANDROID_LOG_ERROR, "hakuX",
                                 "display: no compatible memory type for AHB");
             destroy_single_display_image(pg, img);
             return false;
@@ -859,14 +859,14 @@ static bool create_single_display_image_resources(PGRAPHState *pg,
         };
         result = vkAllocateMemory(r->device, &alloc_info, NULL, &img->memory);
         if (result != VK_SUCCESS) {
-            __android_log_print(ANDROID_LOG_ERROR, "xemu-android",
+            __android_log_print(ANDROID_LOG_ERROR, "hakuX",
                                 "display: vkAllocateMemory (AHB import) failed (%d)", result);
             destroy_single_display_image(pg, img);
             return false;
         }
         result = vkBindImageMemory(r->device, img->image, img->memory, 0);
         if (result != VK_SUCCESS) {
-            __android_log_print(ANDROID_LOG_ERROR, "xemu-android",
+            __android_log_print(ANDROID_LOG_ERROR, "hakuX",
                                 "display: vkBindImageMemory (AHB) failed (%d)", result);
             destroy_single_display_image(pg, img);
             return false;
@@ -883,7 +883,7 @@ static bool create_single_display_image_resources(PGRAPHState *pg,
         };
         result = vkCreateImageView(r->device, &view_info, NULL, &img->image_view);
         if (result != VK_SUCCESS) {
-            __android_log_print(ANDROID_LOG_ERROR, "xemu-android",
+            __android_log_print(ANDROID_LOG_ERROR, "hakuX",
                                 "display: vkCreateImageView (AHB) failed (%d)", result);
             destroy_single_display_image(pg, img);
             return false;
@@ -904,7 +904,7 @@ static bool create_single_display_image_resources(PGRAPHState *pg,
 
         EGLClientBuffer client_buf = p_eglGetNativeClientBufferANDROID(img->ahb);
         if (!client_buf) {
-            __android_log_print(ANDROID_LOG_ERROR, "xemu-android",
+            __android_log_print(ANDROID_LOG_ERROR, "hakuX",
                                 "display: eglGetNativeClientBufferANDROID failed");
             destroy_single_display_image(pg, img);
             return false;
@@ -915,7 +915,7 @@ static bool create_single_display_image_resources(PGRAPHState *pg,
             eglGetCurrentDisplay(), EGL_NO_CONTEXT,
             EGL_NATIVE_BUFFER_ANDROID, client_buf, img_attrs);
         if (img->egl_image == EGL_NO_IMAGE_KHR) {
-            __android_log_print(ANDROID_LOG_ERROR, "xemu-android",
+            __android_log_print(ANDROID_LOG_ERROR, "hakuX",
                                 "display: eglCreateImageKHR failed (0x%x)", eglGetError());
             destroy_single_display_image(pg, img);
             return false;
@@ -928,13 +928,13 @@ static bool create_single_display_image_resources(PGRAPHState *pg,
         p_glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, (GLeglImageOES)img->egl_image);
         GLenum gl_err = glGetError();
         if (gl_err != GL_NO_ERROR) {
-            __android_log_print(ANDROID_LOG_ERROR, "xemu-android",
+            __android_log_print(ANDROID_LOG_ERROR, "hakuX",
                                 "display: glEGLImageTargetTexture2DOES failed (0x%x)", gl_err);
             destroy_single_display_image(pg, img);
             return false;
         }
 
-        __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+        __android_log_print(ANDROID_LOG_INFO, "hakuX",
                             "display: AHB image created %dx%d tex=%u",
                             width, height, img->gl_texture_id);
         return true;
@@ -1166,7 +1166,7 @@ static bool create_display_image(PGRAPHState *pg, int width, int height)
 
 #ifdef __ANDROID__
     if (use_external_memory && !load_ahb_interop_symbols(r->device)) {
-        __android_log_print(ANDROID_LOG_WARN, "xemu-android",
+        __android_log_print(ANDROID_LOG_WARN, "hakuX",
                             "display: AHB interop not available, using download fallback");
         d->use_external_memory = false;
         use_external_memory = false;
@@ -1620,7 +1620,7 @@ static void render_display(PGRAPHState *pg, SurfaceBinding *surface)
     {
         static int render_count = 0;
         if (render_count < 5) {
-            __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+            __android_log_print(ANDROID_LOG_INFO, "hakuX",
                 "display: render_display done #%d disp_idx=%d render_idx=%d tex=%u",
                 render_count, disp->display_idx, disp->render_idx,
                 disp->images[disp->display_idx].gl_texture_id);

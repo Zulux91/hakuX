@@ -348,7 +348,7 @@ class SetupWizardActivity : AppCompatActivity() {
   }
 
   private fun copyUriToAppStorage(uri: Uri, destName: String): String? {
-    val tag = "xemu-android"
+    val tag = "hakuX"
     val base = getExternalFilesDir(null) ?: filesDir
     val dir = File(base, "x1box")
     if (!dir.exists() && !dir.mkdirs()) {

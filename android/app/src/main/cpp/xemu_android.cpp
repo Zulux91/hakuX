@@ -857,7 +857,7 @@ static SetupFiles SyncSetupFiles() {
       size_t n = fread(buf, 1, sizeof(buf) - 1, f);
       buf[n] = '\0';
       fclose(f);
-      __android_log_print(ANDROID_LOG_INFO, "xemu-config",
+      __android_log_print(ANDROID_LOG_INFO, "hakuX-config",
                           "--- xemu.toml ---\n%s\n--- end ---", buf);
     }
   }

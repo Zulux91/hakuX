@@ -801,7 +801,7 @@ void tb_flush__exclusive_or_serial(void)
     qatomic_inc(&tb_ctx.tb_flush_count);
 
 #ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_WARN, "tb-cache",
+    __android_log_print(ANDROID_LOG_WARN, "hakuX-tb",
                         "TB FLUSH #%u -- all translations destroyed",
                         qatomic_read(&tb_ctx.tb_flush_count));
 #endif

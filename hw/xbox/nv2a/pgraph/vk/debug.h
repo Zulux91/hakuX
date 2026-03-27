@@ -26,12 +26,12 @@
 #include <android/log.h>
 #if VK_LOG_VERBOSE
 #define VK_LOG(fmt, ...) \
-    __android_log_print(ANDROID_LOG_INFO, "xemu-vk", fmt, ##__VA_ARGS__)
+    __android_log_print(ANDROID_LOG_INFO, "hakuX-vk", fmt, ##__VA_ARGS__)
 #else
 #define VK_LOG(fmt, ...) do { } while (0)
 #endif
 #define VK_LOG_ERROR(fmt, ...) \
-    __android_log_print(ANDROID_LOG_ERROR, "xemu-vk", fmt, ##__VA_ARGS__)
+    __android_log_print(ANDROID_LOG_ERROR, "hakuX-vk", fmt, ##__VA_ARGS__)
 #else
 #define VK_LOG(fmt, ...) do { } while (0)
 #define VK_LOG_ERROR(fmt, ...) do { fprintf(stderr, "xemu-vk: " fmt "\n", ##__VA_ARGS__); } while (0)
