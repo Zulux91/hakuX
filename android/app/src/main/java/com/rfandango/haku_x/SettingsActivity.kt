@@ -364,6 +364,44 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     refreshDriverStatus()
+
+    // Show only the relevant sections based on the index selection
+    val section = intent.getStringExtra("section")
+    if (section != null) {
+      applySectionFilter(section)
+    }
+  }
+
+  private fun applySectionFilter(section: String) {
+    val allSections = listOf(
+      R.id.section_games_folder,
+      R.id.section_system_files,
+      R.id.section_hard_disk,
+      R.id.section_display,
+      R.id.card_gpu_driver,
+      R.id.section_env_vars,
+      R.id.section_debug,
+      R.id.section_eeprom
+    )
+
+    val (title, visibleSections) = when (section) {
+      "data" -> getString(R.string.settings_index_data) to
+        setOf(R.id.section_games_folder, R.id.section_system_files, R.id.section_hard_disk)
+      "graphics" -> getString(R.string.settings_index_graphics) to
+        setOf(R.id.section_display, R.id.card_gpu_driver, R.id.section_env_vars)
+      "debug" -> getString(R.string.settings_index_debug) to
+        setOf(R.id.section_debug)
+      "eeprom" -> getString(R.string.settings_index_eeprom) to
+        setOf(R.id.section_eeprom)
+      else -> return
+    }
+
+    findViewById<android.widget.TextView>(R.id.settings_header_title)?.text = title
+
+    for (id in allSections) {
+      findViewById<View>(id)?.visibility =
+        if (id in visibleSections) View.VISIBLE else View.GONE
+    }
   }
 
   private fun refreshDriverStatus() {
@@ -372,6 +410,30 @@ class SettingsActivity : AppCompatActivity() {
       driverStatusText.text = getString(R.string.settings_gpu_driver_active, name)
     } else {
       driverStatusText.text = getString(R.string.settings_gpu_driver_system)
+    }
+  }
+
+  private fun clearAllShaderCaches() {
+    val tag = "ShaderCache"
+    try {
+      val baseDir = filesDir
+      // VK caches
+      val spvDir = File(baseDir, "spv_cache")
+      if (spvDir.isDirectory) {
+        spvDir.listFiles()?.forEach { it.delete() }
+        spvDir.delete()
+      }
+      File(baseDir, "vk_pipeline_cache.bin").delete()
+      File(baseDir, "shader_module_keys.bin").delete()
+      // GL shader binary cache (stored per-shader in gl_shader_cache/)
+      val glDir = File(baseDir, "gl_shader_cache")
+      if (glDir.isDirectory) {
+        glDir.listFiles()?.forEach { it.delete() }
+        glDir.delete()
+      }
+      Log.i(tag, "All shader caches cleared")
+    } catch (e: Exception) {
+      Log.e(tag, "Failed to clear shader caches", e)
     }
   }
 
@@ -391,6 +453,7 @@ class SettingsActivity : AppCompatActivity() {
           prefs.edit().putString("renderer", keys[which]).apply()
           btn.text = labels[which]
           dialog.dismiss()
+          clearAllShaderCaches()
           Toast.makeText(this, getString(R.string.settings_renderer_restart), Toast.LENGTH_LONG).show()
         }
         .setNegativeButton(android.R.string.cancel, null)

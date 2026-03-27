@@ -149,11 +149,7 @@ LruNode *lru_try_evict_one(Lru *lru)
 static inline
 LruNode *lru_evict_one(Lru *lru)
 {
-	LruNode *found = lru_try_evict_one(lru);
-
-	assert(found != NULL); /* No evictable node! */
-
-	return found;
+	return lru_try_evict_one(lru);
 }
 
 static inline
@@ -209,6 +205,9 @@ LruNode *lru_lookup(Lru *lru, uint64_t hash, const void *key)
 		}
 	} else {
 		found = lru_get_one_free(lru);
+		if (!found) {
+			return NULL;
+		}
 		found->hash = hash;
 		if (lru->init_node) {
 			lru->init_node(lru, found, key);

@@ -212,6 +212,17 @@
   <string name="settings_file_copy_failed">Failed to copy file</string>
   <string name="settings_file_copied">File updated. Restart app to apply.</string>
 
+  <!-- Settings Index -->
+  <string name="settings_index_data">hakuX Data</string>
+  <string name="settings_index_data_desc">Games folder, system files, and hard disk management.</string>
+  <string name="settings_index_graphics">Graphics</string>
+  <string name="settings_index_graphics_desc">GPU driver, renderer, resolution, filtering, and performance.</string>
+  <string name="settings_debug_title">Debug</string>
+  <string name="settings_index_debug">Debug</string>
+  <string name="settings_index_debug_desc">FPS counter, native floats, validation layers, and cache tools.</string>
+  <string name="settings_index_eeprom">EEPROM Settings</string>
+  <string name="settings_index_eeprom_desc">Xbox system language, video standard, and resolution modes.</string>
+
   <!-- Renderer -->
   <string name="settings_renderer">Graphics Renderer</string>
   <string name="settings_renderer_desc">Vulkan is recommended. OpenGL ES is experimental. Requires restart.</string>

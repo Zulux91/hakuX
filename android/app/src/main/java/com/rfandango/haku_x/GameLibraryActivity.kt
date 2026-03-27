@@ -104,7 +104,7 @@ class GameLibraryActivity : AppCompatActivity() {
     syncDisplayModeUi()
 
     btnSettings.setOnClickListener {
-      startActivity(Intent(this, SettingsActivity::class.java))
+      startActivity(Intent(this, SettingsIndexActivity::class.java))
     }
     findViewById<androidx.swiperefreshlayout.widget.SwipeRefreshLayout>(R.id.library_swipe_refresh).apply {
       setOnRefreshListener {

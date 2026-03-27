@@ -1341,6 +1341,11 @@ static void create_texture(PGRAPHState *pg, int texture_idx)
         binding_found = true;
     } else {
         LruNode *node = lru_lookup(&r->texture_cache, key_hash, &key);
+        if (!node) {
+            /* LRU exhausted — all texture slots in-flight. Skip this
+             * texture bind and use whatever was previously bound. */
+            return;
+        }
         snode = container_of(node, TextureBinding, node);
         binding_found = snode->image != VK_NULL_HANDLE;
         r->tex_binding_cache[texture_idx].key_hash = key_hash;
