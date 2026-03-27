@@ -1,4 +1,4 @@
-# X1 BOX
+# hakuX
 
 hakuX is a xemu (X1 BOX) fork, optimized for Adreno devices.
 
