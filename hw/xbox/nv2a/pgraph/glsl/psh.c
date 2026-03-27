@@ -208,18 +208,19 @@ void pgraph_glsl_set_psh_state(PGRAPHState *pg, PshState *state)
             }
         }
 
-        /* Keep track of whether texture data has been loaded as signed
-         * normalized integers or not. This dictates whether or not we will need
-         * to re-map in fragment shader for certain texture modes (e.g.
-         * bumpenvmap).
-         *
-         * FIXME: When signed texture data is loaded as unsigned and remapped in
-         * fragment shader, there may be interpolation artifacts. Fix this to
-         * support signed textures more appropriately.
+        /* Keep track of textures uploaded as signed normalized data.
+         * Those must not be remapped a second time in the fragment shader.
          */
-#if 0 // FIXME
-        psh->snorm_tex[i] = (f.gl_internal_format == GL_RGB8_SNORM)
-                                 || (f.gl_internal_format == GL_RG8_SNORM);
+#ifdef __ANDROID__
+        /* On Android GLES, textures are uploaded as unsigned RGBA8, so
+         * use the color format to detect signed data. */
+        state->snorm_tex[i] =
+            color_format == NV097_SET_TEXTURE_FORMAT_COLOR_SZ_R6G5B5;
+#else
+#if 0 // FIXME: desktop GL signed texture tracking
+        state->snorm_tex[i] = (f.gl_internal_format == GL_RGB8_SNORM)
+                                     || (f.gl_internal_format == GL_RG8_SNORM);
+#endif
 #endif
         state->shadow_map[i] = f.depth;
 
@@ -814,7 +815,7 @@ static void apply_border_adjustment(const struct PixelShader *ps, MString *vars,
     mstring_append_fmt(
         vars,
         "vec3 t%dLogicalSize = vec3(%f, %f, %f);\n"
-        "%s.xyz = (%s.xyz * t%dLogicalSize + vec3(4, 4, 4)) * vec3(%f, %f, %f);\n",
+        "%s.xyz = (%s.xyz * t%dLogicalSize + vec3(4.0, 4.0, 4.0)) * vec3(%f, %f, %f);\n",
         i, ps->state->border_logical_size[i][0], ps->state->border_logical_size[i][1], ps->state->border_logical_size[i][2],
         var_name, var_name, i, ps->state->border_inv_real_size[i][0], ps->state->border_inv_real_size[i][1], ps->state->border_inv_real_size[i][2]);
 }
@@ -844,7 +845,7 @@ static void apply_convolution_filter(const struct PixelShader *ps, MString *vars
     mstring_append_fmt(vars, "t%d = ", tex);
     for (int i = 0; i < 9; i++) {
         mstring_append_fmt(vars,
-            "%stextureProj(texSamp%d, convBase + vec3(vec2(%.1f,%.1f)*convTexelSize, 0)) * %s",
+            "%stextureProj(texSamp%d, convBase + vec3(vec2(%.1f,%.1f)*convTexelSize, 0.0)) * %s",
             i > 0 ? "\n  + " : "",
             tex, offsets[i][0], offsets[i][1], weights[i]);
     }
@@ -937,18 +938,18 @@ static MString* psh_convert(struct PixelShader *ps)
 
     mstring_append_fmt(preflight,
         "float sign1(float x) {\n"
-        "    x *= 255.0;\n"
-        "    return (x-128.0)/127.0;\n"
+        "    float xf = float(x) * 255.0;\n"
+        "    return (xf - 128.0) / 127.0;\n"
         "}\n"
         "float sign2(float x) {\n"
-        "    x *= 255.0;\n"
-        "    if (x >= 128.0) return (x-255.5)/127.5;\n"
-        "               else return (x+0.5)/127.5;\n"
+        "    float xf = float(x) * 255.0;\n"
+        "    if (xf >= 128.0) return (xf - 255.5) / 127.5;\n"
+        "               else return (xf + 0.5) / 127.5;\n"
         "}\n"
         "float sign3(float x) {\n"
-        "    x *= 255.0;\n"
-        "    if (x >= 128.0) return (x-256.0)/127.0;\n"
-        "               else return (x)/127.0;\n"
+        "    float xf = float(x) * 255.0;\n"
+        "    if (xf >= 128.0) return (xf - 256.0) / 127.0;\n"
+        "               else return xf / 127.0;\n"
         "}\n"
         "float sign3_to_0_to_1(float x) {\n"
         "    if (x >= 0.0) return x/2.0;\n"
