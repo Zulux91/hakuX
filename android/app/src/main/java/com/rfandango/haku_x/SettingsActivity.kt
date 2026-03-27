@@ -329,6 +329,10 @@ class SettingsActivity : AppCompatActivity() {
       confirmClearShaderCache()
     }
 
+    findViewById<MaterialButton>(R.id.btn_clear_code_cache).setOnClickListener {
+      clearCodeCache()
+    }
+
     findViewById<MaterialButton>(R.id.btn_recreate_hdd).setOnClickListener {
       confirmRecreateHdd()
     }
@@ -603,6 +607,22 @@ class SettingsActivity : AppCompatActivity() {
     if (inf.exists()) return internalPath
     Log.w(tag, "  no HDD image found at any candidate path")
     return null
+  }
+
+  private fun clearCodeCache() {
+    val paths = listOfNotNull(
+      filesDir.absolutePath + "/x1box/tb_cache.bin",
+      getExternalFilesDir(null)?.let { it.absolutePath + "/x1box/tb_cache.bin" }
+    )
+    var deleted = false
+    for (path in paths) {
+      val f = File(path)
+      if (f.exists() && f.delete()) {
+        deleted = true
+        Log.i("SettingsActivity", "Deleted code cache: $path")
+      }
+    }
+    Toast.makeText(this, getString(R.string.settings_clear_code_cache_done), Toast.LENGTH_SHORT).show()
   }
 
   private fun confirmClearShaderCache() {

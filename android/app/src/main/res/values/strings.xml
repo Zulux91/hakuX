@@ -132,6 +132,9 @@
 
   <string name="settings_clear_shader_cache">Clear Shader Cache</string>
   <string name="settings_clear_shader_cache_desc">Delete compiled SPIR-V shaders and the Vulkan pipeline cache. They will be rebuilt automatically. Useful after driver updates or if experiencing rendering glitches.</string>
+  <string name="settings_clear_code_cache">Clear code cache</string>
+  <string name="settings_clear_code_cache_desc">Delete the translated code block cache (tb_cache.bin). Use this if the app crashes at startup. Requires restart.</string>
+  <string name="settings_clear_code_cache_done">Code cache cleared. Restart the app.</string>
   <string name="settings_clear_shader_cache_confirm_title">Clear shader cache?</string>
   <string name="settings_clear_shader_cache_confirm_message">This will delete all cached SPIR-V shaders and the Vulkan pipeline cache. The emulator will recompile them as needed, which may cause brief stutter on the next launch.</string>
   <string name="settings_clear_shader_cache_success">Shader cache cleared.</string>
