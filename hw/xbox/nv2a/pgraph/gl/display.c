@@ -76,7 +76,8 @@ static void android_display_save_state(AndroidDisplayGLState *state)
     glGetIntegerv(GL_VIEWPORT, state->viewport);
 }
 
-static void android_display_restore_state(const AndroidDisplayGLState *state)
+static void android_display_restore_state(const AndroidDisplayGLState *state,
+                                          PGRAPHGLState *r)
 {
     glBindFramebuffer(GL_FRAMEBUFFER, state->framebuffer);
     glViewport(state->viewport[0], state->viewport[1],
@@ -88,6 +89,10 @@ static void android_display_restore_state(const AndroidDisplayGLState *state)
     glDisable(GL_DEPTH_TEST);
     glUseProgram(0);
     glBindVertexArray(0);
+
+    /* Invalidate the draw path's GL state cache so it re-applies
+     * all state on the next draw call. */
+    memset(&r->gl_cache, -1, sizeof(r->gl_cache));
 }
 #endif
 
@@ -526,6 +531,7 @@ void pgraph_gl_sync(NV2AState *d)
     d->vga.get_params(&d->vga, &vga_display_params);
 
     PGRAPHState *pg = &d->pgraph;
+    PGRAPHGLState *r = pg->gl_renderer_state;
     unsigned int disp_w = 0;
     unsigned int disp_h = 0;
     d->vga.get_resolution(&d->vga, (int *)&disp_w, (int *)&disp_h);
@@ -561,7 +567,7 @@ void pgraph_gl_sync(NV2AState *d)
         android_display_save_state(&state);
         render_display(d, surface);
         GL_ASSERT_NO_ERROR("pgraph_gl_sync: render display");
-        android_display_restore_state(&state);
+        android_display_restore_state(&state, r);
         gl_fence();
         GL_ASSERT_NO_ERROR("pgraph_gl_sync: render finish");
     }
