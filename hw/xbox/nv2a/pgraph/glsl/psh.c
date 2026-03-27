@@ -29,6 +29,7 @@
 #include "qemu/osdep.h"
 #include "hw/xbox/nv2a/debug.h"
 #include "hw/xbox/nv2a/pgraph/pgraph.h"
+#include "ui/xemu-settings.h"
 #include "psh.h"
 
 DEF_UNIFORM_INFO_ARR(PshUniform, PSH_UNIFORM_DECL_X)
@@ -63,7 +64,9 @@ void pgraph_glsl_set_psh_state(PGRAPHState *pg, PshState *state)
     state->window_clip_exclusive = pgraph_reg_r(pg, NV_PGRAPH_SETUPRASTER) &
                                    NV_PGRAPH_SETUPRASTER_WINDOWCLIPTYPE;
 
-    {
+    /* Window clip counting — used by VK for shader-based clipping.
+     * GL handles window clips via glScissor, so skip the computation. */
+    if (g_config.display.renderer != CONFIG_DISPLAY_RENDERER_OPENGL) {
         unsigned int sw = pg->surface_shape.clip_width;
         unsigned int sh = pg->surface_shape.clip_height;
         int count = 0;
@@ -112,7 +115,9 @@ void pgraph_glsl_set_psh_state(PGRAPHState *pg, PshState *state)
                  NV_PGRAPH_ZCOMPRESSOCCLUDE_ZCLAMP_EN) ==
         NV_PGRAPH_ZCOMPRESSOCCLUDE_ZCLAMP_EN_CULL;
 
-    {
+    /* Depth needed flag — used by VK for depth output in fragment shader.
+     * GL handles depth via fixed-function pipeline. */
+    if (g_config.display.renderer != CONFIG_DISPLAY_RENDERER_OPENGL) {
         uint32_t ctl0 = pgraph_reg_r(pg, NV_PGRAPH_CONTROL_0);
         bool depth_test = ctl0 & NV_PGRAPH_CONTROL_0_ZENABLE;
         bool depth_write = !!(ctl0 & NV_PGRAPH_CONTROL_0_ZWRITEENABLE);
@@ -210,18 +215,12 @@ void pgraph_glsl_set_psh_state(PGRAPHState *pg, PshState *state)
 
         /* Keep track of textures uploaded as signed normalized data.
          * Those must not be remapped a second time in the fragment shader.
-         */
-#ifdef __ANDROID__
-        /* On Android GLES, textures are uploaded as unsigned RGBA8, so
-         * use the color format to detect signed data. */
-        state->snorm_tex[i] =
-            color_format == NV097_SET_TEXTURE_FORMAT_COLOR_SZ_R6G5B5;
-#else
-#if 0 // FIXME: desktop GL signed texture tracking
-        state->snorm_tex[i] = (f.gl_internal_format == GL_RGB8_SNORM)
-                                     || (f.gl_internal_format == GL_RG8_SNORM);
-#endif
-#endif
+         * GLES uploads as unsigned RGBA8, so detect signed via color format. */
+        if (g_config.display.renderer == CONFIG_DISPLAY_RENDERER_OPENGL) {
+            state->snorm_tex[i] =
+                color_format == NV097_SET_TEXTURE_FORMAT_COLOR_SZ_R6G5B5;
+        }
+        /* VK/desktop GL: snorm_tex left at default (false) — FIXME */
         state->shadow_map[i] = f.depth;
 
         uint32_t filter = pgraph_reg_r(pg, NV_PGRAPH_TEXFILTER0 + i * 4);
