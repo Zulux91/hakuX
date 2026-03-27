@@ -135,12 +135,14 @@ static void toggle_full_screen(struct sdl2_console *scon);
 #ifdef __ANDROID__
 int bdrv_flush_all(void);
 static bool g_android_gl_bgra_supported = true;
-static bool g_android_use_hud = false;
 static bool g_android_paused = false;
 static bool g_android_should_quit = false;
 static volatile bool g_android_vm_pause_requested = false;
 static volatile bool g_android_vm_resume_requested = false;
 static uint64_t g_android_frame_counter = 0;
+static int g_android_target_fps = 60;
+static int64_t g_android_frame_interval_ns = 16666666;
+static int g_android_display_mode = 0; /* 0=stretch, 1=4:3, 2=16:9 */
 static GLuint g_android_blit_prog;
 static GLuint g_android_blit_vao;
 static GLuint g_android_blit_vbo;
@@ -178,15 +180,39 @@ static bool sdl2_gl_has_extension(const char *ext_list, const char *ext)
 
 static void android_log_gl_error(const char *stage)
 {
-#ifdef XEMU_ANDROID_GL_DEBUG
     GLenum err;
     while ((err = glGetError()) != GL_NO_ERROR) {
-        __android_log_print(ANDROID_LOG_ERROR, "xemu-android",
+        __android_log_print(ANDROID_LOG_ERROR, "hakuX",
                             "GL error at %s: 0x%x", stage, err);
     }
-#else
-    (void)stage;
-#endif
+}
+
+void xemu_android_set_display_mode_setting(int mode)
+{
+    g_android_display_mode = mode;
+}
+
+int xemu_android_get_display_mode_setting(void)
+{
+    return g_android_display_mode;
+}
+
+static void xemu_android_refresh_frame_limit_from_env(void)
+{
+    int fps = 60;
+    const char *fps_env = SDL_getenv("XEMU_ANDROID_TARGET_FPS");
+    if (fps_env && fps_env[0] != '\0') {
+        int v = atoi(fps_env);
+        if (v > 0 && v <= 240) {
+            fps = v;
+        }
+    }
+    g_android_target_fps = fps;
+    g_android_frame_interval_ns = 1000000000LL / g_android_target_fps;
+    __android_log_print(ANDROID_LOG_INFO, "hakuX",
+                        "frame limit: target_fps=%d interval_ns=%lld",
+                        g_android_target_fps,
+                        (long long)g_android_frame_interval_ns);
 }
 
 static GLuint android_gl_compile_shader(GLenum type, const char *src)
@@ -821,7 +847,7 @@ void sdl2_poll_events(struct sdl2_console *scon)
 
     int kbd = 0, mouse = 0;
 #ifdef __ANDROID__
-    if (g_android_use_hud) {
+    if (false /* HUD disabled on Android */) {
         xemu_hud_should_capture_kbd_mouse(&kbd, &mouse);
     }
 #else
@@ -832,7 +858,7 @@ void sdl2_poll_events(struct sdl2_console *scon)
         // HUD must process events first so that if a controller is detached,
         // a latent rebind request can cancel before the state is freed
 #ifdef __ANDROID__
-        if (g_android_use_hud) {
+        if (false /* HUD disabled on Android */) {
             xemu_hud_process_sdl_events(ev);
         }
 #else
@@ -1407,7 +1433,7 @@ void xemu_android_display_loop(void)
     }
 #ifdef __ANDROID__
     SDL_GL_SetSwapInterval(g_config.display.window.vsync ? 1 : 0);
-    if (g_android_use_hud) {
+    if (false /* HUD disabled on Android */) {
         xemu_hud_init(m_window, m_context);
     }
 #endif
