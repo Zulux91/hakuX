@@ -208,6 +208,12 @@ void pgraph_gl_clear_surface(NV2AState *d, uint32_t parameter)
 
     glDisable(GL_SCISSOR_TEST);
 
+    /* Invalidate cache fields touched by the clear path so the next
+     * draw call re-derives correct values from NV2A registers. */
+    r->gl_cache.scissor_test = -1;
+    r->gl_cache.scissor_rect[0] = -1;
+    r->gl_cache.dither = -1;
+
     pgraph_gl_set_surface_dirty(pg, write_color, write_zeta);
 
     if (r->color_binding) {
