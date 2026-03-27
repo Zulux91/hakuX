@@ -133,8 +133,14 @@ static GLuint create_gl_shader(GLenum gl_shader_type,
         log = g_malloc(log_length * sizeof(GLchar));
         glGetShaderInfoLog(shader, log_length, NULL, log);
 #ifdef __ANDROID__
-        __android_log_print(ANDROID_LOG_ERROR, "xemu-android",
+        __android_log_print(ANDROID_LOG_ERROR, "hakuX",
                             "nv2a: %s compilation failed: %s", name, log);
+        /* Log first 500 chars of shader source for debugging */
+        char src_preview[501];
+        strncpy(src_preview, code, 500);
+        src_preview[500] = '\0';
+        __android_log_print(ANDROID_LOG_ERROR, "hakuX",
+                            "nv2a: %s source preview: %s", name, src_preview);
 #endif
         fprintf(stderr, "nv2a: %s compilation failed: %s\n", name, log);
         log_shader_source_with_line_numbers(name, code);
@@ -256,13 +262,21 @@ static void generate_shaders(PGRAPHGLState *r, ShaderBinding *binding)
     ShaderModuleCacheKey key;
 #ifdef __ANDROID__
     const bool gles = true;
-    const int gles_version = 320;
+    const int gles_version = r->gles_version;
 #else
     const bool gles = false;
     const int gles_version = 0;
 #endif
 
     bool need_geometry_shader = pgraph_glsl_need_geom(&state->geom);
+#ifdef __ANDROID__
+    /* GLES 3.0/3.1 doesn't support geometry shaders. Skip if unavailable.
+     * Visual impact: flat shading provoking vertex may be wrong, wireframe
+     * mode won't work. Preferable to crashing. */
+    if (need_geometry_shader && !r->geometry_shaders_supported) {
+        need_geometry_shader = false;
+    }
+#endif
     if (need_geometry_shader) {
         memset(&key, 0, sizeof(key));
         key.kind = GL_GEOMETRY_SHADER;
@@ -301,6 +315,10 @@ static void generate_shaders(PGRAPHGLState *r, ShaderBinding *binding)
         __android_log_print(ANDROID_LOG_ERROR, "hakuX",
                             "nv2a: shader linking failed: %s", log);
 #endif
+        /* Mark as initialized with program 0 so callers don't assert.
+         * glUseProgram(0) is valid and renders nothing. */
+        binding->gl_program = 0;
+        binding->initialized = true;
         glDeleteProgram(program);
         return;
     }
@@ -897,7 +915,11 @@ void pgraph_gl_bind_shaders(PGRAPHState *pg)
             pgraph_gl_shader_cache_to_disk(binding);
         }
     }
-    assert(binding->initialized);
+    if (!binding->initialized) {
+        /* Shader generation failed — skip this draw */
+        qemu_mutex_unlock(&r->shader_cache_lock);
+        return;
+    }
     r->shader_binding = binding;
     pg->program_data_dirty = false;
 

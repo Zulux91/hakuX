@@ -113,9 +113,33 @@ static void pgraph_gl_init(NV2AState *d, Error **errp)
     r->bgra_supported = gl_extension_supported(exts, "GL_EXT_texture_format_BGRA8888") ||
                         gl_extension_supported(exts, "GL_OES_texture_format_BGRA8888") ||
                         gl_extension_supported(exts, "GL_EXT_texture_format_BGRA8888_OES");
+    r->geometry_shaders_supported =
+        gl_extension_supported(exts, "GL_EXT_geometry_shader") ||
+        gl_extension_supported(exts, "GL_OES_geometry_shader");
+
+    /* Detect GLSL ES version from GL_SHADING_LANGUAGE_VERSION.
+     * Format: "OpenGL ES GLSL ES X.YZ" — we want X*100 + Y*10. */
+    r->gles_version = 300; /* safe default */
+    const char *glsl_ver = (const char *)glGetString(GL_SHADING_LANGUAGE_VERSION);
+    if (glsl_ver) {
+        int major = 0, minor = 0;
+        /* Try to parse "X.Y" from the version string */
+        const char *p = glsl_ver;
+        while (*p && !(*p >= '0' && *p <= '9')) p++; /* skip to first digit */
+        if (*p) {
+            major = *p - '0'; p++;
+            if (*p == '.') { p++; if (*p >= '0' && *p <= '9') minor = *p - '0'; }
+            if (major >= 3) {
+                r->gles_version = major * 100 + minor * 10;
+            }
+        }
+    }
     __android_log_print(ANDROID_LOG_INFO, "xemu-android",
-                        "pgraph_gl_init: bgra_supported=%s",
-                        r->bgra_supported ? "yes" : "no");
+                        "pgraph_gl_init: bgra=%s geom_shader=%s glsl_es=%d (%s)",
+                        r->bgra_supported ? "yes" : "no",
+                        r->geometry_shaders_supported ? "yes" : "no",
+                        r->gles_version,
+                        glsl_ver ? glsl_ver : "unknown");
 #endif
 
 #if DEBUG_NV2A_GL

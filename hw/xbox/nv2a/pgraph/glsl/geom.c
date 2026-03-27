@@ -132,13 +132,16 @@ MString *pgraph_glsl_gen_geom(const GeomState *state, GenGeomGlslOptions opts)
     pgraph_glsl_get_vtx_header(output, opts.vulkan, state->smooth_shading,
                                false, false, false);
 
-    const char *point_size_expr =
-        opts.gles ? "v_vtxPointSize[index]" : "gl_in[index].gl_PointSize";
-    mstring_append_fmt(
+    mstring_append(
         output,
         "void emit_vertex(int index, mat4 pz) {\n"
-        "  gl_Position = gl_in[index].gl_Position;\n"
-        "  gl_PointSize = %s;\n"
+        "  gl_Position = gl_in[index].gl_Position;\n");
+    if (!opts.gles) {
+        mstring_append(output,
+            "  gl_PointSize = gl_in[index].gl_PointSize;\n");
+    }
+    mstring_append_fmt(
+        output,
         "  vtxD0 = v_vtxD0[%s];\n"
         "  vtxD1 = v_vtxD1[%s];\n"
         "  vtxB0 = v_vtxB0[%s];\n"
@@ -155,7 +158,6 @@ MString *pgraph_glsl_gen_geom(const GeomState *state, GenGeomGlslOptions opts)
         "  vtxPointSize = v_vtxPointSize[index];\n"
         "  EmitVertex();\n"
         "}\n",
-        point_size_expr,
         provoking_index,
         provoking_index,
         provoking_index,
