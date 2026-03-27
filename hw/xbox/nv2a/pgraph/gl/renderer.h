@@ -272,21 +272,6 @@ typedef struct PGRAPHGLState {
     bool geometry_shaders_supported;
     int gles_version; /* GLSL ES version: 300, 310, or 320 */
 #endif
-
-    /* Cached GL state to skip redundant calls in draw path */
-    struct {
-        int blend;          /* -1=unknown, 0=disabled, 1=enabled */
-        int depth_test;
-        int stencil_test;
-        int scissor_test;
-        int cull_face;
-        int dither;
-        GLenum blend_sfactor, blend_dfactor, blend_equation;
-        GLenum depth_func;
-        GLenum cull_mode, front_face;
-        GLint scissor_rect[4];
-        GLint viewport[4];
-    } gl_cache;
 } PGRAPHGLState;
 
 extern GloContext *g_nv2a_context_render;
