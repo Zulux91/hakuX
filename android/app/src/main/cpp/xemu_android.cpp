@@ -1259,10 +1259,12 @@ extern "C" int SDL_main(int argc, char* argv[]) {
   return 0;
 }
 
+extern "C" float fps; /* display-level FPS computed in ui/xemu.c */
+
 extern "C" JNIEXPORT jint JNICALL
 Java_com_rfandango_haku_1x_MainActivity_nativeGetFps(JNIEnv *, jobject)
 {
-    return static_cast<jint>(g_nv2a_stats.increment_fps);
+    return static_cast<jint>(fps);
 }
 
 extern "C" JNIEXPORT jstring JNICALL
