@@ -74,10 +74,17 @@ class GameLibraryActivity : AppCompatActivity() {
   private var useCoverGrid = false
   private var boxArtLookupEnabled = true
   @Volatile private var isConvertingIso = false
+  @Volatile private var convertCancelled = false
+  private var convertThread: Thread? = null
+  private var convertOutputDoc: DocumentFile? = null
+  private var convertStageDir: File? = null
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     setContentView(R.layout.activity_game_library)
+
+    // Clean up any leftover temp files from a previous interrupted conversion
+    cleanupStagingDir()
 
     loadingSpinner = findViewById(R.id.library_loading)
     loadingText = findViewById(R.id.library_loading_text)
@@ -530,39 +537,36 @@ class GameLibraryActivity : AppCompatActivity() {
       ?: return getString(R.string.library_convert_resolve_failed)
 
     val existing = parent.findFile(outputName)
-    if (existing != null) {
-      if (!overwrite) {
-        return getString(R.string.library_convert_overwrite_message, outputName)
-      }
-      if (!existing.delete()) {
-        return getString(R.string.library_convert_create_output_failed)
-      }
+    if (existing != null && !overwrite) {
+      return getString(R.string.library_convert_overwrite_message, outputName)
     }
 
-    val outputDoc = parent.createFile("application/octet-stream", outputName)
-      ?: return getString(R.string.library_convert_create_output_failed)
-
     val stageDir = File(getExternalFilesDir(null) ?: filesDir, "xiso-convert")
+    convertStageDir = stageDir
     if (!stageDir.exists() && !stageDir.mkdirs()) {
-      outputDoc.delete()
       return getString(R.string.library_convert_create_output_failed)
     }
 
     val token = System.currentTimeMillis()
     val inputTemp = File(stageDir, "input-$token.iso")
     val outputTemp = File(stageDir, "output-$token.xiso.iso")
-    var success = false
     try {
-      // Phase 0: copy ISO to temp
-      if (!copyWithProgress(game.uri, inputTemp, game.sizeBytes) { pct -> onProgress?.invoke(0, pct) }) {
+      // Phase 0: copy ISO to temp staging
+      if (convertCancelled) return "Cancelled"
+      if (!copyWithProgress(game.uri, inputTemp, game.sizeBytes) { pct ->
+        if (convertCancelled) throw InterruptedException("Conversion cancelled")
+        onProgress?.invoke(0, pct)
+      }) {
         return getString(R.string.library_convert_copy_input_failed)
       }
 
-      // Phase 1: native conversion
+      // Phase 1: native XISO conversion (temp → temp)
+      if (convertCancelled) return "Cancelled"
       onProgress?.invoke(1, 0)
       val nativeError =
         XisoConverterNative.convertIsoToXiso(inputTemp.absolutePath, outputTemp.absolutePath)
       onProgress?.invoke(1, 100)
+      if (convertCancelled) return "Cancelled"
       if (!nativeError.isNullOrBlank()) {
         return nativeError
       }
@@ -571,16 +575,28 @@ class GameLibraryActivity : AppCompatActivity() {
         return "Converted image was empty"
       }
 
-      // Phase 2: copy output back to SAF
-      if (!copyFileWithProgress(outputTemp, outputDoc.uri, outputTemp.length()) { pct -> onProgress?.invoke(2, pct) }) {
+      // Phase 2: copy finished XISO from staging to ROM folder
+      // Only now do we touch the ROM folder — nothing incomplete can be left there.
+      if (existing != null && !existing.delete()) {
+        return getString(R.string.library_convert_create_output_failed)
+      }
+      val outputDoc = parent.createFile("application/octet-stream", outputName)
+        ?: return getString(R.string.library_convert_create_output_failed)
+      convertOutputDoc = outputDoc
+
+      if (!copyFileWithProgress(outputTemp, outputDoc.uri, outputTemp.length()) { pct ->
+        if (convertCancelled) throw InterruptedException("Conversion cancelled")
+        onProgress?.invoke(2, pct)
+      }) {
+        outputDoc.delete()
+        convertOutputDoc = null
         return getString(R.string.library_convert_copy_output_failed)
       }
-      success = true
+      convertOutputDoc = null
       return null
+    } catch (_: InterruptedException) {
+      return "Cancelled"
     } finally {
-      if (!success) {
-        outputDoc.delete()
-      }
       inputTemp.delete()
       outputTemp.delete()
     }
@@ -818,7 +834,8 @@ class GameLibraryActivity : AppCompatActivity() {
       }
     }
 
-    Thread {
+    convertCancelled = false
+    val thread = Thread {
       val outputName = buildXisoFileName(
         game.relativePath.substringAfterLast('/')
       )
@@ -853,6 +870,14 @@ class GameLibraryActivity : AppCompatActivity() {
         } catch (_: Exception) { }
       }
 
+      convertThread = null
+      convertOutputDoc = null
+
+      if (convertCancelled) {
+        // Activity is being destroyed — don't touch UI
+        return@Thread
+      }
+
       runOnUiThread {
         dialog.dismiss()
         if (xisoGame != null) {
@@ -866,7 +891,9 @@ class GameLibraryActivity : AppCompatActivity() {
           launchGameDirectly(game.uri)
         }
       }
-    }.start()
+    }
+    convertThread = thread
+    thread.start()
   }
 
   /**
@@ -1017,6 +1044,38 @@ class GameLibraryActivity : AppCompatActivity() {
 
   private fun dp(value: Int): Int {
     return (value * resources.displayMetrics.density).toInt()
+  }
+
+  override fun onDestroy() {
+    cancelConversion()
+    super.onDestroy()
+  }
+
+  private fun cancelConversion() {
+    if (!isConvertingIso) return
+    convertCancelled = true
+
+    // Interrupt the thread to break out of copy loops
+    convertThread?.interrupt()
+    convertThread = null
+
+    // Delete incomplete output file
+    try {
+      convertOutputDoc?.delete()
+    } catch (_: Exception) { }
+    convertOutputDoc = null
+
+    // Clean up staging directory
+    cleanupStagingDir()
+    isConvertingIso = false
+  }
+
+  private fun cleanupStagingDir() {
+    val stageDir = convertStageDir
+        ?: File(getExternalFilesDir(null) ?: filesDir, "xiso-convert")
+    if (stageDir.isDirectory) {
+      stageDir.listFiles()?.forEach { it.delete() }
+    }
   }
 
 }
