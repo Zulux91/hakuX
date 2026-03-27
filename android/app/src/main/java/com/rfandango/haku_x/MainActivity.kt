@@ -331,12 +331,24 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
 
   private fun isGameController(device: InputDevice?): Boolean {
     if (device == null) return false
-    
+
+    // Exclude virtual and built-in devices (sensors, accelerometers, etc.)
+    if (device.isVirtual) return false
+    val name = device.name?.lowercase() ?: ""
+    if (name.contains("accelerometer") || name.contains("gyroscope") ||
+        name.contains("sensor") || name.contains("gpio")) {
+      return false
+    }
+
     val sources = device.sources
-    
-    // Check if device is a gamepad or joystick
-    return ((sources and InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD) ||
-           ((sources and InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK)
+    // Must have gamepad or joystick source AND have real axes/buttons
+    val isGamepad = (sources and InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD
+    val isJoystick = (sources and InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK
+    if (!isGamepad && !isJoystick) return false
+
+    // Require at least one motion axis to filter out keyboard-only "gamepads"
+    val motionRanges = device.motionRanges
+    return motionRanges != null && motionRanges.isNotEmpty()
   }
 
   private fun updateControllerVisibility() {
