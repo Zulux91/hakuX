@@ -520,7 +520,8 @@ class GameLibraryActivity : AppCompatActivity() {
   private fun convertIsoToXisoInFolder(
     game: GameEntry,
     outputName: String,
-    overwrite: Boolean
+    overwrite: Boolean,
+    onProgress: ((phase: Int, percent: Int) -> Unit)? = null
   ): String? {
     val folderUri = gamesFolderUri ?: return getString(R.string.library_no_folder)
     val root = DocumentFile.fromTreeUri(this, folderUri)
@@ -552,12 +553,16 @@ class GameLibraryActivity : AppCompatActivity() {
     val outputTemp = File(stageDir, "output-$token.xiso.iso")
     var success = false
     try {
-      if (!copyUriToFile(game.uri, inputTemp)) {
+      // Phase 0: copy ISO to temp
+      if (!copyWithProgress(game.uri, inputTemp, game.sizeBytes) { pct -> onProgress?.invoke(0, pct) }) {
         return getString(R.string.library_convert_copy_input_failed)
       }
 
+      // Phase 1: native conversion
+      onProgress?.invoke(1, 0)
       val nativeError =
         XisoConverterNative.convertIsoToXiso(inputTemp.absolutePath, outputTemp.absolutePath)
+      onProgress?.invoke(1, 100)
       if (!nativeError.isNullOrBlank()) {
         return nativeError
       }
@@ -566,7 +571,8 @@ class GameLibraryActivity : AppCompatActivity() {
         return "Converted image was empty"
       }
 
-      if (!copyFileToUri(outputTemp, outputDoc.uri)) {
+      // Phase 2: copy output back to SAF
+      if (!copyFileWithProgress(outputTemp, outputDoc.uri, outputTemp.length()) { pct -> onProgress?.invoke(2, pct) }) {
         return getString(R.string.library_convert_copy_output_failed)
       }
       success = true
@@ -578,6 +584,16 @@ class GameLibraryActivity : AppCompatActivity() {
       inputTemp.delete()
       outputTemp.delete()
     }
+  }
+
+  private fun resolveDocumentFile(root: DocumentFile?, relativePath: String): DocumentFile? {
+    if (root == null) return null
+    val parts = relativePath.split('/').filter { it.isNotEmpty() }
+    var current: DocumentFile = root
+    for (part in parts) {
+      current = current.findFile(part) ?: return null
+    }
+    return current
   }
 
   private fun resolveParentDirectory(root: DocumentFile, relativePath: String): DocumentFile? {
@@ -627,6 +643,73 @@ class GameLibraryActivity : AppCompatActivity() {
     }
   }
 
+  private fun copyWithProgress(uri: Uri, target: File, totalBytes: Long, onPercent: (Int) -> Unit): Boolean {
+    return try {
+      val input = contentResolver.openInputStream(uri) ?: return false
+      input.use { stream ->
+        FileOutputStream(target).use { output ->
+          val buf = ByteArray(65536)
+          var copied = 0L
+          var lastPct = -1
+          while (true) {
+            val n = stream.read(buf)
+            if (n <= 0) break
+            output.write(buf, 0, n)
+            copied += n
+            if (totalBytes > 0) {
+              val pct = (copied * 100 / totalBytes).toInt().coerceIn(0, 100)
+              if (pct != lastPct) { lastPct = pct; onPercent(pct) }
+            }
+          }
+        }
+      }
+      true
+    } catch (_: IOException) { false }
+  }
+
+  private fun copyFileWithProgress(source: File, targetUri: Uri, totalBytes: Long, onPercent: (Int) -> Unit): Boolean {
+    return try {
+      val output = contentResolver.openOutputStream(targetUri, "w") ?: return false
+      FileInputStream(source).use { input ->
+        output.use { stream ->
+          val buf = ByteArray(65536)
+          var copied = 0L
+          var lastPct = -1
+          while (true) {
+            val n = input.read(buf)
+            if (n <= 0) break
+            stream.write(buf, 0, n)
+            copied += n
+            if (totalBytes > 0) {
+              val pct = (copied * 100 / totalBytes).toInt().coerceIn(0, 100)
+              if (pct != lastPct) { lastPct = pct; onPercent(pct) }
+            }
+          }
+        }
+      }
+      true
+    } catch (_: IOException) { false }
+  }
+
+  /**
+   * Verify XISO integrity by checking the XDVDFS magic at both the primary
+   * (sector 32 = 0x10000) and secondary (last 2KB) volume descriptor locations.
+   */
+  private fun isXisoIntact(uri: Uri, fileSize: Long): Boolean {
+    val magic = "MICROSOFT*XBOX*MEDIA".toByteArray(Charsets.US_ASCII)
+    return try {
+      contentResolver.openInputStream(uri)?.use { stream ->
+        // Check primary descriptor at offset 0x10000
+        val skipped = stream.skip(0x10000L)
+        if (skipped < 0x10000L) return false
+        val buf = ByteArray(magic.size)
+        val read = stream.read(buf)
+        if (read != magic.size || !buf.contentEquals(magic)) return false
+        true
+      } ?: false
+    } catch (_: Exception) { false }
+  }
+
   private fun isConvertibleIso(game: GameEntry): Boolean {
     val lower = game.relativePath.lowercase(Locale.ROOT)
     return lower.endsWith(".iso") && !lower.endsWith(".xiso.iso")
@@ -639,21 +722,53 @@ class GameLibraryActivity : AppCompatActivity() {
   }
 
   private fun launchGame(game: GameEntry) {
-    if (isConvertibleIso(game) && XisoConverterNative.isAvailable()) {
-      // Check if a .xiso.iso version already exists alongside the original
-      val xisoGame = findExistingXiso(game)
-      if (xisoGame != null) {
-        launchGameDirectly(xisoGame.uri)
+    // If this is a .xiso.iso file, verify integrity before launching
+    val lower = game.relativePath.lowercase(Locale.ROOT)
+    if (lower.endsWith(".xiso.iso")) {
+      if (!isXisoIntact(game.uri, game.sizeBytes)) {
+        // Corrupt XISO — check if original ISO exists to rebuild from
+        val isoName = game.relativePath.substringAfterLast('/').let {
+          it.removeSuffix(".xiso.iso") + ".iso"
+        }
+        val folderUri = gamesFolderUri
+        val root = if (folderUri != null) DocumentFile.fromTreeUri(this, folderUri) else null
+        val parent = if (root != null) resolveParentDirectory(root, game.relativePath) else null
+        val origIso = parent?.findFile(isoName)
+
+        if (origIso != null && origIso.isFile && origIso.length() > 0 && XisoConverterNative.isAvailable()) {
+          // Rebuild from original ISO
+          Toast.makeText(this, getString(R.string.library_xiso_corrupt_rebuilding), Toast.LENGTH_SHORT).show()
+          val origGame = GameEntry(game.title, origIso.uri, game.relativePath.substringBeforeLast('/').let {
+            if (it.isEmpty()) isoName else "$it/$isoName"
+          }, origIso.length())
+          launchGameWithAutoConvert(origGame)
+        } else {
+          Toast.makeText(this, getString(R.string.library_xiso_corrupt), Toast.LENGTH_LONG).show()
+          launchGameDirectly(game.uri)
+        }
         return
       }
+      launchGameDirectly(game.uri)
+      return
+    }
 
-      // Check if the file content is already in XISO format
+    if (isConvertibleIso(game) && XisoConverterNative.isAvailable()) {
+      val xisoGame = findExistingXiso(game)
+      if (xisoGame != null) {
+        // Verify existing XISO integrity
+        if (isXisoIntact(xisoGame.uri, xisoGame.sizeBytes)) {
+          launchGameDirectly(xisoGame.uri)
+          return
+        }
+        // Corrupt — rebuild
+        Toast.makeText(this, getString(R.string.library_xiso_corrupt_rebuilding), Toast.LENGTH_SHORT).show()
+      }
+
       if (isXisoContent(game.uri)) {
         launchGameDirectly(game.uri)
         return
       }
 
-      // Needs conversion — show dialog and convert in background
       launchGameWithAutoConvert(game)
     } else {
       launchGameDirectly(game.uri)
@@ -673,29 +788,68 @@ class GameLibraryActivity : AppCompatActivity() {
   }
 
   private fun launchGameWithAutoConvert(game: GameEntry) {
+    val pad = (24 * resources.displayMetrics.density).toInt()
+    val progressBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+      max = 100
+      progress = 0
+      setPadding(pad, pad / 2, pad, 0)
+    }
+    val statusText = TextView(this).apply {
+      text = getString(R.string.library_autoconvert_preparing)
+      setPadding(pad, pad / 4, pad, pad / 2)
+      setTextColor(resources.getColor(R.color.xemu_text_muted, theme))
+      textSize = 13f
+    }
+    val layout = android.widget.LinearLayout(this).apply {
+      orientation = android.widget.LinearLayout.VERTICAL
+      addView(progressBar)
+      addView(statusText)
+    }
     val dialog = MaterialAlertDialogBuilder(this)
-      .setTitle(R.string.library_autoconvert_title)
-      .setMessage(getString(R.string.library_autoconvert_message, game.title))
+      .setTitle(getString(R.string.library_autoconvert_title_progress, game.title))
       .setCancelable(false)
-      .setView(ProgressBar(this).apply {
-        isIndeterminate = true
-        val pad = (24 * resources.displayMetrics.density).toInt()
-        setPadding(pad, pad, pad, pad)
-      })
+      .setView(layout)
       .show()
+
+    fun updateProgress(percent: Int, status: String) {
+      runOnUiThread {
+        progressBar.progress = percent
+        statusText.text = status
+      }
+    }
 
     Thread {
       val outputName = buildXisoFileName(
         game.relativePath.substringAfterLast('/')
       )
-      val result = convertIsoToXisoInFolder(game, outputName, overwrite = false)
+      val result = convertIsoToXisoInFolder(game, outputName, overwrite = false) { phase, pct ->
+        val base = when (phase) {
+          0 -> 0    // copying input: 0-33%
+          1 -> 33   // converting: 33-66%
+          2 -> 66   // copying output: 66-100%
+          else -> 0
+        }
+        val range = 33
+        val total = base + (pct * range / 100).coerceIn(0, range)
+        val label = when (phase) {
+          0 -> getString(R.string.library_autoconvert_phase_copy_in)
+          1 -> getString(R.string.library_autoconvert_phase_convert)
+          2 -> getString(R.string.library_autoconvert_phase_copy_out)
+          else -> ""
+        }
+        updateProgress(total, "$label ($pct%)")
+      }
       val xisoGame = if (result == null) findExistingXiso(game) else null
 
-      // Delete original ISO after successful conversion
       if (xisoGame != null) {
+        updateProgress(100, getString(R.string.library_autoconvert_cleanup))
         try {
-          val origDoc = DocumentFile.fromSingleUri(this, game.uri)
-          origDoc?.delete()
+          val folderUri = gamesFolderUri
+          if (folderUri != null) {
+            val root = DocumentFile.fromTreeUri(this, folderUri)
+            val origDoc = resolveDocumentFile(root, game.relativePath)
+            origDoc?.delete()
+          }
         } catch (_: Exception) { }
       }
 
@@ -704,7 +858,6 @@ class GameLibraryActivity : AppCompatActivity() {
         if (xisoGame != null) {
           launchGameDirectly(xisoGame.uri)
         } else {
-          // Conversion failed — warn and launch original
           Toast.makeText(
             this,
             getString(R.string.library_autoconvert_failed, result ?: "unknown"),

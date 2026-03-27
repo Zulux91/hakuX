@@ -56,8 +56,16 @@
   <string name="library_convert_copy_output_failed">Failed to copy converted XISO back to games folder.</string>
   <string name="library_convert_resolve_failed">Could not resolve destination folder for selected game.</string>
   <string name="library_autoconvert_title">Converting to XISO</string>
+  <string name="library_autoconvert_title_progress">Converting %1$s</string>
   <string name="library_autoconvert_message">Converting %1$s to XISO format. This may take a while depending on the file size.</string>
   <string name="library_autoconvert_failed">Auto-conversion failed: %1$s. Launching original file.</string>
+  <string name="library_autoconvert_preparing">Preparing...</string>
+  <string name="library_autoconvert_phase_copy_in">Copying ISO</string>
+  <string name="library_autoconvert_phase_convert">Converting</string>
+  <string name="library_autoconvert_phase_copy_out">Saving XISO</string>
+  <string name="library_autoconvert_cleanup">Cleaning up...</string>
+  <string name="library_xiso_corrupt">XISO file appears corrupt. Launching anyway.</string>
+  <string name="library_xiso_corrupt_rebuilding">XISO corrupt, rebuilding from original ISO...</string>
   <string name="library_game_size">Size: %1$s</string>
   <string name="library_game_path">Path: %1$s</string>
   <string name="library_open_game">Open</string>
