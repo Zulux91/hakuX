@@ -200,6 +200,11 @@
   <string name="settings_file_copy_failed">Failed to copy file</string>
   <string name="settings_file_copied">File updated. Restart app to apply.</string>
 
+  <!-- Renderer -->
+  <string name="settings_renderer">Graphics Renderer</string>
+  <string name="settings_renderer_desc">Vulkan is recommended. OpenGL ES is experimental. Requires restart.</string>
+  <string name="settings_renderer_restart">Restart app to apply renderer change.</string>
+
   <!-- EEPROM Settings -->
   <string name="settings_section_eeprom">EEPROM Settings</string>
   <string name="settings_eeprom_desc">Edit Xbox system language and video settings stored in eeprom.bin.</string>

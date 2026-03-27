@@ -1114,6 +1114,18 @@ extern "C" int SDL_main(int argc, char* argv[]) {
     setenv("XEMU_ANDROID_FORCE_CPU_BLIT", "0", 1);
     g_config.general.show_welcome = false;
     g_config.perf.cache_shaders = true;
+
+    // Apply renderer preference from SharedPreferences
+    {
+      const char *renderer_pref = SDL_getenv("XEMU_RENDERER");
+      if (renderer_pref && strcmp(renderer_pref, "opengl") == 0) {
+        g_config.display.renderer = CONFIG_DISPLAY_RENDERER_OPENGL;
+        LogInfo("Renderer override: OpenGL ES (from pref)");
+      } else {
+        g_config.display.renderer = CONFIG_DISPLAY_RENDERER_VULKAN;
+      }
+    }
+
     LogInfoInt("Config final show_welcome=%d", g_config.general.show_welcome ? 1 : 0);
     LogInfoInt("Config final cache_shaders=%d", g_config.perf.cache_shaders ? 1 : 0);
     LogInfoInt("Config final renderer=%d", (int)g_config.display.renderer);

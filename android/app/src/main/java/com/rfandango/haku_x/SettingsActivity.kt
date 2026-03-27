@@ -342,6 +342,7 @@ class SettingsActivity : AppCompatActivity() {
       }
     }
 
+    setupRendererPicker()
     setupResolutionScale()
     setupFilteringPicker()
     setupAspectRatioPicker()
@@ -361,6 +362,29 @@ class SettingsActivity : AppCompatActivity() {
       driverStatusText.text = getString(R.string.settings_gpu_driver_active, name)
     } else {
       driverStatusText.text = getString(R.string.settings_gpu_driver_system)
+    }
+  }
+
+  private fun setupRendererPicker() {
+    val btn = findViewById<MaterialButton>(R.id.btn_renderer)
+    val labels = arrayOf("Vulkan", "OpenGL ES")
+    val keys = arrayOf("vulkan", "opengl")
+    val current = prefs.getString("renderer", "vulkan") ?: "vulkan"
+    val idx = keys.indexOf(current).coerceAtLeast(0)
+    btn.text = labels[idx]
+    btn.setOnClickListener {
+      val cur = prefs.getString("renderer", "vulkan") ?: "vulkan"
+      val sel = keys.indexOf(cur).coerceAtLeast(0)
+      MaterialAlertDialogBuilder(this)
+        .setTitle(R.string.settings_renderer)
+        .setSingleChoiceItems(labels, sel) { dialog, which ->
+          prefs.edit().putString("renderer", keys[which]).apply()
+          btn.text = labels[which]
+          dialog.dismiss()
+          Toast.makeText(this, getString(R.string.settings_renderer_restart), Toast.LENGTH_LONG).show()
+        }
+        .setNegativeButton(android.R.string.cancel, null)
+        .show()
     }
   }
 

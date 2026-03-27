@@ -313,6 +313,24 @@
             android:text="@string/settings_display_title"
             android:textAppearance="@style/TextAppearance.Material3.TitleLarge" />
 
+          <!-- Renderer -->
+          <com.google.android.material.button.MaterialButton
+            android:id="@+id/btn_renderer"
+            style="?attr/materialButtonOutlinedStyle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="Vulkan"
+            android:textColor="@color/xemu_text_muted" />
+          <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
+            android:layout_marginTop="2dp"
+            android:text="@string/settings_renderer_desc"
+            android:textAppearance="@style/TextAppearance.Material3.BodySmall"
+            android:textColor="@color/xemu_text_muted" />
+
           <com.google.android.material.materialswitch.MaterialSwitch
             android:id="@+id/switch_show_fps"
             android:layout_width="match_parent"

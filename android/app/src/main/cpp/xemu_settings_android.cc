@@ -236,14 +236,20 @@ bool xemu_settings_load(void)
             g_config.general.show_welcome = *show_welcome;
         }
 
-        // Display settings - force Vulkan on Android
+        // Display settings - default to Vulkan, allow OpenGL via config
         g_config.display.renderer = CONFIG_DISPLAY_RENDERER_VULKAN;
         if (auto renderer = display["renderer"].value<std::string>()) {
             CONFIG_DISPLAY_RENDERER parsed;
-            if (parse_renderer(*renderer, &parsed) && parsed != CONFIG_DISPLAY_RENDERER_VULKAN) {
-                __android_log_print(ANDROID_LOG_WARN, "hakuX",
-                                    "Config display.renderer=%s requested, but Android forces Vulkan",
-                                    renderer->c_str());
+            if (parse_renderer(*renderer, &parsed)) {
+                if (parsed == CONFIG_DISPLAY_RENDERER_VULKAN ||
+                    parsed == CONFIG_DISPLAY_RENDERER_OPENGL) {
+                    g_config.display.renderer = parsed;
+                }
+                __android_log_print(ANDROID_LOG_INFO, "hakuX",
+                                    "Config display.renderer=%s (using %s)",
+                                    renderer->c_str(),
+                                    g_config.display.renderer == CONFIG_DISPLAY_RENDERER_VULKAN
+                                        ? "Vulkan" : "OpenGL");
             }
         }
 

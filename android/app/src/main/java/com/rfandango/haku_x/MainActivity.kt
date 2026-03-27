@@ -69,6 +69,9 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+    val rendererPref = getSharedPreferences("x1box_prefs", MODE_PRIVATE)
+      .getString("renderer", "vulkan") ?: "vulkan"
+    SDLActivity.nativeSetenv("XEMU_RENDERER", rendererPref)
     SDLActivity.nativeSetenv("SDL_ANDROID_TRAP_BACK_BUTTON", "1")
     setupOnScreenController()
     setupFpsOverlay()
