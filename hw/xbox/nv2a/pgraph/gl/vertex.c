@@ -24,6 +24,25 @@
 #include "debug.h"
 #include "renderer.h"
 
+#ifdef __ANDROID__
+#include <android/log.h>
+
+static void android_log_gl_errors(const char *ctx)
+{
+    GLenum err;
+
+    while ((err = glGetError()) != GL_NO_ERROR) {
+        __android_log_print(ANDROID_LOG_WARN, "xemu-android",
+                            "GL error 0x%X at %s", err, ctx);
+    }
+}
+#else
+static inline void android_log_gl_errors(const char *ctx)
+{
+    (void)ctx;
+}
+#endif
+
 static void update_memory_buffer(NV2AState *d, hwaddr addr, hwaddr size,
                                  bool quick)
 {
@@ -80,6 +99,8 @@ void pgraph_gl_bind_vertex_attributes(NV2AState *d, unsigned int min_element,
     }
 
     pg->compressed_attrs = 0;
+    pg->uniform_attrs = 0;
+    pg->swizzle_attrs = 0;
 
     for (int i = 0; i < NV2A_VERTEXSHADER_ATTRIBUTES; i++) {
         VertexAttribute *attr = &pg->vertex_attributes[i];
@@ -97,13 +118,21 @@ void pgraph_gl_bind_vertex_attributes(NV2AState *d, unsigned int min_element,
         GLenum gl_type;
         GLboolean gl_normalize;
         bool needs_conversion = false;
+        bool d3d_swizzle = false;
 
         switch (attr->format) {
         case NV097_SET_VERTEX_DATA_ARRAY_FORMAT_TYPE_UB_D3D:
             gl_type = GL_UNSIGNED_BYTE;
             gl_normalize = GL_TRUE;
+#ifdef __ANDROID__
+            gl_count = attr->count;
+            if (attr->count == 4) {
+                d3d_swizzle = true;
+            }
+#else
             // http://www.opengl.org/registry/specs/ARB/vertex_array_bgra.txt
             gl_count = GL_BGRA;
+#endif
             break;
         case NV097_SET_VERTEX_DATA_ARRAY_FORMAT_TYPE_UB_OGL:
             gl_type = GL_UNSIGNED_BYTE;
@@ -188,10 +217,14 @@ void pgraph_gl_bind_vertex_attributes(NV2AState *d, unsigned int min_element,
         }
 
         glEnableVertexAttribArray(i);
+        if (d3d_swizzle) {
+            pg->swizzle_attrs |= (1 << i);
+        }
         last_entry += stride * provoking_element_index;
         pgraph_update_inline_value(attr, last_entry);
     }
 
+    android_log_gl_errors("pgraph_gl_bind_vertex_attributes");
     NV2A_GL_DGROUP_END();
 }
 
@@ -295,7 +328,6 @@ void pgraph_gl_finalize_buffers(PGRAPHState *pg)
     }
     glDeleteBuffers(element_cache_size, element_cache_buffers);
     lru_flush(&r->element_cache);
-    lru_destroy(&r->element_cache);
 
     g_free(r->element_cache_entries);
     r->element_cache_entries = NULL;

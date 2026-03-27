@@ -53,6 +53,20 @@ extern "C" void xemu_android_pause_emulation(void);
 extern "C" void xemu_android_resume_emulation(void);
 extern "C" void xemu_android_request_exit(void);
 
+extern "C" bool xemu_android_is_debug_logging_enabled(void)
+{
+    return false; // TODO: wire to settings toggle
+}
+
+/* Stub: old GL display readback — replaced by texture-based path in new GL display.c.
+ * ui/xemu.c still calls this; returning false makes it use the fallback. */
+extern "C" bool nv2a_android_copy_readback(uint8_t **buffer, size_t *buffer_size,
+                                            int *width, int *height)
+{
+    (void)buffer; (void)buffer_size; (void)width; (void)height;
+    return false;
+}
+
 #ifdef CONFIG_VULKAN
 #include <adrenotools/driver.h>
 #include <dlfcn.h>
