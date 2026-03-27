@@ -899,13 +899,15 @@ void sdl2_poll_events(struct sdl2_console *scon)
             shutdown_action = SHUTDOWN_ACTION_POWEROFF;
             qemu_system_shutdown_request(SHUTDOWN_CAUSE_HOST_UI);
             g_android_should_quit = true;
-            __android_log_print(ANDROID_LOG_INFO, "xemu-android",
-                                "android: app terminating");
+            bdrv_flush_all();
+            __android_log_print(ANDROID_LOG_INFO, "hakuX",
+                                "android: app terminating, flushed block devices");
             break;
         case SDL_APP_WILLENTERBACKGROUND:
             g_android_paused = true;
-            __android_log_print(ANDROID_LOG_INFO, "xemu-android",
-                                "android: app entering background");
+            bdrv_flush_all();
+            __android_log_print(ANDROID_LOG_INFO, "hakuX",
+                                "android: app entering background, flushed block devices");
             break;
         case SDL_APP_DIDENTERBACKGROUND:
             break;

@@ -743,13 +743,20 @@ class SettingsActivity : AppCompatActivity() {
       .setTitle(R.string.settings_clear_cache_confirm_title)
       .setMessage(R.string.settings_clear_cache_confirm_message)
       .setPositiveButton(R.string.settings_clear_cache) { _, _ ->
-        try {
-          clearHddCachePartitions(hddPath)
-          Toast.makeText(this, getString(R.string.settings_clear_cache_success), Toast.LENGTH_SHORT).show()
-        } catch (e: Exception) {
-          Log.e(tag, "clearHddCachePartitions failed", e)
-          Toast.makeText(this, getString(R.string.settings_clear_cache_failed, e.message), Toast.LENGTH_LONG).show()
-        }
+        Toast.makeText(this, getString(R.string.settings_clear_cache_working), Toast.LENGTH_SHORT).show()
+        Thread {
+          try {
+            clearHddCachePartitions(hddPath)
+            runOnUiThread {
+              Toast.makeText(this, getString(R.string.settings_clear_cache_success), Toast.LENGTH_SHORT).show()
+            }
+          } catch (e: Exception) {
+            Log.e(tag, "clearHddCachePartitions failed", e)
+            runOnUiThread {
+              Toast.makeText(this, getString(R.string.settings_clear_cache_failed, e.message), Toast.LENGTH_LONG).show()
+            }
+          }
+        }.start()
       }
       .setNegativeButton(android.R.string.cancel, null)
       .show()
@@ -1106,7 +1113,7 @@ class SettingsActivity : AppCompatActivity() {
       "(0x${imageLen.toString(16)}) canWrite=${file.canWrite()}")
     require(file.exists() && imageLen > 0) { "HDD image missing or empty" }
 
-    RandomAccessFile(file, "rw").use { raf ->
+    RandomAccessFile(file, "rwd").use { raf ->
       raf.seek(0)
       val fileMagic = raf.readInt()
 

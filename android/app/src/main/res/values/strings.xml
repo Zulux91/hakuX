@@ -111,6 +111,7 @@
   <string name="settings_clear_cache_desc">Re-format the three game cache partitions. Fixes loading issues in some titles caused by corrupt cache data. The emulator must not be running.</string>
   <string name="settings_clear_cache_confirm_title">Clear cache partitions?</string>
   <string name="settings_clear_cache_confirm_message">This will erase all data in the X, Y, and Z cache partitions of the Xbox HDD image. Game saves (E:) and system files (C:) are not affected.\n\nMake sure the emulator is not running.</string>
+  <string name="settings_clear_cache_working">Clearing cache partitions…</string>
   <string name="settings_clear_cache_success">Cache partitions cleared successfully.</string>
   <string name="settings_clear_cache_failed">Failed to clear cache partitions: %1$s</string>
   <string name="settings_clear_cache_no_hdd">No HDD image found. Run the setup wizard first.</string>
