@@ -531,6 +531,9 @@ class GameLibraryActivity : AppCompatActivity() {
     onProgress: ((phase: Int, percent: Int) -> Unit)? = null
   ): String? {
     val folderUri = gamesFolderUri ?: return getString(R.string.library_no_folder)
+    if (!hasPersistedWritePermission(folderUri)) {
+      return getString(R.string.library_convert_no_write_permission)
+    }
     val root = DocumentFile.fromTreeUri(this, folderUri)
       ?: return getString(R.string.library_convert_resolve_failed)
     val parent = resolveParentDirectory(root, game.relativePath)

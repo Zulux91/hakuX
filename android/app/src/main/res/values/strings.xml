@@ -64,6 +64,7 @@
   <string name="library_autoconvert_phase_convert">Converting</string>
   <string name="library_autoconvert_phase_copy_out">Saving XISO</string>
   <string name="library_autoconvert_cleanup">Cleaning up...</string>
+  <string name="library_convert_no_write_permission">No write permission on games folder. Please re-select the folder in Settings.</string>
   <string name="library_xiso_corrupt">XISO file appears corrupt. Launching anyway.</string>
   <string name="library_xiso_corrupt_rebuilding">XISO corrupt, rebuilding from original ISO...</string>
   <string name="library_game_size">Size: %1$s</string>
