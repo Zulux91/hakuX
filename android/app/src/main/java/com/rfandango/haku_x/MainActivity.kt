@@ -35,48 +35,14 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
   private var fpsTextView: TextView? = null
   private val fpsHandler = Handler(Looper.getMainLooper())
   private val fpsUpdateInterval = 1000L
-  private var driverInfoStr = ""
-  private var rendererLabel = ""
-
   private val fpsRunnable = object : Runnable {
     override fun run() {
-      try {
-        val currentFps = nativeGetFps()
-        if (rendererLabel.isEmpty()) {
-          val pref = getSharedPreferences("x1box_prefs", MODE_PRIVATE)
-            .getString("renderer", "vulkan") ?: "vulkan"
-          rendererLabel = if (pref == "opengl") "OpenGL ES" else ""
-        }
-        if (rendererLabel.isEmpty() && (driverInfoStr.isEmpty() || driverInfoStr.contains("initializing"))) {
-          try {
-            val info = nativeGetDriverInfo()
-            if (!info.contains("initializing")) {
-              driverInfoStr = info
-            }
-          } catch (_: Exception) {}
-        }
-        val pacing = try { nativeGetFramePacing() } catch (_: Exception) { "" }
-        val shaderStats = try { nativeGetShaderStats() } catch (_: Exception) { "" }
-        val sb = StringBuilder("FPS: $currentFps")
-        if (rendererLabel.isNotEmpty()) {
-          sb.append(" | $rendererLabel")
-        } else if (driverInfoStr.isNotEmpty()) {
-          sb.append(" | $driverInfoStr")
-        }
-        if (pacing.isNotEmpty()) sb.append("\n$pacing")
-        if (shaderStats.isNotEmpty()) sb.append("\n$shaderStats")
-        fpsTextView?.text = sb.toString()
-      } catch (_: Throwable) {
-        fpsTextView?.text = "FPS: --"
-      }
+      fpsTextView?.text = "FPS: ${nativeGetFps()}"
       fpsHandler.postDelayed(this, fpsUpdateInterval)
     }
   }
 
   private external fun nativeGetFps(): Int
-  private external fun nativeGetDriverInfo(): String
-  private external fun nativeGetFramePacing(): String
-  private external fun nativeGetShaderStats(): String
   private external fun nativePauseEmulation(): Unit
   private external fun nativeResumeEmulation(): Unit
   private external fun nativeExitEmulation(): Unit
@@ -154,7 +120,7 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
       setShadowLayer(2f, 1f, 1f, Color.BLACK)
       setPadding(16, 8, 16, 8)
       setBackgroundColor(Color.argb(100, 0, 0, 0))
-      maxLines = 4
+      maxLines = 1
     }
     val params = RelativeLayout.LayoutParams(
       RelativeLayout.LayoutParams.WRAP_CONTENT,
