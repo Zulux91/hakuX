@@ -2,6 +2,7 @@ package com.rfandango.haku_x
 
 import android.content.Intent
 import android.content.res.Configuration
+import android.util.Log
 import android.text.Editable
 import android.text.TextWatcher
 import android.net.Uri
@@ -530,14 +531,28 @@ class GameLibraryActivity : AppCompatActivity() {
     overwrite: Boolean,
     onProgress: ((phase: Int, percent: Int) -> Unit)? = null
   ): String? {
-    val folderUri = gamesFolderUri ?: return getString(R.string.library_no_folder)
+    val TAG = "hakuX-xiso"
+    Log.i(TAG, "convert: game=${game.relativePath} output=$outputName overwrite=$overwrite")
+    val folderUri = gamesFolderUri
+    if (folderUri == null) {
+      Log.e(TAG, "convert: no games folder URI")
+      return getString(R.string.library_no_folder)
+    }
     if (!hasPersistedWritePermission(folderUri)) {
+      Log.e(TAG, "convert: no write permission on $folderUri")
       return getString(R.string.library_convert_no_write_permission)
     }
     val root = DocumentFile.fromTreeUri(this, folderUri)
-      ?: return getString(R.string.library_convert_resolve_failed)
+    if (root == null) {
+      Log.e(TAG, "convert: DocumentFile.fromTreeUri returned null")
+      return getString(R.string.library_convert_resolve_failed)
+    }
     val parent = resolveParentDirectory(root, game.relativePath)
-      ?: return getString(R.string.library_convert_resolve_failed)
+    if (parent == null) {
+      Log.e(TAG, "convert: resolveParentDirectory returned null for ${game.relativePath}")
+      return getString(R.string.library_convert_resolve_failed)
+    }
+    Log.i(TAG, "convert: parent=${parent.name} canWrite=${parent.canWrite()}")
 
     val existing = parent.findFile(outputName)
     if (existing != null && !overwrite) {
@@ -555,15 +570,19 @@ class GameLibraryActivity : AppCompatActivity() {
     val outputTemp = File(stageDir, "output-$token.xiso.iso")
     try {
       // Phase 0: copy ISO to temp staging
+      Log.i(TAG, "convert: phase 0 — copying ${game.sizeBytes} bytes to ${inputTemp.absolutePath}")
       if (convertCancelled) return "Cancelled"
       if (!copyWithProgress(game.uri, inputTemp, game.sizeBytes) { pct ->
         if (convertCancelled) throw InterruptedException("Conversion cancelled")
         onProgress?.invoke(0, pct)
       }) {
+        Log.e(TAG, "convert: phase 0 FAILED — copy to temp failed")
         return getString(R.string.library_convert_copy_input_failed)
       }
+      Log.i(TAG, "convert: phase 0 done — temp size=${inputTemp.length()}")
 
       // Phase 1: native XISO conversion (temp → temp)
+      Log.i(TAG, "convert: phase 1 — native conversion ${inputTemp.absolutePath} → ${outputTemp.absolutePath}")
       if (convertCancelled) return "Cancelled"
       onProgress?.invoke(1, 0)
       val nativeError =
@@ -571,20 +590,27 @@ class GameLibraryActivity : AppCompatActivity() {
       onProgress?.invoke(1, 100)
       if (convertCancelled) return "Cancelled"
       if (!nativeError.isNullOrBlank()) {
+        Log.e(TAG, "convert: phase 1 FAILED — native error: $nativeError")
         return nativeError
       }
 
       if (!outputTemp.exists() || outputTemp.length() <= 0L) {
+        Log.e(TAG, "convert: phase 1 FAILED — output empty or missing")
         return "Converted image was empty"
       }
+      Log.i(TAG, "convert: phase 1 done — output size=${outputTemp.length()}")
 
       // Phase 2: copy finished XISO from staging to ROM folder
-      // Only now do we touch the ROM folder — nothing incomplete can be left there.
+      Log.i(TAG, "convert: phase 2 — copying to ROM folder as $outputName")
       if (existing != null && !existing.delete()) {
+        Log.e(TAG, "convert: phase 2 FAILED — could not delete existing $outputName")
         return getString(R.string.library_convert_create_output_failed)
       }
       val outputDoc = parent.createFile("application/octet-stream", outputName)
-        ?: return getString(R.string.library_convert_create_output_failed)
+      if (outputDoc == null) {
+        Log.e(TAG, "convert: phase 2 FAILED — createFile returned null for $outputName")
+        return getString(R.string.library_convert_create_output_failed)
+      }
       convertOutputDoc = outputDoc
 
       if (!copyFileWithProgress(outputTemp, outputDoc.uri, outputTemp.length()) { pct ->
@@ -741,6 +767,8 @@ class GameLibraryActivity : AppCompatActivity() {
   }
 
   private fun launchGame(game: GameEntry) {
+    val TAG = "hakuX-xiso"
+    Log.i(TAG, "launchGame: path=${game.relativePath} uri=${game.uri} size=${game.sizeBytes}")
     // If this is a .xiso.iso file, verify integrity before launching
     val lower = game.relativePath.lowercase(Locale.ROOT)
     if (lower.endsWith(".xiso.iso")) {
@@ -771,25 +799,34 @@ class GameLibraryActivity : AppCompatActivity() {
       return
     }
 
-    if (isConvertibleIso(game) && XisoConverterNative.isAvailable()) {
+    val convertible = isConvertibleIso(game)
+    val converterAvail = XisoConverterNative.isAvailable()
+    Log.i(TAG, "launchGame: convertible=$convertible converterAvail=$converterAvail")
+    if (convertible && converterAvail) {
       val xisoGame = findExistingXiso(game)
+      Log.i(TAG, "launchGame: existingXiso=${xisoGame?.relativePath ?: "none"}")
       if (xisoGame != null) {
-        // Verify existing XISO integrity
-        if (isXisoIntact(xisoGame.uri, xisoGame.sizeBytes)) {
+        val intact = isXisoIntact(xisoGame.uri, xisoGame.sizeBytes)
+        Log.i(TAG, "launchGame: xiso intact=$intact")
+        if (intact) {
           launchGameDirectly(xisoGame.uri)
           return
         }
-        // Corrupt — rebuild
+        Log.w(TAG, "launchGame: xiso corrupt, rebuilding")
         Toast.makeText(this, getString(R.string.library_xiso_corrupt_rebuilding), Toast.LENGTH_SHORT).show()
       }
 
-      if (isXisoContent(game.uri)) {
+      val alreadyXiso = isXisoContent(game.uri)
+      Log.i(TAG, "launchGame: isXisoContent=$alreadyXiso")
+      if (alreadyXiso) {
         launchGameDirectly(game.uri)
         return
       }
 
+      Log.i(TAG, "launchGame: starting auto-convert")
       launchGameWithAutoConvert(game)
     } else {
+      Log.i(TAG, "launchGame: launching directly (no conversion)")
       launchGameDirectly(game.uri)
     }
   }

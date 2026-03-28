@@ -63,6 +63,8 @@ android {
 
   buildTypes {
     debug {
+      applicationIdSuffix = ".debug"
+      resValue("string", "app_name", "hakuX Debug")
       ndk {
         debugSymbolLevel = "NONE"
       }
@@ -75,6 +77,14 @@ android {
       }
     }
     release {
+      resValue("string", "app_name", "hakuX")
+      externalNativeBuild {
+        cmake {
+          arguments += listOf(
+            "-DCMAKE_BUILD_TYPE=Release"
+          )
+        }
+      }
       isMinifyEnabled = false
       proguardFiles(
         getDefaultProguardFile("proguard-android-optimize.txt"),
