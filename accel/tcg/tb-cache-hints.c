@@ -31,14 +31,28 @@
 /* ------------------------------------------------------------------ */
 
 #define TB_CACHE_MAGIC   0x54424843  /* "TBCH" */
-#define TB_CACHE_VERSION 3
+#define TB_CACHE_VERSION 4
 
 typedef struct TBCacheFileHeader {
     uint32_t magic;
     uint32_t version;
     uint32_t game_hash;
     uint32_t hint_count;
+    uint32_t build_hash;  /* v4: auto-invalidate on new builds */
+    uint32_t reserved[3];
 } TBCacheFileHeader;
+
+/* Compile-time build fingerprint so the cache auto-invalidates when
+ * code generation changes (new build, different compiler flags, etc.) */
+static uint32_t tb_cache_build_hash(void)
+{
+    const char *stamp = __DATE__ " " __TIME__;
+    uint32_t h = 5381;
+    for (const char *p = stamp; *p; p++) {
+        h = ((h << 5) + h) ^ (uint8_t)*p;
+    }
+    return h;
+}
 
 /* v1 hint struct for backward-compatible loading of old cache files. */
 typedef struct TBCacheHintV1 {
@@ -232,6 +246,7 @@ void tb_cache_save(const char *path, uint32_t game_hash)
         .version    = TB_CACHE_VERSION,
         .game_hash  = game_hash,
         .hint_count = (uint32_t)recorded_count,
+        .build_hash = tb_cache_build_hash(),
     };
 
     if (fwrite(&hdr, sizeof(hdr), 1, f) != 1) {
@@ -268,13 +283,22 @@ int tb_cache_load(const char *path, uint32_t game_hash)
         qemu_log("tb_cache_load: bad magic in %s\n", path);
         goto fail;
     }
-    if (hdr.version < 1 || hdr.version > 3) {
+    if (hdr.version < 1 || hdr.version > TB_CACHE_VERSION) {
         qemu_log("tb_cache_load: unsupported version %u in %s\n",
                  hdr.version, path);
         goto fail;
     }
     if (hdr.game_hash != game_hash) {
         qemu_log("tb_cache_load: game hash mismatch in %s\n", path);
+        goto fail;
+    }
+    if (hdr.version >= 4 && hdr.build_hash != tb_cache_build_hash()) {
+        qemu_log("tb_cache_load: build hash mismatch (cache=0x%08x current=0x%08x) in %s\n",
+                 hdr.build_hash, tb_cache_build_hash(), path);
+#ifdef __ANDROID__
+        __android_log_print(ANDROID_LOG_WARN, "hakuX-tb",
+                            "TB cache rejected: built by different build");
+#endif
         goto fail;
     }
     if (hdr.hint_count == 0 || hdr.hint_count > TB_CACHE_MAX_HINTS) {
@@ -377,6 +401,17 @@ void tb_cache_prewarm(CPUState *cpu)
     int translated = 0;
     int tier1_count = 0;
     int skipped = 0;
+
+#ifdef __ANDROID__
+    /* On Android, skip prewarm — tb_gen_code can assert on hints where
+     * the translator's page state doesn't match the current memory layout.
+     * Blocks translate on-demand instead. The hints are still saved for
+     * tier tracking (exec_count, superblock formation). */
+    __android_log_print(ANDROID_LOG_INFO, "hakuX-tb",
+                        "prewarm: skipped (%d hints for on-demand use)",
+                        loaded_count);
+    return;
+#endif
 
     qemu_log("tb_cache_prewarm: pre-translating %d blocks...\n", loaded_count);
 
@@ -520,11 +555,19 @@ void tb_cache_rewarm_after_flush(CPUState *cpu)
     int tier1_count = 0;
     int total = recorded_count;
 
+    int skipped = 0;
     for (int i = 0; i < total; i++) {
         const TBCacheHint *h = &recorded_hints[i];
 
+        vaddr hint_pc = (vaddr)h->pc;
+        unsigned int page_offset = hint_pc & 0xFFF; /* 4KB page */
+        if (page_offset > 0xFF0) { /* within 16 bytes of page end */
+            skipped++;
+            continue;
+        }
+
         TCGTBCPUState s = {
-            .pc      = (vaddr)h->pc,
+            .pc      = hint_pc,
             .cs_base = h->cs_base,
             .flags   = h->flags,
             .cflags  = h->cflags | (h->tier >= 1 ? CF_TIER1 : 0),
