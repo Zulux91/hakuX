@@ -5375,6 +5375,12 @@ void pgraph_vk_clear_surface(NV2AState *d, uint32_t parameter)
                          ymax, write_color ? " color" : "",
                          write_zeta ? " zeta" : "");
 
+    /* Log clear operations into the diagnostic capture */
+    if (nv2a_dbg_diag_frame_active()) {
+        nv2a_diag_log_clear(d, pg, parameter, xmin, ymin, xmax, ymax,
+                            write_color, write_zeta);
+    }
+
     /*
      * Inline clear: when already in a render pass with the correct framebuffer,
      * use vkCmdClearAttachments directly without breaking the render pass.

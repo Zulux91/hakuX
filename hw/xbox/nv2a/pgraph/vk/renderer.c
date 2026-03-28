@@ -849,6 +849,117 @@ static const char *diag_prim_name(int mode)
     }
 }
 
+void nv2a_diag_log_clear(NV2AState *d, PGRAPHState *pg,
+                          uint32_t parameter,
+                          unsigned int xmin, unsigned int ymin,
+                          unsigned int xmax, unsigned int ymax,
+                          bool write_color, bool write_zeta)
+{
+    if (!qatomic_read(&diag_frame_active)) {
+        return;
+    }
+    if (diag_draw_index >= DIAG_MAX_DRAWS) {
+        return;
+    }
+
+    PGRAPHVkState *r = pg->vk_renderer_state;
+    int idx = diag_draw_index++;
+
+    DIAG_LOG("log_clear: frame_idx=%d draw=%d rect=(%u,%u)-(%u,%u) color=%d zeta=%d\n",
+             diag_current_frame_index, idx, xmin, ymin, xmax, ymax,
+             write_color, write_zeta);
+
+    diag_json_append(
+        "%s        {\n"
+        "          \"draw_index\": %d,\n"
+        "          \"type\": \"clear\",\n"
+        "          \"clear_color\": %s,\n"
+        "          \"clear_zeta\": %s,\n"
+        "          \"clear_rect\": {\"xmin\": %u, \"ymin\": %u, "
+                                   "\"xmax\": %u, \"ymax\": %u},\n",
+        idx > 0 ? ",\n" : "",
+        idx,
+        write_color ? "true" : "false",
+        write_zeta ? "true" : "false",
+        xmin, ymin, xmax, ymax
+    );
+
+    if (r->color_binding) {
+        diag_json_append(
+            "          \"color_surface\": {"
+                "\"format\": %u, \"width\": %u, \"height\": %u, "
+                "\"pitch\": %u, \"bpp\": %u},\n",
+            r->color_binding->shape.color_format,
+            r->color_binding->width, r->color_binding->height,
+            r->color_binding->pitch, r->color_binding->fmt.bytes_per_pixel
+        );
+    } else {
+        diag_json_append("          \"color_surface\": null,\n");
+    }
+
+    if (r->zeta_binding) {
+        diag_json_append(
+            "          \"zeta_surface\": {"
+                "\"format\": %u, \"width\": %u, \"height\": %u, "
+                "\"pitch\": %u, \"bpp\": %u}\n",
+            r->zeta_binding->shape.zeta_format,
+            r->zeta_binding->width, r->zeta_binding->height,
+            r->zeta_binding->pitch, r->zeta_binding->fmt.bytes_per_pixel
+        );
+    } else {
+        diag_json_append("          \"zeta_surface\": null\n");
+    }
+
+    diag_json_append("        }");
+
+    /* Store a fingerprint for diff tracking */
+    memset(&diag_cur_fingerprints[idx], 0, sizeof(diag_cur_fingerprints[idx]));
+    diag_cur_fingerprints[idx].state_hash = parameter;
+}
+
+void nv2a_diag_log_blit(NV2AState *d, PGRAPHState *pg)
+{
+    if (!qatomic_read(&diag_frame_active)) {
+        return;
+    }
+    if (diag_draw_index >= DIAG_MAX_DRAWS) {
+        return;
+    }
+
+    int idx = diag_draw_index++;
+    ImageBlitState *ib = &pg->image_blit;
+    ContextSurfaces2DState *cs = &pg->context_surfaces_2d;
+
+    DIAG_LOG("log_blit: frame_idx=%d draw=%d src=(%u,%u) dst=(%u,%u) size=%ux%u\n",
+             diag_current_frame_index, idx,
+             ib->in_x, ib->in_y, ib->out_x, ib->out_y,
+             ib->width, ib->height);
+
+    diag_json_append(
+        "%s        {\n"
+        "          \"draw_index\": %d,\n"
+        "          \"type\": \"blit\",\n"
+        "          \"src\": {\"x\": %u, \"y\": %u},\n"
+        "          \"dst\": {\"x\": %u, \"y\": %u},\n"
+        "          \"size\": {\"w\": %u, \"h\": %u},\n"
+        "          \"color_format\": %u,\n"
+        "          \"src_pitch\": %u,\n"
+        "          \"dst_pitch\": %u\n"
+        "        }",
+        idx > 0 ? ",\n" : "",
+        idx,
+        ib->in_x, ib->in_y,
+        ib->out_x, ib->out_y,
+        ib->width, ib->height,
+        cs->color_format,
+        cs->source_pitch,
+        cs->dest_pitch
+    );
+
+    memset(&diag_cur_fingerprints[idx], 0, sizeof(diag_cur_fingerprints[idx]));
+    diag_cur_fingerprints[idx].state_hash = ib->width | ((uint64_t)ib->height << 32);
+}
+
 void nv2a_diag_log_draw_call(NV2AState *d, PGRAPHState *pg,
                              const char *type, int count)
 {
@@ -929,23 +1040,28 @@ void nv2a_diag_log_draw_call(NV2AState *d, PGRAPHState *pg,
         diag_find_or_add_shader(shader_hash, vsh_src, psh_src, geom_src);
     }
 
-    /* Compute state fingerprint for diff detection */
+    /* Compute state fingerprint for diff detection.
+     * Must memset to zero to avoid padding bytes causing false diffs. */
     struct {
         uint32_t control_0, control_1, control_2, blend_reg, setupraster;
         uint32_t color_fmt, zeta_fmt;
         uint32_t color_w, color_h, zeta_w, zeta_h;
         uint32_t tex_fmt[NV2A_MAX_TEXTURES];
         int prim_mode;
-    } state_block = {
-        control_0, control_1, control_2, blend_reg, setupraster,
-        r->color_binding ? r->color_binding->shape.color_format : 0,
-        r->zeta_binding ? r->zeta_binding->shape.zeta_format : 0,
-        r->color_binding ? r->color_binding->width : 0,
-        r->color_binding ? r->color_binding->height : 0,
-        r->zeta_binding ? r->zeta_binding->width : 0,
-        r->zeta_binding ? r->zeta_binding->height : 0,
-        {0}, pg->primitive_mode
-    };
+    } state_block;
+    memset(&state_block, 0, sizeof(state_block));
+    state_block.control_0 = control_0;
+    state_block.control_1 = control_1;
+    state_block.control_2 = control_2;
+    state_block.blend_reg = blend_reg;
+    state_block.setupraster = setupraster;
+    state_block.color_fmt = r->color_binding ? r->color_binding->shape.color_format : 0;
+    state_block.zeta_fmt = r->zeta_binding ? r->zeta_binding->shape.zeta_format : 0;
+    state_block.color_w = r->color_binding ? r->color_binding->width : 0;
+    state_block.color_h = r->color_binding ? r->color_binding->height : 0;
+    state_block.zeta_w = r->zeta_binding ? r->zeta_binding->width : 0;
+    state_block.zeta_h = r->zeta_binding ? r->zeta_binding->height : 0;
+    state_block.prim_mode = pg->primitive_mode;
     for (int i = 0; i < NV2A_MAX_TEXTURES; i++) {
         state_block.tex_fmt[i] = pgraph_vk_reg_r(pg, NV_PGRAPH_TEXFMT0 + i * 4);
     }
@@ -1037,16 +1153,31 @@ void nv2a_diag_log_draw_call(NV2AState *d, PGRAPHState *pg,
                                                NV_PGRAPH_TEXFMT0_DIMENSIONALITY);
         unsigned int log_w = GET_MASK(tex_fmt, NV_PGRAPH_TEXFMT0_BASE_SIZE_U);
         unsigned int log_h = GET_MASK(tex_fmt, NV_PGRAPH_TEXFMT0_BASE_SIZE_V);
+        uint32_t tex_addr = pgraph_vk_reg_r(pg, NV_PGRAPH_TEXADDRESS0 + i * 4);
+        unsigned int addru = GET_MASK(tex_addr, NV_PGRAPH_TEXADDRESS0_ADDRU);
+        unsigned int addrv = (tex_addr >> 8) & 0x7;
+        uint32_t border_color = pgraph_vk_reg_r(pg,
+                                    NV_PGRAPH_BORDERCOLOR0 + i * 4);
+
+        static const char *addr_names[] = {
+            "?", "WRAP", "MIRROR", "CLAMP_TO_EDGE", "BORDER", "CLAMP_OGL"
+        };
+        const char *addru_name = addru < 6 ? addr_names[addru] : "?";
+        const char *addrv_name = addrv < 6 ? addr_names[addrv] : "?";
 
         diag_json_append(
             "%s{\"stage\": %d, \"enabled\": %s, \"color_format\": %u, "
-            "\"dim\": %u, \"width\": %u, \"height\": %u}",
+            "\"dim\": %u, \"width\": %u, \"height\": %u, "
+            "\"addru\": \"%s\", \"addrv\": \"%s\", "
+            "\"border_color\": \"0x%08x\"}",
             i > 0 ? ", " : "",
             i,
             tex_en ? "true" : "false",
             color_format,
             dimensionality,
-            1u << log_w, 1u << log_h
+            1u << log_w, 1u << log_h,
+            addru_name, addrv_name,
+            border_color
         );
     }
     diag_json_append("],\n");

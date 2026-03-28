@@ -436,6 +436,12 @@ typedef struct PGRAPHState PGRAPHState;
 
 void nv2a_diag_log_draw_call(NV2AState *d, PGRAPHState *pg,
                              const char *type, int count);
+void nv2a_diag_log_clear(NV2AState *d, PGRAPHState *pg,
+                          uint32_t parameter,
+                          unsigned int xmin, unsigned int ymin,
+                          unsigned int xmax, unsigned int ymax,
+                          bool write_color, bool write_zeta);
+void nv2a_diag_log_blit(NV2AState *d, PGRAPHState *pg);
 
 #ifdef __cplusplus
 }

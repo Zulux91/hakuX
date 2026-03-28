@@ -619,7 +619,8 @@ static void apply_texture_parameters(PGRAPHGLState *r,
                             wrap_t);
             binding->addrv = addrv;
         }
-        needs_border_color = needs_border_color || binding->addrv == NV_PGRAPH_TEXADDRESS0_ADDRU_BORDER;
+        needs_border_color = needs_border_color
+                             || binding->addrv == NV_PGRAPH_TEXADDRESS0_ADDRU_BORDER;
     }
     if (dimensionality > 2) {
         if (addrp != binding->addrp) {
@@ -635,7 +636,8 @@ static void apply_texture_parameters(PGRAPHGLState *r,
                             wrap_r);
             binding->addrp = addrp;
         }
-        needs_border_color = needs_border_color || binding->addrp == NV_PGRAPH_TEXADDRESS0_ADDRU_BORDER;
+        needs_border_color = needs_border_color
+                             || binding->addrp == NV_PGRAPH_TEXADDRESS0_ADDRU_BORDER;
     }
 
     if (r->supported_extensions.texture_filter_anisotropic) {

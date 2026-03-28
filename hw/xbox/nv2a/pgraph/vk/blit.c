@@ -24,6 +24,7 @@
  */
 
 #include "hw/xbox/nv2a/nv2a_int.h"
+#include "hw/xbox/nv2a/debug.h"
 #include "renderer.h"
 
 static void perform_blit(int operation, uint8_t *source, uint8_t *dest,
@@ -89,6 +90,11 @@ void pgraph_vk_image_blit(NV2AState *d)
     }
 
     pgraph_vk_surface_update(d, false, true, true);
+
+    /* Log blit into diagnostic capture */
+    if (nv2a_dbg_diag_frame_active()) {
+        nv2a_diag_log_blit(d, pg);
+    }
 
     assert(context_surfaces->object_instance == image_blit->context_surfaces);
 
