@@ -92,8 +92,24 @@ void pgraph_vk_image_blit(NV2AState *d)
     pgraph_vk_surface_update(d, false, true, true);
 
     /* Log blit into diagnostic capture */
-    if (nv2a_dbg_diag_frame_active()) {
-        nv2a_diag_log_blit(d, pg);
+    {
+        bool active = nv2a_dbg_diag_frame_active();
+        bool pending = nv2a_dbg_diag_frame_pending();
+#ifdef __ANDROID__
+        static int blit_log_count = 0;
+        if (active || pending || blit_log_count < 30) {
+            __android_log_print(ANDROID_LOG_INFO, "xemu-diag",
+                "image_blit: active=%d pending=%d src=(%u,%u) dst=(%u,%u) size=%ux%u",
+                active, pending,
+                pg->image_blit.in_x, pg->image_blit.in_y,
+                pg->image_blit.out_x, pg->image_blit.out_y,
+                pg->image_blit.width, pg->image_blit.height);
+            blit_log_count++;
+        }
+#endif
+        if (active) {
+            nv2a_diag_log_blit(d, pg);
+        }
     }
 
     assert(context_surfaces->object_instance == image_blit->context_surfaces);

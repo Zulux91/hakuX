@@ -5377,6 +5377,11 @@ void pgraph_vk_clear_surface(NV2AState *d, uint32_t parameter)
 
     /* Log clear operations into the diagnostic capture */
     if (nv2a_dbg_diag_frame_active()) {
+#ifdef __ANDROID__
+        __android_log_print(ANDROID_LOG_INFO, "xemu-diag",
+            "clear_surface: color=%d zeta=%d rect=(%u,%u)-(%u,%u)",
+            write_color, write_zeta, xmin, ymin, xmax, ymax);
+#endif
         nv2a_diag_log_clear(d, pg, parameter, xmin, ymin, xmax, ymax,
                             write_color, write_zeta);
     }
