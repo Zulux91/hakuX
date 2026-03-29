@@ -810,11 +810,9 @@ void tb_flush__exclusive_or_serial(void)
      * Re-translate the most important blocks immediately so the
      * emulator doesn't stutter while rebuilding on demand.
      */
-#ifndef __ANDROID__
     if (current_cpu) {
         tb_cache_rewarm_after_flush(current_cpu);
     }
-#endif
 
     qemu_plugin_flush_cb();
 }

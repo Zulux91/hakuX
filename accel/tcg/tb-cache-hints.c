@@ -157,11 +157,14 @@ static bool dedup_contains_or_insert(const TBCacheHint *h, int idx)
 
 void tb_cache_record_hint(const TranslationBlock *tb)
 {
-    /* Skip one-shot TBs and invalid entries. */
+    /* Skip one-shot TBs, invalid entries, and NULL PCs. */
     if (tb_page_addr0(tb) == (tb_page_addr_t)-1) {
         return;
     }
     if (tb->cflags & CF_INVALID) {
+        return;
+    }
+    if (tb->pc == 0) {
         return;
     }
 
@@ -180,6 +183,11 @@ void tb_cache_record_hint(const TranslationBlock *tb)
 
     if (recorded_count >= TB_CACHE_MAX_HINTS) {
         return;  /* cap reached */
+    }
+
+    /* Sanity check: Xbox PCs are 32-bit. */
+    if (tb->pc > 0xFFFFFFFFULL || tb->pc == 0) {
+        return;
     }
 
     TBCacheHint h = {
@@ -402,21 +410,15 @@ void tb_cache_prewarm(CPUState *cpu)
     int tier1_count = 0;
     int skipped = 0;
 
-#ifdef __ANDROID__
-    /* On Android, skip prewarm — tb_gen_code can assert on hints where
-     * the translator's page state doesn't match the current memory layout.
-     * Blocks translate on-demand instead. The hints are still saved for
-     * tier tracking (exec_count, superblock formation). */
-    __android_log_print(ANDROID_LOG_INFO, "hakuX-tb",
-                        "prewarm: skipped (%d hints for on-demand use)",
-                        loaded_count);
-    return;
-#endif
-
     qemu_log("tb_cache_prewarm: pre-translating %d blocks...\n", loaded_count);
 
     for (int i = 0; i < loaded_count; i++) {
         const TBCacheHint *h = &loaded_hints[i];
+
+        if (h->pc == 0 || h->flags == 0 || h->pc > 0xFFFFFFFFULL) {
+            skipped++;
+            continue;
+        }
 
         TCGTBCPUState s = {
             .pc      = (vaddr)h->pc,
@@ -428,6 +430,12 @@ void tb_cache_prewarm(CPUState *cpu)
         mmap_lock();
         TranslationBlock *tb = tb_gen_code(cpu, s);
         mmap_unlock();
+
+        if (!tb) {
+            /* Code buffer full — stop prewarm, rest translates on demand. */
+            skipped += (loaded_count - i - 1);
+            break;
+        }
 
         if (tb) {
             if (h->tier >= 1) {
@@ -543,9 +551,35 @@ void tb_cache_rewarm_after_flush(CPUState *cpu)
 
     /* Guard against recursive flush -> rewarm -> flush cycles. */
     if (rewarm_in_progress) {
+#ifdef __ANDROID__
+        __android_log_print(ANDROID_LOG_WARN, "hakuX-tb",
+                            "rewarm: RECURSIVE call blocked");
+#endif
         return;
     }
     rewarm_in_progress = true;
+
+#ifdef __ANDROID__
+    /* Check for corruption in recorded hints */
+    int valid = 0, corrupt = 0;
+    for (int i = 0; i < recorded_count; i++) {
+        if (recorded_hints[i].pc <= 0xFFFFFFFFULL && recorded_hints[i].pc != 0) {
+            valid++;
+        } else {
+            corrupt++;
+        }
+    }
+    __android_log_print(ANDROID_LOG_INFO, "hakuX-tb",
+                        "rewarm: START recorded=%d valid=%d corrupt=%d "
+                        "hints_ptr=%p",
+                        recorded_count, valid, corrupt, (void *)recorded_hints);
+    if (valid == 0) {
+        __android_log_print(ANDROID_LOG_WARN, "hakuX-tb",
+                            "rewarm: ALL hints corrupt, skipping");
+        rewarm_in_progress = false;
+        return;
+    }
+#endif
 
     /* Sort hot-first so tier-1/high-exec_count TBs are placed contiguously
      * at the start of the code buffer, improving L1I cache locality. */
@@ -553,45 +587,69 @@ void tb_cache_rewarm_after_flush(CPUState *cpu)
 
     int translated = 0;
     int tier1_count = 0;
+    int failed = 0;
+#ifdef __ANDROID__
+    int total = MIN(recorded_count, 256);
+#else
     int total = recorded_count;
+#endif
 
-    int skipped = 0;
+#ifdef __ANDROID__
+    __android_log_print(ANDROID_LOG_INFO, "hakuX-tb",
+                        "rewarm: translating %d/%d blocks", total, recorded_count);
+#endif
+
     for (int i = 0; i < total; i++) {
         const TBCacheHint *h = &recorded_hints[i];
 
-        vaddr hint_pc = (vaddr)h->pc;
-        unsigned int page_offset = hint_pc & 0xFFF; /* 4KB page */
-        if (page_offset > 0xFF0) { /* within 16 bytes of page end */
-            skipped++;
+        /* Skip invalid hints (zeroed entries, NULL PC, out-of-range PC) */
+        if (h->pc == 0 || h->flags == 0 || h->pc > 0xFFFFFFFFULL) {
+            failed++;
             continue;
         }
 
         TCGTBCPUState s = {
-            .pc      = hint_pc,
+            .pc      = (vaddr)h->pc,
             .cs_base = h->cs_base,
             .flags   = h->flags,
             .cflags  = h->cflags | (h->tier >= 1 ? CF_TIER1 : 0),
         };
 
+#ifdef __ANDROID__
+        if (i < 5 || (i % 50 == 0)) {
+            __android_log_print(ANDROID_LOG_DEBUG, "hakuX-tb",
+                "rewarm[%d/%d]: pc=0x%llx tier=%d pre-mmap_lock",
+                i, total, (unsigned long long)h->pc, h->tier);
+        }
+#endif
+
         mmap_lock();
         TranslationBlock *tb = tb_gen_code(cpu, s);
         mmap_unlock();
 
-        if (tb) {
-            if (h->tier >= 1) {
-                tb->cflags &= ~CF_TIER1;
-                tb->tier = 1;
-                tb->exec_count = h->exec_count;
-                tier1_count++;
-            }
-            translated++;
+        if (!tb) {
+#ifdef __ANDROID__
+            __android_log_print(ANDROID_LOG_WARN, "hakuX-tb",
+                "rewarm[%d/%d]: tb_gen_code returned NULL — buffer full, stopping",
+                i, total);
+#endif
+            failed = total - i;
+            break;
         }
+
+        if (h->tier >= 1) {
+            tb->cflags &= ~CF_TIER1;
+            tb->tier = 1;
+            tb->exec_count = h->exec_count;
+            tier1_count++;
+        }
+        translated++;
     }
 
 #ifdef __ANDROID__
     __android_log_print(ANDROID_LOG_INFO, "hakuX-tb",
-                        "post-flush rewarm: re-translated %d/%d blocks (tier1=%d)",
-                        translated, total, tier1_count);
+                        "rewarm: DONE translated=%d tier1=%d failed=%d",
+                        translated, tier1_count, failed);
 #endif
 
     rewarm_in_progress = false;

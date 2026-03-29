@@ -421,9 +421,7 @@ TranslationBlock *tb_gen_code(CPUState *cpu, TCGTBCPUState s)
 #endif
     gen_code_buf = tcg_ctx->code_gen_ptr;
     tb->tc.ptr = tcg_splitwx_to_rx(gen_code_buf);
-    if (!(s.cflags & CF_PCREL)) {
-        tb->pc = s.pc;
-    }
+    tb->pc = s.pc;  /* Always set PC for hint recording, even if CF_PCREL */
     tb->cs_base = s.cs_base;
     tb->flags = s.flags;
     tb->cflags = s.cflags;
