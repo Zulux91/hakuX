@@ -26,6 +26,10 @@
 #endif
 
 #include "hw/xbox/nv2a/nv2a_int.h"
+#ifdef __ANDROID__
+#include "hw/core/cpu.h"
+#include "target/i386/cpu.h"
+#endif
 #include "ui/xemu-notifications.h"
 #include "ui/xemu-settings.h"
 #include "util.h"
@@ -730,6 +734,24 @@ uint64_t pgraph_read(void *opaque, hwaddr addr, unsigned int size)
     }
 
     qemu_mutex_unlock(&pg->lock);
+
+#ifdef __ANDROID__
+    {
+        static int pgraph_poll_log = 0;
+        CPUState *cpu = first_cpu;
+        if (cpu && pgraph_poll_log < 200) {
+            CPUX86State *env = &X86_CPU(cpu)->env;
+            uint32_t eip = (uint32_t)env->eip;
+            if (eip >= 0x80014000 && eip <= 0x80016000) {
+                extern int __android_log_print(int, const char*, const char*, ...);
+                __android_log_print(3, "hakuX-mmio",
+                    "PGRAPH read: eip=0x%x reg=0x%x val=0x%x",
+                    eip, (uint32_t)addr, (uint32_t)r);
+                pgraph_poll_log++;
+            }
+        }
+    }
+#endif
 
     nv2a_reg_log_read(NV_PGRAPH, addr, size, r);
     return r;
@@ -1702,7 +1724,14 @@ DEF_METHOD(NV097, NO_OPERATION)
     unsigned channel_id =
         PG_GET_MASK(NV_PGRAPH_CTX_USER, NV_PGRAPH_CTX_USER_CHID);
 
+#ifdef __ANDROID__
+    /* On Android, skip if a previous NOP is still pending. */
+    if (pg->pending_interrupts & NV_PGRAPH_INTR_ERROR) {
+        return;
+    }
+#else
     assert(!(pg->pending_interrupts & NV_PGRAPH_INTR_ERROR));
+#endif
 
     PG_SET_MASK(NV_PGRAPH_TRAPPED_ADDR, NV_PGRAPH_TRAPPED_ADDR_CHID,
              channel_id);
@@ -1715,6 +1744,7 @@ DEF_METHOD(NV097, NO_OPERATION)
                  NV_PGRAPH_NSOURCE_NOTIFICATION); /* TODO: check this */
     pg->pending_interrupts |= NV_PGRAPH_INTR_ERROR;
     pg->waiting_for_nop = true;
+    pg->nop_stall_start_ns = nv2a_clock_ns();
 
     qemu_mutex_unlock(&pg->lock);
     bql_lock();

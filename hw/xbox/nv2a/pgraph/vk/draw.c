@@ -341,13 +341,25 @@ static void pipeline_cache_entry_init(Lru *lru, LruNode *node,
     snode->draw_time = 0;
 }
 
-#if OPT_ASYNC_COMPILE
 static bool pipeline_cache_pre_evict(Lru *lru, LruNode *node)
 {
+    PGRAPHVkState *r = container_of(lru, PGRAPHVkState, pipeline_cache);
     PipelineBinding *snode = container_of(node, PipelineBinding, node);
-    return !snode->pending;
-}
+
+#if OPT_ASYNC_COMPILE
+    if (snode->pending) {
+        return false;  /* Still being compiled */
+    }
 #endif
+
+    /* Don't evict pipelines in use by the current command buffer */
+    if (r->in_command_buffer &&
+        snode->draw_time >= r->command_buffer_start_time) {
+        return false;
+    }
+
+    return true;
+}
 
 static void pipeline_cache_entry_post_evict(Lru *lru, LruNode *node)
 {
@@ -417,9 +429,7 @@ static void init_pipeline_cache(PGRAPHState *pg)
     r->pipeline_cache.init_node = pipeline_cache_entry_init;
     r->pipeline_cache.compare_nodes = pipeline_cache_entry_compare;
     r->pipeline_cache.post_node_evict = pipeline_cache_entry_post_evict;
-#if OPT_ASYNC_COMPILE
     r->pipeline_cache.pre_node_evict = pipeline_cache_pre_evict;
-#endif
 }
 
 static void save_pipeline_cache_to_disk(PGRAPHVkState *r)
@@ -5377,11 +5387,6 @@ void pgraph_vk_clear_surface(NV2AState *d, uint32_t parameter)
 
     /* Log clear operations into the diagnostic capture */
     if (nv2a_dbg_diag_frame_active()) {
-#ifdef __ANDROID__
-        __android_log_print(ANDROID_LOG_INFO, "xemu-diag",
-            "clear_surface: color=%d zeta=%d rect=(%u,%u)-(%u,%u)",
-            write_color, write_zeta, xmin, ymin, xmax, ymax);
-#endif
         nv2a_diag_log_clear(d, pg, parameter, xmin, ymin, xmax, ymax,
                             write_color, write_zeta);
     }

@@ -350,37 +350,22 @@ static void nv2a_vblank_timer_cb(void *opaque)
             flip_active_since_ns = 0;
         }
 
-        /* NOP stall safety valve.  When waiting_for_nop is set, PFIFO
-         * stalls until the CPU clears the PGRAPH error interrupt.  If
-         * the CPU is running kernel code with IF=0 (e.g., after a TB
-         * flush), it can't deliver the interrupt, creating a permanent
-         * deadlock.  Clear after 100ms — much shorter than flip because
-         * NOP stalls should resolve in microseconds normally. */
-        /* NOP stall recovery.  Don't force-clear the NOP — that
-         * bypasses the game's interrupt handler and corrupts GPU state.
-         * Instead, force IF=1 + exit_request so the CPU can deliver
-         * the NOP interrupt through the proper handler. */
-        static int64_t nop_stuck_since_ns = 0;
-        if (qatomic_read(&d->pgraph.waiting_for_nop)) {
-            if (nop_stuck_since_ns == 0) {
-                nop_stuck_since_ns = now;
-            } else if (now - nop_stuck_since_ns > 50000000LL) { /* 50ms */
-                CPUState *cpu = first_cpu;
-                if (cpu) {
-                    CPUX86State *env = &X86_CPU(cpu)->env;
-                    env->eflags |= 0x200; /* IF=1 */
+        /* NOP interrupt delivery assist.  The PFIFO thread auto-clears
+         * waiting_for_nop after 1ms (in pfifo_puller_should_stall), but
+         * the ERROR interrupt stays pending so the CPU handler can
+         * process it properly.  Here we just help deliver the interrupt
+         * by forcing IF=1 + exit_request every 16ms while irq is pending.
+         */
+        if (d->pgraph.pending_interrupts & NV_PGRAPH_INTR_ERROR) {
+            CPUState *cpu = first_cpu;
+            if (cpu) {
+                CPUX86State *env = &X86_CPU(cpu)->env;
+                if (!(env->eflags & 0x200)) { /* IF=0 */
+                    env->eflags |= 0x200;
                     env->hflags &= ~HF_INHIBIT_IRQ_MASK;
                     qatomic_set(&cpu->exit_request, 1);
                 }
-                nop_stuck_since_ns = 0;
-                {
-                    extern int __android_log_print(int, const char*, const char*, ...);
-                    __android_log_print(5, "hakuX-vblank",
-                        "NOP stall: forced IF=1 + exit_request for proper delivery");
-                }
             }
-        } else {
-            nop_stuck_since_ns = 0;
         }
     }
 #endif

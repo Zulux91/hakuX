@@ -70,6 +70,11 @@ static uint64_t g_tier1_promotions_dropped;
 
 void xemu_set_tier1_threshold(int value)
 {
+    if (value == 0) {
+        /* 0 = disabled: set threshold impossibly high */
+        g_tier1_threshold = 0x7FFFFFFF;
+        return;
+    }
     if (value < 8) value = 8;
     if (value > 512) value = 512;
     g_tier1_threshold = value;
@@ -77,7 +82,8 @@ void xemu_set_tier1_threshold(int value)
 
 int xemu_get_tier1_threshold(void)
 {
-    return g_tier1_threshold;
+    /* Return 0 for "disabled" so the UI can show the right label */
+    return (g_tier1_threshold >= 0x7FFFFFFF) ? 0 : g_tier1_threshold;
 }
 
 void xemu_get_tier1_stats(uint64_t *promoted, uint64_t *dropped)

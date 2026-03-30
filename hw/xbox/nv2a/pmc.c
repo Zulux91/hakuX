@@ -20,6 +20,10 @@
  */
 
 #include "nv2a_int.h"
+#ifdef __ANDROID__
+#include "hw/core/cpu.h"
+#include "target/i386/cpu.h"
+#endif
 
 /* PMC - card master control */
 uint64_t pmc_read(void *opaque, hwaddr addr, unsigned int size)
@@ -46,6 +50,23 @@ uint64_t pmc_read(void *opaque, hwaddr addr, unsigned int size)
         break;
     }
 
+#ifdef __ANDROID__
+    {
+        static int pmc_poll_log = 0;
+        CPUState *cpu = first_cpu;
+        if (cpu && pmc_poll_log < 200) {
+            CPUX86State *env = &X86_CPU(cpu)->env;
+            uint32_t eip = (uint32_t)env->eip;
+            if (eip >= 0x80014000 && eip <= 0x80016000) {
+                extern int __android_log_print(int, const char*, const char*, ...);
+                __android_log_print(3, "hakuX-mmio",
+                    "PMC read: eip=0x%x reg=0x%x val=0x%x",
+                    eip, (uint32_t)addr, (uint32_t)r);
+                pmc_poll_log++;
+            }
+        }
+    }
+#endif
     nv2a_reg_log_read(NV_PMC, addr, size, r);
     return r;
 }

@@ -245,6 +245,7 @@ typedef struct PGRAPHState {
 
     bool clearing; // FIXME: Internal
     bool waiting_for_nop;
+    int64_t nop_stall_start_ns; /* timestamp when waiting_for_nop was set */
     bool waiting_for_flip;
     bool waiting_for_context_switch;
 

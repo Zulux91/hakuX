@@ -147,7 +147,8 @@ static bool dedup_contains_or_insert(const TBCacheHint *h, int idx)
             dedup_table[slot] = (uint32_t)(idx + 1);
             return false;
         }
-        if (hint_eq(&recorded_hints[val - 1], h)) {
+        if (val <= (uint32_t)recorded_count &&
+            hint_eq(&recorded_hints[val - 1], h)) {
             return true;  /* duplicate */
         }
     }
@@ -203,6 +204,9 @@ int tb_cache_lookup_tier(vaddr pc, uint64_t cs_base, uint32_t flags,
         uint32_t val = dedup_table[slot];
         if (val == 0) {
             return -1;  /* empty slot — not found */
+        }
+        if (val > (uint32_t)recorded_count) {
+            return -1;  /* stale/corrupt index */
         }
         const TBCacheHint *h = &recorded_hints[val - 1];
         if (hint_eq(h, &key)) {
@@ -275,7 +279,8 @@ void tb_cache_record_hint(const TranslationBlock *tb)
         for (int probe = 0; probe < 16; probe++) {
             uint32_t slot = (bucket + probe) & TB_CACHE_HASH_MASK;
             uint32_t val = dedup_table ? dedup_table[slot] : 0;
-            if (val && hint_eq(&recorded_hints[val - 1], &h)) {
+            if (val && val <= (uint32_t)recorded_count &&
+                hint_eq(&recorded_hints[val - 1], &h)) {
                 TBCacheHint *existing = &recorded_hints[val - 1];
                 if (h.exec_count > existing->exec_count) {
                     existing->exec_count = h.exec_count;
