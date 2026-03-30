@@ -35,6 +35,9 @@
 #include "tcg/startup.h"
 #include "tcg-accel-ops.h"
 #include "tcg-accel-ops-mttcg.h"
+#ifdef XBOX
+#include "cpu.h"
+#endif
 
 typedef struct MttcgForceRcuNotifier {
     Notifier notifier;
@@ -87,6 +90,53 @@ static void *mttcg_cpu_thread_fn(void *arg)
 
     do {
         qemu_process_cpu_events(cpu);
+
+#ifdef __ANDROID__
+        {
+            static int64_t last_hb = 0;
+            int64_t now_hb = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
+            if (last_hb == 0) last_hb = now_hb;
+            if (now_hb - last_hb > 3000000000LL) {
+                CPUX86State *env = cpu_env(cpu);
+                extern int __android_log_print(int, const char*, const char*, ...);
+                {
+                    int if_flag = (env->eflags & 0x200) ? 1 : 0;
+                    int irq = cpu->interrupt_request;
+                    __android_log_print(4, "hakuX-cpu-thread",
+                        "hb: can_run=%d halted=%d eip=0x%x eflags=0x%x "
+                        "cr0=0x%x irq=%d IF=%d",
+                        cpu_can_run(cpu), cpu->halted,
+                        (uint32_t)env->eip,
+                        (uint32_t)env->eflags,
+                        (uint32_t)env->cr[0],
+                        irq, if_flag);
+
+                    /* Track IF=0 with pending IRQ. If this persists
+                     * across multiple heartbeats, the kernel may be
+                     * spin-waiting for hardware (e.g. GPU) with
+                     * interrupts disabled. We force IF=1 so the
+                     * VBLANK/timer interrupt can fire, but note that
+                     * the kernel will re-enter its spin loop with CLI
+                     * if the hardware condition hasn't resolved. */
+                    static int if0_irq_count = 0;
+                    if (!if_flag && irq) {
+                        if0_irq_count++;
+                        if (if0_irq_count >= 2) {
+                            env->eflags |= 0x200; /* Set IF */
+                            env->hflags &= ~HF_INHIBIT_IRQ_MASK;
+                            __android_log_print(4, "hakuX-cpu-thread",
+                                "FORCED IF=1 (stuck %d hb, eip=0x%x irq=%d)",
+                                if0_irq_count, (uint32_t)env->eip, irq);
+                            if0_irq_count = 0;
+                        }
+                    } else {
+                        if0_irq_count = 0;
+                    }
+                }
+                last_hb = now_hb;
+            }
+        }
+#endif
 
         if (cpu_can_run(cpu)) {
             int r;

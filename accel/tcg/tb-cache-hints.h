@@ -125,6 +125,14 @@ static inline void tb_cache_maybe_log_stats(void)
 void tb_cache_rewarm_after_flush(CPUState *cpu);
 
 /*
+ * Look up a recorded hint for (pc, cs_base, flags).
+ * Returns the tier if found (0, 1, or 2), or -1 if not found.
+ * Also writes exec_count if out_exec is non-NULL.
+ */
+int tb_cache_lookup_tier(vaddr pc, uint64_t cs_base, uint32_t flags,
+                         uint32_t *out_exec);
+
+/*
  * Free internal state.  Called during shutdown.
  */
 void tb_cache_cleanup(void);
@@ -140,6 +148,9 @@ static inline void tb_cache_notify_lookup_hit(void) {}
 static inline void tb_cache_notify_lookup_miss(void) {}
 static inline void tb_cache_maybe_log_stats(void) {}
 static inline void tb_cache_rewarm_after_flush(CPUState *cpu) {}
+static inline int tb_cache_lookup_tier(vaddr pc, uint64_t cs_base,
+                                       uint32_t flags, uint32_t *out_exec)
+{ return -1; }
 static inline void tb_cache_cleanup(void) {}
 
 #endif /* XBOX && XEMU_OPT_TB_CACHE_HINTS */

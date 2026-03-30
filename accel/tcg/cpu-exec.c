@@ -42,6 +42,7 @@
 #include "exec/helper-proto-common.h"
 #include "tcg-accel-ops.h"
 #include "tb-jmp-cache.h"
+#include "tb-cache-hints.h"
 #include "tb-hash.h"
 #include "tb-code-hash.h"
 #include "tb-context.h"
@@ -140,14 +141,46 @@ int tier1_consume_request(vaddr pc, uint64_t cs_base, uint32_t flags,
             if (cflags_out) {
                 *cflags_out |= CF_TIER1;
             }
+#ifdef __ANDROID__
+            {
+                extern int __android_log_print(int, const char*, const char*, ...);
+                static int consume_count = 0;
+                if (consume_count < 50 || (consume_count % 1000 == 0)) {
+                    __android_log_print(3, "hakuX-tier1",
+                        "consume #%d: pc=0x%x exec=%u -> CF_TIER1",
+                        consume_count, (uint32_t)pc,
+                        tier1_requests[i].exec_count);
+                }
+                consume_count++;
+            }
+#endif
             return (int)tier1_requests[i].exec_count;
         }
     }
     return -1;
 }
 
+void tier1_clear_all_requests(void)
+{
+    for (int i = 0; i < TIER1_REQUEST_SLOTS; i++) {
+        tier1_requests[i].valid = false;
+    }
+}
+
 static void tb_request_tier1_promotion(CPUState *cpu, TranslationBlock *tb)
 {
+#ifdef __ANDROID__
+    static int promo_log_count = 0;
+    if (promo_log_count < 50 || (promo_log_count % 1000 == 0)) {
+        extern int __android_log_print(int, const char*, const char*, ...);
+        __android_log_print(3 /*DEBUG*/, "hakuX-tier1",
+            "promote #%d: pc=0x%x exec=%u tier=%d cflags=0x%x thresh=%d",
+            promo_log_count, (uint32_t)tb->pc, tb->exec_count,
+            tb->tier, tb->cflags, g_tier1_threshold);
+    }
+    promo_log_count++;
+#endif
+
     /* Record the request for deferred tier-1 retranslation. */
     int slot = -1;
     for (int i = 0; i < TIER1_REQUEST_SLOTS; i++) {
@@ -156,21 +189,37 @@ static void tb_request_tier1_promotion(CPUState *cpu, TranslationBlock *tb)
             break;
         }
     }
-    if (slot >= 0) {
-        tier1_requests[slot].pc         = tb->pc;
-        tier1_requests[slot].cs_base    = tb->cs_base;
-        tier1_requests[slot].flags      = tb->flags;
-        tier1_requests[slot].exec_count = tb->exec_count;
-        tier1_requests[slot].valid      = true;
+    if (slot < 0) {
+#ifdef __ANDROID__
+        {
+            static int drop_log = 0;
+            if (drop_log++ % 100 == 0) {
+                extern int __android_log_print(int, const char*, const char*, ...);
+                __android_log_print(5 /*WARN*/, "hakuX-tier1",
+                    "requests FULL: dropped pc=0x%x (drop #%d)",
+                    (uint32_t)tb->pc, drop_log);
+            }
+        }
+#endif
+        /* Don't mark CF_INVALID — we couldn't record the request. */
+        return;
     }
 
+    tier1_requests[slot].pc         = tb->pc;
+    tier1_requests[slot].cs_base    = tb->cs_base;
+    tier1_requests[slot].flags      = tb->flags;
+    tier1_requests[slot].exec_count = tb->exec_count;
+    tier1_requests[slot].valid      = true;
+
     /*
-     * Invalidate the old TB.  Pass -1 so tb_phys_invalidate removes
-     * it from the page list (standalone invalidation path).
+     * Mark the old TB as invalid so it won't be reused from cache,
+     * but DON'T unlink its jumps. The CPU will naturally exit the
+     * block at the end of execution and re-lookup, finding the
+     * pending tier-1 request.
      */
-    mmap_lock();
-    tb_phys_invalidate(tb, -1);
-    mmap_unlock();
+    qemu_spin_lock(&tb->jmp_lock);
+    qatomic_set(&tb->cflags, tb->cflags | CF_INVALID);
+    qemu_spin_unlock(&tb->jmp_lock);
 }
 
 /*
@@ -179,6 +228,16 @@ static void tb_request_tier1_promotion(CPUState *cpu, TranslationBlock *tb)
  */
 static inline void tier1_maybe_promote(CPUState *cpu, TranslationBlock *tb)
 {
+#ifdef __ANDROID__
+    /* Don't promote kernel-space or low-address blocks.
+     * Kernel code (>= 0x80000000) runs with interrupts disabled (CLI).
+     * Invalidating a TB in a CLI..STI critical section breaks the
+     * interrupt re-enable chain, leaving the CPU stuck with IF=0.
+     * Low addresses (< 0x10000) are interrupt vectors / BIOS. */
+    if (tb->pc >= 0x80000000ULL || tb->pc < 0x10000ULL) {
+        return;
+    }
+#endif
     if (tb->tier == 0 && tb->exec_count >= (uint32_t)g_tier1_threshold) {
         if (tier1_promotion_budget > 0) {
             tier1_promotion_budget--;
@@ -1308,27 +1367,7 @@ cpu_exec_loop(CPUState *cpu, SyncClocks *sc)
             }
 
 
-#ifdef XBOX
-            {
-                static uint64_t cpu_heartbeat = 0;
-                cpu_heartbeat++;
-                if (cpu_heartbeat <= 20) {
-                    error_report("[CPU-PRE]  tb#%lu pc=0x%lx size=%d",
-                                 (unsigned long)cpu_heartbeat,
-                                 (unsigned long)s.pc, tb->size);
-                }
-
-                cpu_loop_exec_tb(cpu, tb, s.pc, &last_tb, &tb_exit);
-
-                if (cpu_heartbeat <= 20) {
-                    error_report("[CPU-POST] tb#%lu exit=%d last_tb=%p",
-                                 (unsigned long)cpu_heartbeat,
-                                 tb_exit, last_tb);
-                }
-            }
-#else
             cpu_loop_exec_tb(cpu, tb, s.pc, &last_tb, &tb_exit);
-#endif
 
 #ifdef XBOX
             {

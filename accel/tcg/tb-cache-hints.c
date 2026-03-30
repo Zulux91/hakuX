@@ -79,8 +79,12 @@ typedef struct TBCacheHintV2 {
 /*  Runtime state                                                      */
 /* ------------------------------------------------------------------ */
 
+#ifdef __ANDROID__
+#define TB_CACHE_MAX_HINTS    8192
+#else
 #define TB_CACHE_MAX_HINTS    65536
-#define TB_CACHE_HASH_BUCKETS 8192
+#endif
+#define TB_CACHE_HASH_BUCKETS (TB_CACHE_MAX_HINTS * 4)  /* 25% load factor */
 #define TB_CACHE_HASH_MASK    (TB_CACHE_HASH_BUCKETS - 1)
 
 /*
@@ -151,6 +155,66 @@ static bool dedup_contains_or_insert(const TBCacheHint *h, int idx)
     return false;
 }
 
+/*
+ * Rebuild the dedup hash table from scratch.  Must be called after any
+ * operation that reorders recorded_hints (e.g. qsort), because the
+ * dedup_table stores indices into that array.
+ */
+static void rebuild_dedup_table(void)
+{
+    if (!dedup_table) {
+        return;
+    }
+    memset(dedup_table, 0, TB_CACHE_HASH_BUCKETS * sizeof(uint32_t));
+    for (int i = 0; i < recorded_count; i++) {
+        const TBCacheHint *h = &recorded_hints[i];
+        uint32_t bucket = hint_hash(h->pc, h->flags);
+        for (int probe = 0; probe < 16; probe++) {
+            uint32_t slot = (bucket + probe) & TB_CACHE_HASH_MASK;
+            if (dedup_table[slot] == 0) {
+                dedup_table[slot] = (uint32_t)(i + 1);
+                break;
+            }
+        }
+    }
+}
+
+/*
+ * Look up a recorded hint for (pc, cs_base, flags).
+ * Returns the tier if found (0, 1, or 2), or -1 if not found.
+ * Also writes exec_count if out_exec is non-NULL.
+ *
+ * Used by tb_gen_code to restore tier status for blocks that were
+ * previously promoted but lost their tier after a TB flush (because
+ * rewarm only processes a limited number of blocks).
+ */
+int tb_cache_lookup_tier(vaddr pc, uint64_t cs_base, uint32_t flags,
+                         uint32_t *out_exec)
+{
+    if (!recorded_hints || !dedup_table || recorded_count == 0) {
+        return -1;
+    }
+
+    TBCacheHint key = { .pc = pc, .cs_base = cs_base, .flags = flags };
+    uint32_t bucket = hint_hash(pc, flags);
+
+    for (int probe = 0; probe < 16; probe++) {
+        uint32_t slot = (bucket + probe) & TB_CACHE_HASH_MASK;
+        uint32_t val = dedup_table[slot];
+        if (val == 0) {
+            return -1;  /* empty slot — not found */
+        }
+        const TBCacheHint *h = &recorded_hints[val - 1];
+        if (hint_eq(h, &key)) {
+            if (out_exec) {
+                *out_exec = h->exec_count;
+            }
+            return (int)h->tier;
+        }
+    }
+    return -1;
+}
+
 /* ------------------------------------------------------------------ */
 /*  Public API                                                         */
 /* ------------------------------------------------------------------ */
@@ -181,10 +245,6 @@ void tb_cache_record_hint(const TranslationBlock *tb)
 #endif
     }
 
-    if (recorded_count >= TB_CACHE_MAX_HINTS) {
-        return;  /* cap reached */
-    }
-
     /* Sanity check: Xbox PCs are 32-bit. */
     if (tb->pc > 0xFFFFFFFFULL || tb->pc == 0) {
         return;
@@ -205,6 +265,9 @@ void tb_cache_record_hint(const TranslationBlock *tb)
     /*
      * On dedup collision, update exec_count/tier to max so the hottest
      * observation is preserved across re-translations.
+     * This MUST run before the max-hints cap check, otherwise tier
+     * updates for already-recorded hints are silently dropped once the
+     * cap is reached, causing endless re-promotion churn.
      */
     if (dedup_contains_or_insert(&h, recorded_count)) {
         /* Find the existing hint and update its hotness data. */
@@ -224,6 +287,10 @@ void tb_cache_record_hint(const TranslationBlock *tb)
             }
         }
         return;
+    }
+
+    if (recorded_count >= TB_CACHE_MAX_HINTS) {
+        return;  /* cap reached — new entries rejected, but updates above still apply */
     }
 
     /* Grow array if needed. */
@@ -559,54 +626,41 @@ void tb_cache_rewarm_after_flush(CPUState *cpu)
     }
     rewarm_in_progress = true;
 
-#ifdef __ANDROID__
-    /* Check for corruption in recorded hints */
-    int valid = 0, corrupt = 0;
-    for (int i = 0; i < recorded_count; i++) {
-        if (recorded_hints[i].pc <= 0xFFFFFFFFULL && recorded_hints[i].pc != 0) {
-            valid++;
-        } else {
-            corrupt++;
-        }
-    }
-    __android_log_print(ANDROID_LOG_INFO, "hakuX-tb",
-                        "rewarm: START recorded=%d valid=%d corrupt=%d "
-                        "hints_ptr=%p",
-                        recorded_count, valid, corrupt, (void *)recorded_hints);
-    if (valid == 0) {
-        __android_log_print(ANDROID_LOG_WARN, "hakuX-tb",
-                            "rewarm: ALL hints corrupt, skipping");
-        rewarm_in_progress = false;
-        return;
-    }
-#endif
-
     /* Sort hot-first so tier-1/high-exec_count TBs are placed contiguously
      * at the start of the code buffer, improving L1I cache locality. */
     qsort(recorded_hints, recorded_count, sizeof(TBCacheHint), hint_tier_cmp);
+    rebuild_dedup_table();
 
+#ifdef __ANDROID__
+    /*
+     * On Android, skip translation.  Both inline rewarm (blocks CPU
+     * too long → NOP deadlock) and incremental rewarm (inner-loop
+     * deadlock / outer-loop crash) cause issues.  Blocks retranslate
+     * on-demand.  The sort + dedup rebuild above keeps hints correct
+     * for tb_cache_lookup_tier() and future save/load.
+     */
+    rewarm_in_progress = false;
+#else
+    /* On desktop, translate inline (CPU is fast enough). */
     int translated = 0;
     int tier1_count = 0;
     int failed = 0;
-#ifdef __ANDROID__
-    int total = MIN(recorded_count, 256);
-#else
     int total = recorded_count;
-#endif
-
-#ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_INFO, "hakuX-tb",
-                        "rewarm: translating %d/%d blocks", total, recorded_count);
-#endif
+    vaddr last_pc = 0;
+    uint32_t last_flags = 0;
 
     for (int i = 0; i < total; i++) {
         const TBCacheHint *h = &recorded_hints[i];
 
-        /* Skip invalid hints (zeroed entries, NULL PC, out-of-range PC) */
         if (h->pc == 0 || h->flags == 0 || h->pc > 0xFFFFFFFFULL) {
             failed++;
             continue;
         }
+        if (h->pc == last_pc && h->flags == last_flags) {
+            continue;
+        }
+        last_pc = h->pc;
+        last_flags = h->flags;
 
         TCGTBCPUState s = {
             .pc      = (vaddr)h->pc,
@@ -615,24 +669,11 @@ void tb_cache_rewarm_after_flush(CPUState *cpu)
             .cflags  = h->cflags | (h->tier >= 1 ? CF_TIER1 : 0),
         };
 
-#ifdef __ANDROID__
-        if (i < 5 || (i % 50 == 0)) {
-            __android_log_print(ANDROID_LOG_DEBUG, "hakuX-tb",
-                "rewarm[%d/%d]: pc=0x%llx tier=%d pre-mmap_lock",
-                i, total, (unsigned long long)h->pc, h->tier);
-        }
-#endif
-
         mmap_lock();
         TranslationBlock *tb = tb_gen_code(cpu, s);
         mmap_unlock();
 
         if (!tb) {
-#ifdef __ANDROID__
-            __android_log_print(ANDROID_LOG_WARN, "hakuX-tb",
-                "rewarm[%d/%d]: tb_gen_code returned NULL — buffer full, stopping",
-                i, total);
-#endif
             failed = total - i;
             break;
         }
@@ -645,14 +686,8 @@ void tb_cache_rewarm_after_flush(CPUState *cpu)
         }
         translated++;
     }
-
-#ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_INFO, "hakuX-tb",
-                        "rewarm: DONE translated=%d tier1=%d failed=%d",
-                        translated, tier1_count, failed);
-#endif
-
     rewarm_in_progress = false;
+#endif /* __ANDROID__ */
 }
 
 void tb_cache_cleanup(void)

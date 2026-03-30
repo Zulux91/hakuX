@@ -403,6 +403,14 @@ TranslationBlock *tb_gen_code(CPUState *cpu, TCGTBCPUState s)
 
     tb = tcg_tb_alloc(tcg_ctx);
     if (unlikely(!tb)) {
+#ifdef __ANDROID__
+        {
+            extern int __android_log_print(int, const char*, const char*, ...);
+            __android_log_print(4, "hakuX-tier1",
+                "buffer full: pc=0x%x serial=%d cflags=0x%x",
+                (uint32_t)s.pc, cpu_in_serial_context(cpu), s.cflags);
+        }
+#endif
         /* flush must be done */
         if (cpu_in_serial_context(cpu)) {
             trace_tb_gen_code_buffer_overflow("tcg_tb_alloc");
@@ -443,6 +451,36 @@ TranslationBlock *tb_gen_code(CPUState *cpu, TCGTBCPUState s)
             s.cflags = tier1_cflags;
             tb->tier = 1;
             tb->exec_count = (uint32_t)saved_exec;
+        } else {
+            /*
+             * No pending request — check if the hints table remembers
+             * this block as already-promoted (tier >= 1).  After a TB
+             * flush, rewarm only re-translates a limited number of
+             * blocks.  The rest are re-created on-demand here at tier-0,
+             * causing endless re-promotion churn.  By restoring the
+             * tier from hints, the block skips promotion entirely.
+             */
+            uint32_t hint_exec = 0;
+            int hint_tier = tb_cache_lookup_tier(s.pc, s.cs_base, s.flags,
+                                                 &hint_exec);
+            if (hint_tier >= 1) {
+                tb->tier = (uint8_t)hint_tier;
+                tb->exec_count = hint_exec;
+#ifdef __ANDROID__
+                {
+                    static int restore_log = 0;
+                    if (restore_log < 50 || (restore_log % 1000 == 0)) {
+                        extern int __android_log_print(int, const char*,
+                                                       const char*, ...);
+                        __android_log_print(3, "hakuX-tier1",
+                            "hint-restore #%d: pc=0x%x tier=%d exec=%u",
+                            restore_log, (uint32_t)s.pc, hint_tier,
+                            hint_exec);
+                    }
+                    restore_log++;
+                }
+#endif
+            }
         }
     }
 #endif
