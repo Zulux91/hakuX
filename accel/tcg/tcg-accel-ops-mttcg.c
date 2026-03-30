@@ -37,6 +37,7 @@
 #include "tcg-accel-ops-mttcg.h"
 #ifdef XBOX
 #include "cpu.h"
+#include "hw/xbox/nv2a/nv2a_int.h"
 #endif
 
 typedef struct MttcgForceRcuNotifier {
@@ -102,14 +103,18 @@ static void *mttcg_cpu_thread_fn(void *arg)
                 {
                     int if_flag = (env->eflags & 0x200) ? 1 : 0;
                     int irq = cpu->interrupt_request;
+                    extern NV2AState *g_nv2a;
                     __android_log_print(4, "hakuX-cpu-thread",
                         "hb: can_run=%d halted=%d eip=0x%x eflags=0x%x "
-                        "cr0=0x%x irq=%d IF=%d",
+                        "cr0=0x%x irq=%d IF=%d "
+                        "pg_intr=0x%x pmc_intr=0x%x",
                         cpu_can_run(cpu), cpu->halted,
                         (uint32_t)env->eip,
                         (uint32_t)env->eflags,
                         (uint32_t)env->cr[0],
-                        irq, if_flag);
+                        irq, if_flag,
+                        g_nv2a ? g_nv2a->pgraph.pending_interrupts : 0,
+                        g_nv2a ? g_nv2a->pmc.pending_interrupts : 0);
 
                     /* Track IF=0 with pending IRQ. If this persists
                      * across multiple heartbeats, the kernel may be

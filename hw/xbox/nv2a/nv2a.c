@@ -326,28 +326,55 @@ static void nv2a_vblank_timer_cb(void *opaque)
     d->pcrtc.raster = 0;
 
 #ifdef __ANDROID__
-    /* Safety: clear flip stall if it's been stuck for too long.
-     * On Android, is_flip_stall_complete() can return false permanently
-     * (SURFACE_READ_3D == SURFACE_WRITE_3D), causing PFIFO to stall
-     * on waiting_for_flip forever.  The CPU then halts waiting for GPU
-     * work, creating a deadlock.
+    /* Flip stall auto-completion.
      *
-     * Clear BOTH flip_active and waiting_for_flip, and kick PFIFO to
-     * resume command processing. */
+     * On real Xbox hardware, the guest VBLANK handler writes to
+     * NV_PGRAPH_INCREMENT with READ_3D set, incrementing
+     * SURFACE_READ_3D so that is_flip_stall_complete() returns true.
+     * On Android, the guest handler can be delayed indefinitely
+     * (IF=0), so SURFACE_READ_3D never increments and PFIFO stalls
+     * forever.
+     *
+     * Fix: on every VBLANK, if a flip stall is pending, do what the
+     * guest handler would do — increment READ_3D.  This makes
+     * is_flip_stall_complete() return true naturally, and the game
+     * proceeds without the 500ms safety valve cycle. */
     {
-        /* Flip stall safety valve */
-        static int64_t flip_active_since_ns = 0;
-        if (d->flip_active || qatomic_read(&d->pgraph.waiting_for_flip)) {
-            if (flip_active_since_ns == 0) {
-                flip_active_since_ns = now;
-            } else if (now - flip_active_since_ns > 500000000LL) {
-                d->flip_active = false;
-                qatomic_set(&d->pgraph.waiting_for_flip, false);
-                pfifo_kick(d);
-                flip_active_since_ns = 0;
+        if (qatomic_read(&d->pgraph.waiting_for_flip)) {
+            PGRAPHState *pg = &d->pgraph;
+            qemu_mutex_lock(&pg->lock);
+            uint32_t s = pgraph_reg_r(pg, NV_PGRAPH_SURFACE);
+            uint32_t read_3d = GET_MASK(s, NV_PGRAPH_SURFACE_READ_3D);
+            uint32_t write_3d = GET_MASK(s, NV_PGRAPH_SURFACE_WRITE_3D);
+            uint32_t modulo = GET_MASK(s, NV_PGRAPH_SURFACE_MODULO_3D);
+
+            {
+                extern int __android_log_print(int, const char*, const char*, ...);
+                static int flip_log = 0;
+                if (flip_log < 50) {
+                    __android_log_print(3, "hakuX-flip",
+                        "VBLANK flip assist: R=%u W=%u mod=%u active=%d wf=%d",
+                        read_3d, write_3d, modulo,
+                        d->flip_active,
+                        (int)pg->waiting_for_flip);
+                    flip_log++;
+                }
             }
-        } else {
-            flip_active_since_ns = 0;
+
+            if (read_3d == write_3d && modulo > 0) {
+                /* READ caught up to WRITE — increment READ so
+                 * is_flip_stall_complete() sees READ != WRITE */
+                SET_MASK(s, NV_PGRAPH_SURFACE_READ_3D,
+                         (read_3d + 1) % modulo);
+                pgraph_reg_w(pg, NV_PGRAPH_SURFACE, s);
+            }
+            /* Also clear the stall flags directly and kick PFIFO,
+             * since PFIFO may be sleeping and won't re-check
+             * is_flip_stall_complete until woken. */
+            d->flip_active = false;
+            qatomic_set(&pg->waiting_for_flip, false);
+            qemu_mutex_unlock(&pg->lock);
+            pfifo_kick(d);
         }
 
         /* NOP interrupt delivery assist.  The PFIFO thread auto-clears

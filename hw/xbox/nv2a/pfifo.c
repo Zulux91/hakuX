@@ -139,7 +139,7 @@ uint64_t pfifo_read(void *opaque, hwaddr addr, unsigned int size)
         if (cpu && pfifo_poll_log < 200) {
             CPUX86State *env = &X86_CPU(cpu)->env;
             uint32_t eip = (uint32_t)env->eip;
-            if (eip >= 0x80014000 && eip <= 0x80016000) {
+            if (eip >= 0x80015000 && eip <= 0x80016000) {
                 extern int __android_log_print(int, const char*, const char*, ...);
                 __android_log_print(3, "hakuX-mmio",
                     "PFIFO read: eip=0x%x reg=0x%x val=0x%x",

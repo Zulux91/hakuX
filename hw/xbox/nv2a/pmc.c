@@ -41,6 +41,21 @@ uint64_t pmc_read(void *opaque, hwaddr addr, unsigned int size)
     case NV_PMC_INTR_0:
         /* Shows which functional units have pending IRQ */
         r = d->pmc.pending_interrupts;
+#ifdef __ANDROID__
+        {
+            static int pmc_intr_log = 0;
+            if (r && pmc_intr_log < 100) {
+                extern int __android_log_print(int, const char*, const char*, ...);
+                __android_log_print(3, "hakuX-nop",
+                    "PMC_INTR_0 read: val=0x%x (pgraph=%d pfifo=%d pcrtc=%d)",
+                    (uint32_t)r,
+                    !!(r & NV_PMC_INTR_0_PGRAPH),
+                    !!(r & NV_PMC_INTR_0_PFIFO),
+                    !!(r & NV_PMC_INTR_0_PCRTC));
+                pmc_intr_log++;
+            }
+        }
+#endif
         break;
     case NV_PMC_INTR_EN_0:
         /* Selects which functional units can cause IRQs */
@@ -57,7 +72,7 @@ uint64_t pmc_read(void *opaque, hwaddr addr, unsigned int size)
         if (cpu && pmc_poll_log < 200) {
             CPUX86State *env = &X86_CPU(cpu)->env;
             uint32_t eip = (uint32_t)env->eip;
-            if (eip >= 0x80014000 && eip <= 0x80016000) {
+            if (eip >= 0x80015000 && eip <= 0x80016000) {
                 extern int __android_log_print(int, const char*, const char*, ...);
                 __android_log_print(3, "hakuX-mmio",
                     "PMC read: eip=0x%x reg=0x%x val=0x%x",

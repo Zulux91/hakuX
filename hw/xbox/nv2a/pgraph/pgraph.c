@@ -742,7 +742,7 @@ uint64_t pgraph_read(void *opaque, hwaddr addr, unsigned int size)
         if (cpu && pgraph_poll_log < 200) {
             CPUX86State *env = &X86_CPU(cpu)->env;
             uint32_t eip = (uint32_t)env->eip;
-            if (eip >= 0x80014000 && eip <= 0x80016000) {
+            if (eip >= 0x80015000 && eip <= 0x80016000) {
                 extern int __android_log_print(int, const char*, const char*, ...);
                 __android_log_print(3, "hakuX-mmio",
                     "PGRAPH read: eip=0x%x reg=0x%x val=0x%x",
@@ -783,6 +783,20 @@ void pgraph_write(void *opaque, hwaddr addr, uint64_t val, unsigned int size)
 
     switch (addr) {
     case NV_PGRAPH_INTR:
+#ifdef __ANDROID__
+        {
+            static int intr_write_log = 0;
+            if (intr_write_log < 100) {
+                extern int __android_log_print(int, const char*, const char*, ...);
+                __android_log_print(3, "hakuX-nop",
+                    "PGRAPH_INTR write: val=0x%x pending_before=0x%x "
+                    "nop=%d enabled=0x%x",
+                    (uint32_t)val, pg->pending_interrupts,
+                    (int)pg->waiting_for_nop, pg->enabled_interrupts);
+                intr_write_log++;
+            }
+        }
+#endif
         pg->pending_interrupts &= ~val;
 
         if (!(pg->pending_interrupts & NV_PGRAPH_INTR_ERROR)) {
