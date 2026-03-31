@@ -56,6 +56,11 @@ void nv2a_update_irq(NV2AState *d)
     }
 }
 
+uint8_t *xemu_get_xbox_ram_ptr(void)
+{
+    return g_nv2a ? g_nv2a->vram_ptr : NULL;
+}
+
 DMAObject nv_dma_load(NV2AState *d, hwaddr dma_obj_address)
 {
     assert(dma_obj_address < memory_region_size(&d->ramin));

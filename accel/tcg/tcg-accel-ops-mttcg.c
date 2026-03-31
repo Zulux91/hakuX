@@ -132,6 +132,81 @@ static void *mttcg_cpu_thread_fn(void *arg)
                             __android_log_print(4, "hakuX-cpu-thread",
                                 "FORCED IF=1 (stuck %d hb, eip=0x%x irq=%d)",
                                 if0_irq_count, (uint32_t)env->eip, irq);
+
+                            /* Dump guest x86 instructions at the stuck
+                             * EIP to understand what the kernel is doing */
+                            /* Generic Xbox kernel crash detection.
+                             * The kernel's halt loop is CLI; HLT; JMP $-2
+                             * (bytes: FA F4 EB FC).  Detect this pattern
+                             * and dump full crash state. */
+                            {
+                                uint32_t eip = (uint32_t)env->eip;
+                                if (eip >= 0x80000000) {
+                                    uint32_t phys = eip & 0x0FFFFFFF;
+                                    extern NV2AState *g_nv2a;
+                                    if (g_nv2a && g_nv2a->vram_ptr &&
+                                        phys < 64*1024*1024 - 4) {
+                                        uint8_t *p = g_nv2a->vram_ptr + phys;
+                                        /* Check for CLI;HLT;JMP $-2 pattern */
+                                        if (p[0] == 0xFA && p[1] == 0xF4 &&
+                                            p[2] == 0xEB && p[3] == 0xFC) {
+                                            static uint32_t last_crash_eip = 0;
+                                            if (eip != last_crash_eip) {
+                                                last_crash_eip = eip;
+                                                __android_log_print(2, "hakuX-crash",
+                                                    "=== XBOX KERNEL CRASH (BugCheck) ===");
+                                                __android_log_print(2, "hakuX-crash",
+                                                    "Halt loop at EIP=0x%x", eip);
+                                                __android_log_print(2, "hakuX-crash",
+                                                    "BugCheck code: 0x%x",
+                                                    (uint32_t)env->regs[R_EAX]);
+                                                __android_log_print(2, "hakuX-crash",
+                                                    "Exception: 0x%x",
+                                                    (uint32_t)env->regs[R_ECX]);
+                                                __android_log_print(2, "hakuX-crash",
+                                                    "EAX=0x%08x EBX=0x%08x ECX=0x%08x EDX=0x%08x",
+                                                    (uint32_t)env->regs[R_EAX],
+                                                    (uint32_t)env->regs[R_EBX],
+                                                    (uint32_t)env->regs[R_ECX],
+                                                    (uint32_t)env->regs[R_EDX]);
+                                                __android_log_print(2, "hakuX-crash",
+                                                    "ESI=0x%08x EDI=0x%08x EBP=0x%08x ESP=0x%08x",
+                                                    (uint32_t)env->regs[R_ESI],
+                                                    (uint32_t)env->regs[R_EDI],
+                                                    (uint32_t)env->regs[R_EBP],
+                                                    (uint32_t)env->regs[R_ESP]);
+                                                __android_log_print(2, "hakuX-crash",
+                                                    "CR0=0x%08x CR2=0x%08x CR3=0x%08x CR4=0x%08x",
+                                                    (uint32_t)env->cr[0],
+                                                    (uint32_t)env->cr[2],
+                                                    (uint32_t)env->cr[3],
+                                                    (uint32_t)env->cr[4]);
+                                                __android_log_print(2, "hakuX-crash",
+                                                    "EFLAGS=0x%08x CS=0x%x DS=0x%x SS=0x%x",
+                                                    (uint32_t)env->eflags,
+                                                    env->segs[R_CS].selector,
+                                                    env->segs[R_DS].selector,
+                                                    env->segs[R_SS].selector);
+                                                /* Code context: 16 bytes before + 48 after */
+                                                if (phys >= 16) {
+                                                    char hex[400];
+                                                    int pos = 0;
+                                                    uint8_t *ctx = g_nv2a->vram_ptr + phys - 16;
+                                                    for (int i = 0; i < 64 && pos < 390; i++) {
+                                                        if (i == 16) pos += snprintf(hex+pos, 400-pos, ">> ");
+                                                        pos += snprintf(hex+pos, 400-pos, "%02x ", ctx[i]);
+                                                    }
+                                                    __android_log_print(2, "hakuX-crash",
+                                                        "CODE[-16..+48]: %s", hex);
+                                                }
+                                                __android_log_print(2, "hakuX-crash",
+                                                    "=== END CRASH DUMP ===");
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
                             if0_irq_count = 0;
                         }
                     } else {
