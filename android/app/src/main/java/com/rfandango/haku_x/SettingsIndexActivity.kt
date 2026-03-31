@@ -90,6 +90,11 @@ class SettingsIndexActivity : AppCompatActivity() {
           getString(R.string.settings_index_eeprom),
           getString(R.string.settings_index_eeprom_desc),
           "eeprom"
+        ),
+        SettingsSection(
+          getString(R.string.settings_index_xbox),
+          getString(R.string.settings_index_xbox_desc),
+          "xbox"
         )
       )
     }

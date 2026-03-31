@@ -28,6 +28,11 @@
   <string name="setup_disc_value">Games Folder: %1$s</string>
 
   <string name="library_title">Game Library</string>
+  <string name="library_boot_dashboard">Boot Dashboard</string>
+  <string name="library_boot_dashboard_note">Requires a hard drive image with the Microsoft dashboard installed.</string>
+  <string name="library_boot_dashboard_failed">Unable to boot the dashboard. One or more core files are no longer accessible.</string>
+  <string name="library_boot_dashboard_missing_retail">No retail dashboard was found on the current HDD image. Import the Microsoft dashboard in Settings first.</string>
+  <string name="library_boot_dashboard_incomplete_retail">Some retail dashboard files are present, but the dashboard looks incomplete. Re-import the Microsoft dashboard files in Settings.</string>
   <string name="library_change_folder">Change Folder</string>
   <string name="library_convert_iso">Convert ISO to XISO</string>
   <string name="library_view_list">List</string>
