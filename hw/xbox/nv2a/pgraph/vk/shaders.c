@@ -1294,7 +1294,9 @@ void pgraph_vk_update_shader_uniforms(PGRAPHState *pg)
     PGRAPHVkState *r = pg->vk_renderer_state;
     nv2a_profile_inc_counter(NV2A_PROF_SHADER_BIND);
 
-    assert(r->shader_binding);
+    if (!r->shader_binding) {
+        return; /* Shader not yet compiled (async) — skip this draw */
+    }
     ShaderBinding *binding = r->shader_binding;
 
 #if OPT_ASYNC_COMPILE
