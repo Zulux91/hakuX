@@ -136,6 +136,11 @@
   <string name="settings_clear_code_cache">Clear code cache</string>
   <string name="settings_clear_code_cache_desc">Delete the translated code block cache (tb_cache.bin). Use this if the app crashes at startup. Requires restart.</string>
   <string name="settings_clear_code_cache_done">Code cache cleared. Restart the app.</string>
+  <string name="settings_dump_logs">Export logs</string>
+  <string name="settings_dump_logs_desc">Save logcat output for this session to a file</string>
+  <string name="settings_dump_logs_saving">Saving logs…</string>
+  <string name="settings_dump_logs_success">Logs saved: %s</string>
+  <string name="settings_dump_logs_failed">Failed to save logs</string>
   <string name="settings_clear_shader_cache_confirm_title">Clear shader cache?</string>
   <string name="settings_clear_shader_cache_confirm_message">This will delete all cached SPIR-V shaders and the Vulkan pipeline cache. The emulator will recompile them as needed, which may cause brief stutter on the next launch.</string>
   <string name="settings_clear_shader_cache_success">Shader cache cleared.</string>
