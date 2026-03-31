@@ -512,23 +512,6 @@
             android:textAppearance="@style/TextAppearance.Material3.BodySmall"
             android:textColor="@color/xemu_text_muted" />
 
-          <!-- Tier-1 Recompilation Threshold -->
-          <com.google.android.material.button.MaterialButton
-            android:id="@+id/btn_tier1_threshold"
-            style="?attr/materialButtonOutlinedStyle"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:text="Default (64)"
-            android:textColor="@color/xemu_text_muted" />
-          <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="4dp"
-            android:layout_marginTop="2dp"
-            android:text="@string/settings_tier1_threshold_desc"
-            android:textAppearance="@style/TextAppearance.Material3.BodySmall"
-            android:textColor="@color/xemu_text_muted" />
 
         </LinearLayout>
       </com.google.android.material.card.MaterialCardView>
@@ -773,6 +756,23 @@
             android:textAppearance="@style/TextAppearance.Material3.BodySmall"
             android:textColor="@color/xemu_text_muted" />
 
+          <!-- Simple VBLANK -->
+          <com.google.android.material.materialswitch.MaterialSwitch
+            android:id="@+id/switch_simple_vblank"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:text="Simple VBLANK (x1_box style)"
+            android:textColor="@color/xemu_text_muted" />
+          <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
+            android:layout_marginTop="2dp"
+            android:text="Use simple VBLANK interrupt without adaptive deferral or flip assists. May fix freezes in some games but breaks frame pacing."
+            android:textAppearance="@style/TextAppearance.Material3.BodySmall"
+            android:textColor="@color/xemu_text_muted" />
+
           <!-- Debug Tools -->
           <com.google.android.material.materialswitch.MaterialSwitch
             android:id="@+id/switch_debug_tools"
@@ -787,6 +787,24 @@
             android:layout_marginStart="4dp"
             android:layout_marginTop="2dp"
             android:text="Show diagnostic frame capture in pause menu"
+            android:textAppearance="@style/TextAppearance.Material3.BodySmall"
+            android:textColor="@color/xemu_text_muted" />
+
+          <!-- Tier-1 Recompilation Threshold -->
+          <com.google.android.material.button.MaterialButton
+            android:id="@+id/btn_tier1_threshold"
+            style="?attr/materialButtonOutlinedStyle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="Default (64)"
+            android:textColor="@color/xemu_text_muted" />
+          <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
+            android:layout_marginTop="2dp"
+            android:text="@string/settings_tier1_threshold_desc"
             android:textAppearance="@style/TextAppearance.Material3.BodySmall"
             android:textColor="@color/xemu_text_muted" />
 

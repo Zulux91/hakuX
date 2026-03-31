@@ -1739,7 +1739,10 @@ DEF_METHOD(NV097, NO_OPERATION)
         PG_GET_MASK(NV_PGRAPH_CTX_USER, NV_PGRAPH_CTX_USER_CHID);
 
 #ifdef __ANDROID__
-    /* On Android, skip if a previous NOP is still pending. */
+    /* On Android, skip if a previous NOP is still pending.
+     * The 1ms auto-unstall in pfifo_puller_should_stall clears
+     * waiting_for_nop, but pending_interrupts may still have ERROR.
+     * Overwriting would re-stall PFIFO and make timing worse. */
     if (pg->pending_interrupts & NV_PGRAPH_INTR_ERROR) {
         return;
     }

@@ -42,6 +42,7 @@
 #define XEMU_OPT_FIFO_SPIN 1
 #endif
 
+
 #if XEMU_OPT_FIFO_SPIN
 #define FIFO_SPIN_ACTIVE_NS 100000 /* 100µs active spin window */
 #endif
@@ -247,20 +248,13 @@ static bool pfifo_puller_should_stall(NV2AState *d)
      * interrupt is still pending on the CPU and will be delivered
      * when IF=1.  This keeps the stall short enough that the game's
      * state machine doesn't time out. */
-    if (nop_stall) {
+    extern bool nv2a_get_simple_vblank(void);
+    if (nop_stall && !nv2a_get_simple_vblank()) {
         int64_t elapsed = nv2a_clock_ns()
                         - d->pgraph.nop_stall_start_ns;
         if (elapsed > 1000000LL) { /* 1ms */
             /* Only clear the PFIFO stall flag — DON'T clear
-             * pending_interrupts or deassert the PCI IRQ.
-             *
-             * The ERROR interrupt must stay pending so that when
-             * the CPU eventually handles it (via FORCED IF=1),
-             * the kernel's handler sees the error, reads
-             * TRAPPED_DATA_LOW, updates the fence value, and
-             * clears the interrupt properly.  If we clear it
-             * here, the handler finds no error and does nothing,
-             * leaving the game's fence mechanism broken. */
+             * pending_interrupts or deassert the PCI IRQ. */
             qatomic_set(&d->pgraph.waiting_for_nop, false);
             nop_stall = false;
         }

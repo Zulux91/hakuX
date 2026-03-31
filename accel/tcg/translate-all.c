@@ -460,6 +460,7 @@ TranslationBlock *tb_gen_code(CPUState *cpu, TCGTBCPUState s)
              * causing endless re-promotion churn.  By restoring the
              * tier from hints, the block skips promotion entirely.
              */
+#ifndef __ANDROID__
             uint32_t hint_exec = 0;
             int hint_tier = tb_cache_lookup_tier(s.pc, s.cs_base, s.flags,
                                                  &hint_exec);
@@ -481,6 +482,7 @@ TranslationBlock *tb_gen_code(CPUState *cpu, TCGTBCPUState s)
                 }
 #endif
             }
+#endif /* !__ANDROID__ */
         }
     }
 #endif
@@ -759,7 +761,7 @@ recycle_tb:
         return existing_tb;
     }
 
-#ifdef XBOX
+#if defined(XBOX) && !defined(__ANDROID__)
     tb_cache_record_hint(tb);
 #endif
 

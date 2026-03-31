@@ -321,6 +321,17 @@ class SettingsActivity : AppCompatActivity() {
       prefs.edit().putBoolean("validation_layers", checked).apply()
     }
 
+    val switchSimpleVblank = findViewById<MaterialSwitch>(R.id.switch_simple_vblank)
+    try {
+      switchSimpleVblank.isChecked = nativeGetSimpleVblank()
+    } catch (_: Throwable) {
+      switchSimpleVblank.isChecked = prefs.getBoolean("simple_vblank", false)
+    }
+    switchSimpleVblank.setOnCheckedChangeListener { _, checked ->
+      prefs.edit().putBoolean("simple_vblank", checked).apply()
+      try { nativeSetSimpleVblank(checked) } catch (_: Throwable) {}
+    }
+
     val switchDebugTools = findViewById<MaterialSwitch>(R.id.switch_debug_tools)
     switchDebugTools.isChecked = prefs.getBoolean("debug_tools", false)
     switchDebugTools.setOnCheckedChangeListener { _, checked ->
@@ -1091,6 +1102,8 @@ class SettingsActivity : AppCompatActivity() {
   private external fun nativeSetSubmitFrames(count: Int)
   private external fun nativeGetTier1Threshold(): Int
   private external fun nativeSetTier1Threshold(value: Int)
+  private external fun nativeGetSimpleVblank(): Boolean
+  private external fun nativeSetSimpleVblank(enable: Boolean)
 
   companion object {
     private const val FATX_SUPERBLOCK_SIZE = 4096

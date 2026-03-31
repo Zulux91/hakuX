@@ -1414,7 +1414,7 @@ int cpu_exec(CPUState *cpu)
     int ret;
     SyncClocks sc = { 0 };
 
-#ifdef XBOX
+#if defined(XBOX) && !defined(__ANDROID__)
     static bool tb_cache_warmed = false;
     if (!tb_cache_warmed) {
         tb_cache_warmed = true;

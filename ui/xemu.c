@@ -2076,8 +2076,22 @@ void sdl2_gl_refresh(DisplayChangeListener *dcl)
     android_log_gl_error("refresh-swap");
 #endif
 
-#ifndef __ANDROID__
-    /* VGA update for dirty-region tracking (not needed on Android NV2A path) */
+#ifdef __ANDROID__
+    /* In simple VBLANK mode, call graphic_hw_update every refresh
+     * like x1_box does — this fires the PCRTC interrupt from
+     * nv2a_vga_gfx_update at the display refresh rate. */
+    {
+        extern bool nv2a_get_simple_vblank(void);
+        if (nv2a_get_simple_vblank()) {
+            qemu_mutex_lock_main_loop();
+            bql_lock();
+            graphic_hw_update(scon->dcl.con);
+            bql_unlock();
+            qemu_mutex_unlock_main_loop();
+        }
+    }
+#else
+    /* VGA update for dirty-region tracking */
     qemu_mutex_lock_main_loop();
     bql_lock();
     graphic_hw_update(scon->dcl.con);
