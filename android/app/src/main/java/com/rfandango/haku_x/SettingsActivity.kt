@@ -290,6 +290,11 @@ class SettingsActivity : AppCompatActivity() {
       }
     }
 
+  private val pickLogDir =
+    registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+      if (uri != null) dumpLogsToDir(uri)
+    }
+
   private val pickGamesFolder =
     registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
       if (uri != null) {
@@ -530,6 +535,10 @@ class SettingsActivity : AppCompatActivity() {
 
     findViewById<MaterialButton>(R.id.btn_clear_code_cache).setOnClickListener {
       clearCodeCache()
+    }
+
+    findViewById<MaterialButton>(R.id.btn_dump_logs).setOnClickListener {
+      pickLogDir.launch(null)
     }
 
     findViewById<MaterialButton>(R.id.btn_recreate_hdd).setOnClickListener {
@@ -933,6 +942,44 @@ class SettingsActivity : AppCompatActivity() {
     if (inf.exists()) return internalPath
     Log.w(tag, "  no HDD image found at any candidate path")
     return null
+  }
+
+  private fun dumpLogsToDir(treeUri: android.net.Uri) {
+    Toast.makeText(this, getString(R.string.settings_dump_logs_saving), Toast.LENGTH_SHORT).show()
+    Thread {
+      try {
+        val pid = android.os.Process.myPid()
+        val timestamp = java.text.SimpleDateFormat(
+          "yyyy-MM-dd_HHmmss", java.util.Locale.US
+        ).format(java.util.Date())
+        val fileName = "hakux_log_${timestamp}.txt"
+
+        val dir = androidx.documentfile.provider.DocumentFile.fromTreeUri(this, treeUri)
+        val file = dir?.createFile("text/plain", fileName)
+        if (file == null) {
+          runOnUiThread { Toast.makeText(this, getString(R.string.settings_dump_logs_failed), Toast.LENGTH_LONG).show() }
+          return@Thread
+        }
+
+        val process = Runtime.getRuntime().exec(arrayOf("logcat", "-d", "--pid=$pid"))
+        val output = contentResolver.openOutputStream(file.uri)
+        if (output == null) {
+          runOnUiThread { Toast.makeText(this, getString(R.string.settings_dump_logs_failed), Toast.LENGTH_LONG).show() }
+          return@Thread
+        }
+
+        process.inputStream.use { input -> output.use { out -> input.copyTo(out) } }
+        process.waitFor()
+
+        runOnUiThread {
+          Toast.makeText(this, getString(R.string.settings_dump_logs_success, fileName), Toast.LENGTH_LONG).show()
+        }
+      } catch (e: Exception) {
+        runOnUiThread {
+          Toast.makeText(this, getString(R.string.settings_dump_logs_failed), Toast.LENGTH_LONG).show()
+        }
+      }
+    }.start()
   }
 
   private fun clearCodeCache() {
