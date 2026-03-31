@@ -412,6 +412,12 @@ static void nv2a_vblank_timer_cb(void *opaque)
         }
     }
     timer_mod(d->vblank_timer, d->vblank_next_target_ns);
+
+    /* Wake the PFIFO thread when a diag capture is pending so the
+     * capture starts even if the game is idle (no FLIP_STALL). */
+    if (nv2a_dbg_diag_frame_pending()) {
+        pfifo_kick(d);
+    }
 }
 
 void nv2a_vblank_recalc(NV2AState *d)

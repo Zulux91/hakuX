@@ -4207,6 +4207,19 @@ void pgraph_process_pending(NV2AState *d)
     PGRAPHState *pg = &d->pgraph;
     pg->renderer->ops.process_pending(d);
 
+    /* When a diag capture is pending but the game is idle (no
+     * FLIP_STALL / FLIP_INCREMENT_WRITE), force a flip_stall here
+     * so the pending-to-active transition happens.  The VBLANK timer
+     * kicks the PFIFO to wake us. */
+    if (nv2a_dbg_diag_frame_pending()) {
+        qemu_mutex_unlock(&d->pfifo.lock);
+        qemu_mutex_lock(&d->pgraph.lock);
+        d->pgraph.renderer->ops.surface_update(d, false, true, true);
+        d->pgraph.renderer->ops.flip_stall(d);
+        qemu_mutex_unlock(&d->pgraph.lock);
+        qemu_mutex_lock(&d->pfifo.lock);
+    }
+
     if (g_config.display.renderer != pg->renderer->type &&
         pg->renderer_switch_phase == PGRAPH_RENDERER_SWITCH_PHASE_IDLE) {
         pg->renderer_switch_phase = PGRAPH_RENDERER_SWITCH_PHASE_STARTED;
