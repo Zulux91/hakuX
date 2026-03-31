@@ -975,6 +975,7 @@ typedef struct PGRAPHVkState {
     bool eds3_blend_supported;
 #endif
     bool push_descriptors_supported;
+    bool texture_compression_bc_supported;
     VkDescriptorSetLayout push_tex_set_layout;
     VkDescriptorSetLayout push_ubo_set_layout;
     VkDescriptorPool push_ubo_pool;
