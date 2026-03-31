@@ -1182,6 +1182,30 @@ void nv2a_diag_log_draw_call(NV2AState *d, PGRAPHState *pg,
     }
     diag_json_append("],\n");
 
+    /* Dump combiner constants (c0_0..c1_8) from registers */
+    diag_json_append("          \"combiner_constants\": [");
+    for (int i = 0; i < 9; i++) {
+        uint32_t factor0, factor1;
+        if (i == 8) {
+            factor0 = pgraph_vk_reg_r(pg, NV_PGRAPH_SPECFOGFACTOR0);
+            factor1 = pgraph_vk_reg_r(pg, NV_PGRAPH_SPECFOGFACTOR1);
+        } else {
+            factor0 = pgraph_vk_reg_r(pg, NV_PGRAPH_COMBINEFACTOR0 + i * 4);
+            factor1 = pgraph_vk_reg_r(pg, NV_PGRAPH_COMBINEFACTOR1 + i * 4);
+        }
+        float c0[4], c1[4];
+        pgraph_argb_pack32_to_rgba_float(factor0, c0);
+        pgraph_argb_pack32_to_rgba_float(factor1, c1);
+        diag_json_append(
+            "%s{\"stage\": %d, "
+            "\"c0\": [%.4f, %.4f, %.4f, %.4f], "
+            "\"c1\": [%.4f, %.4f, %.4f, %.4f]}",
+            i > 0 ? ", " : "", i,
+            c0[0], c0[1], c0[2], c0[3],
+            c1[0], c1[1], c1[2], c1[3]);
+    }
+    diag_json_append("],\n");
+
     /* Per-draw surface dumps */
     pgraph_vk_finish(pg, VK_FINISH_REASON_SURFACE_DOWN);
 
@@ -1310,22 +1334,53 @@ static void pgraph_vk_flip_stall(NV2AState *d)
             diag_frame_nums[fi] = diag_frame_num;
             diag_frame_draw_counts[fi] = diag_draw_index;
 
-            /* Dump final framebuffer PPM for this frame */
-            PGRAPHVkState *diag_r = d->pgraph.vk_renderer_state;
-            pgraph_vk_finish(&d->pgraph, VK_FINISH_REASON_SURFACE_DOWN);
-            if (diag_r->color_binding && diag_r->color_binding->draw_dirty) {
-                pgraph_vk_surface_download_if_dirty(d, diag_r->color_binding);
-                char ppm_path[800];
-                snprintf(ppm_path, sizeof(ppm_path),
-                         "%s/frame_%d_final_color.ppm", diag_session_dir, fi);
-                dump_surface_ppm(d, diag_r->color_binding, ppm_path);
-            }
-            if (diag_r->zeta_binding && diag_r->zeta_binding->draw_dirty) {
-                pgraph_vk_surface_download_if_dirty(d, diag_r->zeta_binding);
-                char ppm_path[800];
-                snprintf(ppm_path, sizeof(ppm_path),
-                         "%s/frame_%d_final_depth.ppm", diag_session_dir, fi);
-                dump_surface_ppm(d, diag_r->zeta_binding, ppm_path);
+            /* Dump final framebuffer PPM for this frame.
+             * Always dump the display surface (not just the bound color
+             * surface) so we can see exactly what the display path shows,
+             * including CPU-written content.
+             */
+            {
+                PGRAPHVkState *diag_r = d->pgraph.vk_renderer_state;
+                pgraph_vk_finish(&d->pgraph, VK_FINISH_REASON_SURFACE_DOWN);
+
+                /* Dump bound color surface if draw-dirty */
+                if (diag_r->color_binding && diag_r->color_binding->draw_dirty) {
+                    pgraph_vk_surface_download_if_dirty(d, diag_r->color_binding);
+                    char ppm_path[800];
+                    snprintf(ppm_path, sizeof(ppm_path),
+                             "%s/frame_%d_final_color.ppm", diag_session_dir, fi);
+                    dump_surface_ppm(d, diag_r->color_binding, ppm_path);
+                }
+                if (diag_r->zeta_binding && diag_r->zeta_binding->draw_dirty) {
+                    pgraph_vk_surface_download_if_dirty(d, diag_r->zeta_binding);
+                    char ppm_path[800];
+                    snprintf(ppm_path, sizeof(ppm_path),
+                             "%s/frame_%d_final_depth.ppm", diag_session_dir, fi);
+                    dump_surface_ppm(d, diag_r->zeta_binding, ppm_path);
+                }
+
+                /* Always dump the display surface VRAM content */
+                VGADisplayParams vdp;
+                d->vga.get_params(&d->vga, &vdp);
+                hwaddr disp_addr = d->pcrtc.start + vdp.line_offset;
+                SurfaceBinding *disp_surf =
+                    pgraph_vk_surface_get_within(d, disp_addr);
+                if (disp_surf) {
+                    /* Download VkImage to VRAM first if GPU rendered to it */
+                    if (disp_surf->draw_dirty) {
+                        pgraph_vk_surface_download_if_dirty(d, disp_surf);
+                    }
+                    char ppm_path[800];
+                    snprintf(ppm_path, sizeof(ppm_path),
+                             "%s/frame_%d_display.ppm", diag_session_dir, fi);
+                    dump_surface_ppm(d, disp_surf, ppm_path);
+                    DIAG_LOG("dumped display surface: vram=0x%x %ux%u to %s\n",
+                             (unsigned)disp_surf->vram_addr,
+                             disp_surf->width, disp_surf->height, ppm_path);
+                } else {
+                    DIAG_LOG("no display surface found at addr=0x%lx\n",
+                             (unsigned long)disp_addr);
+                }
             }
 
             /* Compute frame diff against previous frame */
@@ -1412,6 +1467,17 @@ static void pgraph_vk_flip_stall(NV2AState *d)
     {
         int pending = qatomic_read(&diag_frame_pending);
         if (pending > 0) {
+            /* If a previous session is still active, finalize it first */
+            if (qatomic_read(&diag_frame_active)) {
+                DIAG_LOG("flip_stall: aborting active session, writing partial data\n");
+                diag_total_frames = diag_current_frame_index;
+                if (diag_total_frames > 0) {
+                    diag_write_session_json();
+                }
+                diag_cleanup_session();
+                qatomic_set(&diag_frame_active, 0);
+            }
+
             DIAG_LOG("flip_stall: pending=%d, starting capture\n", pending);
             qatomic_set(&diag_frame_pending, 0);
             diag_frame_num = g_nv2a_stats.frame_count;

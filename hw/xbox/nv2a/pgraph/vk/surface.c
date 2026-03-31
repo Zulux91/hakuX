@@ -2674,7 +2674,6 @@ static void update_surface_part(NV2AState *d, bool upload, bool color)
 
             assert(!(target.swizzle && pg->clearing));
 
-#if 0
             if (surface->swizzle != target.swizzle) {
                 // Clears should only be done on linear surfaces. Avoid
                 // synchronization by allowing (1) a surface marked swizzled to
@@ -2689,7 +2688,6 @@ static void update_surface_part(NV2AState *d, bool upload, bool color)
                         target.swizzle ? "swizzled" : "linear");
                 }
             }
-#endif
 
             if (is_compatible && color &&
                 !check_surface_compatibility(surface, &target, true)) {
@@ -2732,32 +2730,14 @@ static void update_surface_part(NV2AState *d, bool upload, bool color)
                     }
 
                     /*
-                     * When a draw-dirty surface is shelved without a
-                     * full download, the VRAM at its address still
-                     * contains stale data (typically zeros).  If a new
-                     * surface (or texture) is later bound at the same
-                     * address, the upload path reads from VRAM and the
-                     * stale zeros are interpreted as e.g. depth=0.0,
-                     * causing everything to fail the depth test (all-
-                     * white rendering).
-                     *
-                     * To avoid this, fill the VRAM region with 0xFF
-                     * which encodes as depth ≈ 1.0 (D24S8) or opaque
-                     * white (color), ensuring that any subsequent
-                     * texture or surface upload from this region gets
-                     * safe initial values.  The dirty bits are set so
-                     * the texture cache knows to re-hash and re-upload.
+                     * Download the GPU-rendered content to VRAM before
+                     * shelving. This ensures VRAM has the correct pixel
+                     * data for any subsequent texture or surface upload
+                     * at this address. Matches the GL renderer behavior
+                     * (pgraph_gl_surface_download_if_dirty before
+                     * invalidation).
                      */
-                    size_t region =
-                        (size_t)surface->pitch * surface->height;
-                    memset(d->vram_ptr + surface->vram_addr, 0xFF,
-                           region);
-                    memory_region_set_client_dirty(
-                        d->vram, surface->vram_addr, region,
-                        DIRTY_MEMORY_NV2A_TEX);
-                    memory_region_set_client_dirty(
-                        d->vram, surface->vram_addr, region,
-                        DIRTY_MEMORY_VGA);
+                    pgraph_vk_surface_download_if_dirty(d, surface);
                 }
                 shelve_surface(d, surface);
                 g_nv2a_stats.surf_working.lk_evict_ns += nv2a_clock_ns() - _gt1;

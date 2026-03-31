@@ -1269,6 +1269,22 @@ static void create_texture(PGRAPHState *pg, int texture_idx)
         surface_to_texture =
             check_surface_to_texture_compatiblity(surface, &state);
 
+        /*
+         * When a surface has a pending VRAM upload (upload_pending=true),
+         * VRAM may contain CPU-written content that is newer than the
+         * VkImage. Skip s2t and let the texture read from VRAM instead.
+         * This handles loading screens where the CPU writes UI content
+         * to VRAM at a framebuffer address while the VkImage still has
+         * old GPU-rendered content.
+         */
+        if (surface_to_texture && surface->upload_pending) {
+            surface_to_texture = false;
+        }
+
+        if (surface_to_texture && surface->upload_pending) {
+            pgraph_vk_upload_surface_data(d, surface, false);
+        }
+
         if (!surface_to_texture && surface->color) {
             trace_nv2a_pgraph_surface_texture_compat_failed(
                 surface->shape.color_format,
@@ -1278,6 +1294,17 @@ static void create_texture(PGRAPHState *pg, int texture_idx)
         if (surface_to_texture && surface->upload_pending) {
             pgraph_vk_upload_surface_data(d, surface, false);
         }
+    }
+
+    /*
+     * If a surface exists at the texture address but is not compatible for
+     * direct surface-to-texture binding (e.g. dimension mismatch), ensure
+     * the surface's GPU-rendered content is downloaded to VRAM so the
+     * texture upload reads fresh data instead of stale VRAM.
+     */
+    if (!surface_to_texture && surface && surface->draw_dirty) {
+        pgraph_vk_surface_download_if_dirty(d, surface);
+        possibly_dirty = true;
     }
 
     /*
