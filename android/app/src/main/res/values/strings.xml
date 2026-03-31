@@ -100,8 +100,8 @@
   <string name="settings_gpu_driver_reset">Use System Driver</string>
   <string name="settings_gpu_driver_reset_title">Reset GPU Driver</string>
   <string name="settings_gpu_driver_reset_message">Revert to the system default GPU driver? The app will use the change on next launch.</string>
-  <string name="settings_gpu_driver_reset_done">GPU driver reset to system default. Restart the app to apply.</string>
-  <string name="settings_gpu_driver_installed">Driver installed successfully. Restart the app to apply.</string>
+  <string name="settings_gpu_driver_reset_done">GPU driver reset to system default. Applied on next game launch.</string>
+  <string name="settings_gpu_driver_installed">Driver installed successfully. Applied on next game launch.</string>
   <string name="settings_gpu_driver_install_failed">Failed to install driver. The ZIP may be invalid or incompatible.</string>
   <string name="settings_gpu_driver_none_available">No driver ZIPs found. Use \"Install Driver from ZIP\" to add one first.</string>
 
@@ -134,15 +134,15 @@
   <string name="settings_clear_shader_cache">Clear Shader Cache</string>
   <string name="settings_clear_shader_cache_desc">Delete compiled SPIR-V shaders and the Vulkan pipeline cache. They will be rebuilt automatically. Useful after driver updates or if experiencing rendering glitches.</string>
   <string name="settings_clear_code_cache">Clear code cache</string>
-  <string name="settings_clear_code_cache_desc">Delete the translated code block cache (tb_cache.bin). Use this if the app crashes at startup. Requires restart.</string>
-  <string name="settings_clear_code_cache_done">Code cache cleared. Restart the app.</string>
+  <string name="settings_clear_code_cache_desc">Delete the translated code block cache (tb_cache.bin). Use this if the app crashes at startup.</string>
+  <string name="settings_clear_code_cache_done">Code cache cleared. Applied on next game launch.</string>
   <string name="settings_clear_shader_cache_confirm_title">Clear shader cache?</string>
   <string name="settings_clear_shader_cache_confirm_message">This will delete all cached SPIR-V shaders and the Vulkan pipeline cache. The emulator will recompile them as needed, which may cause brief stutter on the next launch.</string>
   <string name="settings_clear_shader_cache_success">Shader cache cleared.</string>
   <string name="settings_clear_shader_cache_failed">Failed to clear shader cache: %1$s</string>
 
   <string name="settings_code_cache_title">Code Cache</string>
-  <string name="settings_code_cache_desc">TCG translation block cache settings (requires restart)</string>
+  <string name="settings_code_cache_desc">TCG translation block cache settings</string>
   <string name="settings_tb_cache_size">Cache size</string>
   <string name="settings_tb_cache_size_desc">Memory allocated for translated code blocks. Larger reduces stutter but uses more RAM.</string>
   <string name="settings_clear_tb_hints">Clear cache hints</string>
@@ -153,7 +153,7 @@
   <string name="settings_display_title">Display</string>
   <string name="settings_show_fps">Show FPS counter</string>
   <string name="settings_resolution_scale">Resolution Scale</string>
-  <string name="settings_resolution_scale_desc">Internal rendering resolution multiplier (requires restart)</string>
+  <string name="settings_resolution_scale_desc">Internal rendering resolution multiplier. Applied on next game launch.</string>
   <string name="settings_filtering">Texture Filtering</string>
   <string name="settings_aspect_ratio">Aspect Ratio</string>
   <string name="settings_unlock_framerate">Unlock frame rate</string>
@@ -162,7 +162,7 @@
   <string name="settings_fp_safe_desc">Use native ARM64 double-precision for x87 FPU arithmetic. Keeps legacy 80-bit storage. Moderate speedup with good compatibility. Takes effect immediately.</string>
 
   <string name="settings_fp_jit">Native Floats (JIT)</string>
-  <string name="settings_fp_jit_desc">Full JIT-level FP optimization: native 64-bit storage + inline FP instructions. Best performance but may reduce accuracy. Requires restart.</string>
+  <string name="settings_fp_jit_desc">Full JIT-level FP optimization: native 64-bit storage + inline FP instructions. Best performance but may reduce accuracy. Applied on next game launch.</string>
 
   <string name="settings_fast_fences">Fast fences (reduce GPU stalls)</string>
   <string name="settings_fast_fences_desc">Defer GPU fence waits for buffer-space and vertex-dirty flushes. Significantly reduces frame time but may cause geometry popping or flickering. Takes effect immediately.</string>
@@ -174,7 +174,7 @@
   <string name="settings_draw_merge_desc">Merge consecutive compatible draw calls into fewer GPU submissions. Reduces driver overhead on tiled GPUs (Adreno). Takes effect immediately.</string>
 
   <string name="settings_bindless_textures">Bindless textures</string>
-  <string name="settings_bindless_textures_desc">Use bindless descriptor indexing for texture access. Faster on modern GPUs (Adreno 740+) but may reduce performance on older GPUs. Requires restart to take effect.</string>
+  <string name="settings_bindless_textures_desc">Use bindless descriptor indexing for texture access. Faster on modern GPUs (Adreno 740+) but may reduce performance on older GPUs. Applied on next game launch.</string>
 
   <string name="settings_async_compile">Async shader compilation</string>
   <string name="settings_async_compile_desc">Compile shaders in background to reduce stutter. May cause brief visual pop-in.</string>
@@ -189,16 +189,16 @@
   <string name="settings_tier1_threshold_desc">How many times a code block must execute before it is recompiled with optimizations. Lower = more aggressive optimization (more CPU overhead). Higher = fewer optimizations (less overhead). Takes effect immediately.</string>
 
   <string name="settings_validation_layers">Vulkan validation layers</string>
-  <string name="settings_validation_layers_desc">Enable Vulkan validation for graphics debugging. Significant performance impact. Requires app restart.</string>
+  <string name="settings_validation_layers_desc">Enable Vulkan validation for graphics debugging. Significant performance impact. Applied on next game launch.</string>
 
   <string name="settings_env_vars_title">Environment Variables</string>
-  <string name="settings_env_vars_desc">Set custom environment variables applied at startup. One per line: KEY=VALUE. Requires app restart.</string>
+  <string name="settings_env_vars_desc">Set custom environment variables applied at startup. One per line: KEY=VALUE. Applied on next game launch.</string>
   <string name="settings_env_vars_hint">e.g. MESA_VK_WSI_DEBUG=sw</string>
   <string name="settings_env_vars_save">Save</string>
 
   <!-- System Files -->
   <string name="settings_system_files_title">System Files</string>
-  <string name="settings_system_files_desc">Change MCPX ROM, Flash ROM, or HDD image. Files are copied to app storage. Requires app restart.</string>
+  <string name="settings_system_files_desc">Change MCPX ROM, Flash ROM, or HDD image. Files are copied to app storage. Applied on next game launch.</string>
   <string name="settings_pick_mcpx">Change MCPX ROM</string>
   <string name="settings_pick_flash">Change Flash ROM</string>
   <string name="settings_pick_hdd">Change HDD Image</string>
@@ -211,7 +211,7 @@
   <string name="settings_file_not_set">Not set</string>
   <string name="settings_file_copying">Copying file…</string>
   <string name="settings_file_copy_failed">Failed to copy file</string>
-  <string name="settings_file_copied">File updated. Restart app to apply.</string>
+  <string name="settings_file_copied">File updated. Applied on next game launch.</string>
 
   <!-- Settings Index -->
   <string name="settings_index_data">hakuX Data</string>
@@ -226,8 +226,8 @@
 
   <!-- Renderer -->
   <string name="settings_renderer">Graphics Renderer</string>
-  <string name="settings_renderer_desc">Vulkan is recommended. OpenGL ES is experimental. Requires restart.</string>
-  <string name="settings_renderer_restart">Restart app to apply renderer change.</string>
+  <string name="settings_renderer_desc">Vulkan is recommended. OpenGL ES is experimental. Applied on next game launch.</string>
+  <string name="settings_renderer_restart">Applied on next game launch.</string>
 
   <!-- EEPROM Settings -->
   <string name="settings_section_eeprom">EEPROM Settings</string>
@@ -269,4 +269,18 @@
   <string name="settings_eeprom_saved">EEPROM saved</string>
   <string name="settings_eeprom_save_failed">EEPROM save failed</string>
   <string name="settings_eeprom_no_changes">No EEPROM changes to save</string>
+
+  <!-- Per-Game Settings -->
+  <string name="per_game_settings_title">Game Settings</string>
+  <string name="per_game_settings_desc">Override global settings for this game. Unmodified settings use the global value.</string>
+  <string name="per_game_settings_use_global">Use Global</string>
+  <string name="per_game_settings_enabled">Enabled</string>
+  <string name="per_game_settings_disabled">Disabled</string>
+  <string name="per_game_settings_saved">Game settings saved. Applied on next launch.</string>
+  <string name="per_game_settings_cleared">Game settings cleared. Using global defaults.</string>
+  <string name="per_game_settings_missing_game">No game specified</string>
+  <string name="per_game_settings_save">Save</string>
+  <string name="per_game_settings_clear">Clear All</string>
+  <string name="library_per_game_settings_option">Game Settings</string>
+  <string name="library_game_context_title">%1$s</string>
 </resources>

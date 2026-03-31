@@ -220,6 +220,7 @@ class GameLibraryActivity : AppCompatActivity() {
       pathText.text = getString(R.string.library_game_path, game.relativePath)
 
       item.setOnClickListener { launchGame(game) }
+      item.setOnLongClickListener { showGameContextMenu(game); true }
       gamesListContainer.addView(item)
     }
   }
@@ -260,6 +261,7 @@ class GameLibraryActivity : AppCompatActivity() {
       nameText.text = game.title
       sizeText.text = getString(R.string.library_game_size, formatSize(game.sizeBytes))
       item.setOnClickListener { launchGame(game) }
+      item.setOnLongClickListener { showGameContextMenu(game); true }
       bindCoverArt(coverImage, game)
     }
 
@@ -766,7 +768,24 @@ class GameLibraryActivity : AppCompatActivity() {
     return "$stem.xiso.iso"
   }
 
+  private fun showGameContextMenu(game: GameEntry) {
+    val options = arrayOf(getString(R.string.library_per_game_settings_option))
+    com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+      .setTitle(game.title)
+      .setItems(options) { _, which ->
+        when (which) {
+          0 -> startActivity(
+            android.content.Intent(this, PerGameSettingsActivity::class.java)
+              .putExtra(PerGameSettingsActivity.EXTRA_GAME_TITLE, game.title)
+              .putExtra(PerGameSettingsActivity.EXTRA_GAME_RELATIVE_PATH, game.relativePath)
+          )
+        }
+      }
+      .show()
+  }
+
   private fun launchGame(game: GameEntry) {
+    currentGameRelativePath = game.relativePath
     val TAG = "hakuX-xiso"
     Log.i(TAG, "launchGame: path=${game.relativePath} uri=${game.uri} size=${game.sizeBytes}")
     // If this is a .xiso.iso file, verify integrity before launching
@@ -831,13 +850,24 @@ class GameLibraryActivity : AppCompatActivity() {
     }
   }
 
+  private var currentGameRelativePath: String? = null
+
   private fun launchGameDirectly(uri: Uri) {
     persistUriPermission(uri)
-    prefs.edit()
+    val editor = prefs.edit()
+
+    // Apply per-game settings overrides if available
+    PerGameSettingsManager.applyRuntimeOverridesToEditor(
+      context = this,
+      editor = editor,
+      relativePath = currentGameRelativePath,
+    )
+
+    editor
       .putString("dvdUri", uri.toString())
       .remove("dvdPath")
       .putBoolean("skip_game_picker", false)
-      .apply()
+      .commit()
 
     startActivity(Intent(this, MainActivity::class.java))
     finish()
