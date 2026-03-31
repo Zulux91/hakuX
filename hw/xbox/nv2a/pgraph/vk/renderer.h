@@ -570,6 +570,7 @@ typedef enum {
     RCMD_SYNC_DISPLAY,
     RCMD_FLUSH,
     RCMD_VERTEX_RAM_UPDATE,
+    RCMD_PROCESS_PENDING,
     RCMD_SHUTDOWN,
 } RenderCommandType;
 
@@ -621,6 +622,13 @@ typedef struct RenderCommand {
         struct {
             QemuEvent *completion;
         } flush_op;
+        struct {
+            bool downloads;
+            bool dirty_downloads;
+            bool sync_display;
+            bool flush;
+            QemuEvent *completion;
+        } pending;
     };
     QSIMPLEQ_ENTRY(RenderCommand) entry;
 } RenderCommand;
