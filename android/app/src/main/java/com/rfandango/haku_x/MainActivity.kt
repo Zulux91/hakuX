@@ -147,17 +147,20 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
   private fun setupPauseMenu() {
     pauseMenuOverlay = PauseMenuOverlay(this).apply {
       onExitEmulation = {
-        nativeExitEmulation()
+        // Launch the library activity FIRST so the intent is queued
+        // before we do any blocking work or kill the process.
         val intent = Intent(this@MainActivity, GameLibraryActivity::class.java).apply {
           flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
         }
         startActivity(intent)
         finish()
-        // Kill the process so native QEMU global state is reset.
-        // The GameLibraryActivity runs in a fresh process via CLEAR_TASK.
-        // Without this, relaunching a game would fail because QEMU's
-        // one-shot initialization has already run in this process.
-        android.os.Process.killProcess(android.os.Process.myPid())
+        // nativeExitEmulation blocks until the display loop exits and
+        // RCU callbacks are drained, so QEMU threads are quiescent
+        // before we kill the process.
+        Thread {
+          nativeExitEmulation()
+          android.os.Process.killProcess(android.os.Process.myPid())
+        }.start()
       }
       onDismiss = {
         togglePauseMenu()

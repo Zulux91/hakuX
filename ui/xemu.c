@@ -139,6 +139,7 @@ int bdrv_flush_all(void);
 static bool g_android_gl_bgra_supported = true;
 static bool g_android_paused = false;
 static bool g_android_should_quit = false;
+static volatile bool g_android_display_loop_exited = false;
 static volatile bool g_android_vm_pause_requested = false;
 static volatile bool g_android_vm_resume_requested = false;
 static volatile bool g_android_flush_requested = false;
@@ -1417,6 +1418,7 @@ void xemu_android_display_loop(void)
 {
 #ifdef __ANDROID__
     g_android_should_quit = false;
+    g_android_display_loop_exited = false;
     g_android_paused = false;
     g_android_vm_pause_requested = false;
     g_android_vm_resume_requested = false;
@@ -1546,6 +1548,10 @@ void xemu_android_display_loop(void)
         assert(glGetError() == GL_NO_ERROR);
 #endif
     }
+
+    /* Signal that the display loop has exited so the exit path can
+     * safely drain RCU before the process is killed. */
+    g_android_display_loop_exited = true;
 }
 
 void xemu_android_pause_emulation(void)
@@ -1563,6 +1569,20 @@ void xemu_android_request_exit(void)
     shutdown_action = SHUTDOWN_ACTION_POWEROFF;
     qemu_system_shutdown_request(SHUTDOWN_CAUSE_HOST_UI);
     g_android_should_quit = true;
+
+    /* Wait for the display loop to exit so QEMU threads wind down
+     * before the Java side kills the process.  Without this, the
+     * detached call_rcu_thread can SIGSEGV walking stale reader
+     * pointers from threads that died during process teardown. */
+    for (int i = 0; i < 200 && !g_android_display_loop_exited; i++) {
+        usleep(5000); /* 5 ms, up to 1 s total */
+    }
+
+    if (g_android_display_loop_exited) {
+        /* Drain pending RCU callbacks so call_rcu_thread reaches a
+         * quiescent state before the process is killed. */
+        drain_call_rcu();
+    }
 }
 #endif
 
