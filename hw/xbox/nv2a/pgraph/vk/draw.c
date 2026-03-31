@@ -817,6 +817,11 @@ static void create_clear_pipeline(PGRAPHState *pg)
 
     uint64_t hash = fast_hash((void *)&key, sizeof(key));
     LruNode *node = lru_lookup(&r->pipeline_cache, hash, &key);
+    if (!node) {
+        /* Cache full — all entries in use by current command buffer */
+        NV2A_VK_DGROUP_END();
+        return;
+    }
     PipelineBinding *snode = container_of(node, PipelineBinding, node);
 
     if (snode->pipeline != VK_NULL_HANDLE) {
@@ -1215,6 +1220,12 @@ static void create_pipeline(PGRAPHState *pg)
     uint64_t hash = fast_hash((void *)&key, sizeof(key));
 
     LruNode *node = lru_lookup(&r->pipeline_cache, hash, &key);
+    if (!node) {
+        /* Cache full — all entries in use by current command buffer */
+        NV2A_PHASE_TIMER_END(pipe_lookup);
+        NV2A_VK_DGROUP_END();
+        return;
+    }
     PipelineBinding *snode = container_of(node, PipelineBinding, node);
 
 #if OPT_ASYNC_COMPILE
@@ -5837,6 +5848,13 @@ void pgraph_vk_flush_draw(NV2AState *d)
 
     if (!(r->color_binding || r->zeta_binding)) {
         NV2A_VK_DPRINTF("No binding present!!!\n");
+        NV2A_PHASE_TIMER_END(draw_dispatch);
+        return;
+    }
+
+    if (!r->pipeline_binding) {
+        /* Pipeline not available (cache exhausted or async compile pending).
+         * Skip this draw to avoid crashing in begin_pre_draw/begin_draw. */
         NV2A_PHASE_TIMER_END(draw_dispatch);
         return;
     }

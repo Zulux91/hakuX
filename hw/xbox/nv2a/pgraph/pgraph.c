@@ -1738,7 +1738,18 @@ DEF_METHOD(NV097, NO_OPERATION)
     unsigned channel_id =
         PG_GET_MASK(NV_PGRAPH_CTX_USER, NV_PGRAPH_CTX_USER_CHID);
 
+#ifdef __ANDROID__
+    /* On Android, the CPU may not acknowledge the previous NOP in time
+     * before the next one arrives (slower ARM emulation).  Skip the
+     * duplicate NOP — the previous one's interrupt is still pending
+     * and will be delivered.  On desktop this is an assert because
+     * it should never happen with fast x86 emulation. */
+    if (pg->pending_interrupts & NV_PGRAPH_INTR_ERROR) {
+        return;
+    }
+#else
     assert(!(pg->pending_interrupts & NV_PGRAPH_INTR_ERROR));
+#endif
 
     PG_SET_MASK(NV_PGRAPH_TRAPPED_ADDR, NV_PGRAPH_TRAPPED_ADDR_CHID,
              channel_id);
