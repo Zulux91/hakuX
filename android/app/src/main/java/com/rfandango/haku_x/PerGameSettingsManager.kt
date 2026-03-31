@@ -24,7 +24,6 @@ object PerGameSettingsManager {
         "fast_fences",
         "draw_reorder",
         "draw_merge",
-        "bindless_textures",
         "async_compile",
         "submit_frames",
         "tier1_threshold",

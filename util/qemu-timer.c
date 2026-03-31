@@ -125,8 +125,17 @@ static void qemu_clock_init(QEMUClockType type, QEMUTimerListNotifyCB *notify_cb
 {
     QEMUClock *clock = qemu_clock_ptr(type);
 
+#ifdef __ANDROID__
+    /* On Android the emulator can be re-launched within the same process.
+     * Clean up the previous timer list so we can re-initialize. */
+    if (main_loop_tlg.tl[type] != NULL) {
+        timerlist_free(main_loop_tlg.tl[type]);
+        main_loop_tlg.tl[type] = NULL;
+    }
+#else
     /* Assert that the clock of type TYPE has not been initialized yet. */
     assert(main_loop_tlg.tl[type] == NULL);
+#endif
 
     clock->type = type;
     clock->enabled = (type == QEMU_CLOCK_VIRTUAL ? false : true);

@@ -105,7 +105,6 @@ class PerGameSettingsActivity : AppCompatActivity() {
         addBoolPicker(container, "fast_fences", getString(R.string.settings_fast_fences), "fast_fences")
         addBoolPicker(container, "draw_reorder", getString(R.string.settings_draw_reorder), "draw_reorder")
         addBoolPicker(container, "draw_merge", getString(R.string.settings_draw_merge), "draw_merge")
-        addBoolPicker(container, "bindless_textures", getString(R.string.settings_bindless_textures), "bindless_textures")
         addBoolPicker(container, "async_compile", getString(R.string.settings_async_compile), "async_compile")
     }
 

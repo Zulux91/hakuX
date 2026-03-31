@@ -131,7 +131,7 @@ class SettingsIndexActivity : AppCompatActivity() {
     val sectionKeys = when (sectionKey) {
       "graphics" -> setOf("gpu_driver", "renderer", "surface_scale", "filtering",
         "aspect_ratio", "fast_fences", "draw_reorder", "draw_merge",
-        "bindless_textures", "async_compile", "frame_skip", "unlock_framerate",
+        "async_compile", "frame_skip", "unlock_framerate",
         "submit_frames")
       "audio" -> setOf("use_dsp")
       "debug" -> setOf("fp_safe", "fp_jit", "tier1_threshold", "simple_vblank")

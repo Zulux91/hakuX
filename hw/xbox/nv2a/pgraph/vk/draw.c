@@ -29,7 +29,6 @@
 static bool g_xemu_fast_fences = false;
 static bool g_xemu_draw_reorder = false;
 static bool g_xemu_draw_merge = false;
-static bool g_xemu_bindless_textures = false;
 static bool g_xemu_async_compile = false;
 static bool g_xemu_frame_skip = false;
 static int g_xemu_submit_frames = 3;
@@ -45,15 +44,12 @@ struct OptBisectStats g_opt_stats;
 static struct {
     int sfp_vaf_hit;
     int sfp_vaf_miss;
-    int bl_vaf_hit;
-    int bl_vaf_miss;
     int mfp_vaf_hit;
     int mfp_vaf_miss;
     int full_path_vag_changed;
     int full_path_vag_same;
     int sfp_vaf_uniform_pushed;
     int sfp_vaf_no_uniform;
-    int bl_vaf_uniform_pushed;
     int mfp_vaf_uniform_pushed;
 } g_vaf_stats;
 
@@ -66,15 +62,14 @@ static void vaf_stats_log_and_reset(void)
 {
     static int vaf_frame = 0;
     if (++vaf_frame % 60 == 0) {
-        VAF_LOG("disabled=%d SFP_hit:%d miss:%d BL_hit:%d miss:%d MFP_hit:%d miss:%d "
-                "FULL_chg:%d same:%d push(sfp:%d/%d bl:%d mfp:%d)",
+        VAF_LOG("disabled=%d SFP_hit:%d miss:%d MFP_hit:%d miss:%d "
+                "FULL_chg:%d same:%d push(sfp:%d/%d mfp:%d)",
                 g_vaf_disabled,
                 g_vaf_stats.sfp_vaf_hit, g_vaf_stats.sfp_vaf_miss,
-                g_vaf_stats.bl_vaf_hit, g_vaf_stats.bl_vaf_miss,
                 g_vaf_stats.mfp_vaf_hit, g_vaf_stats.mfp_vaf_miss,
                 g_vaf_stats.full_path_vag_changed, g_vaf_stats.full_path_vag_same,
                 g_vaf_stats.sfp_vaf_uniform_pushed, g_vaf_stats.sfp_vaf_no_uniform,
-                g_vaf_stats.bl_vaf_uniform_pushed, g_vaf_stats.mfp_vaf_uniform_pushed);
+                g_vaf_stats.mfp_vaf_uniform_pushed);
         memset(&g_vaf_stats, 0, sizeof(g_vaf_stats));
     }
 }
@@ -86,10 +81,9 @@ static void opt_stats_log_and_reset(void)
     if (++frame_counter % 60 == 0) {
 #ifdef __ANDROID__
         __android_log_print(ANDROID_LOG_INFO, "xemu-sfp",
-                "SFP:%d/%d BLtx:%d PTx:%d VAF:%d TxPool:%d/%d SRS:%d SEE:%d InlClr:%d/%d miss: clr%d noPl%d noCb%d noRp%d noFb%d fbD%d shC%d piD%d dsR%d uni%d noDs%d tG%d ndG%d pmM%d prD%d vG%d tV%d",
+                "SFP:%d/%d PTx:%d VAF:%d TxPool:%d/%d SRS:%d SEE:%d InlClr:%d/%d miss: clr%d noPl%d noCb%d noRp%d noFb%d fbD%d shC%d piD%d dsR%d uni%d noDs%d tG%d ndG%d pmM%d prD%d vG%d tV%d",
                 g_opt_stats.super_fast_hits,
                 g_opt_stats.super_fast_misses,
-                g_opt_stats.bindless_tex_fast,
                 g_opt_stats.push_tex_fast,
                 g_opt_stats.vtx_attr_fast,
                 g_opt_stats.tex_pool_hits,
@@ -239,16 +233,6 @@ void xemu_set_draw_merge(bool enable)
 bool xemu_get_draw_merge(void)
 {
     return g_xemu_draw_merge;
-}
-
-void xemu_set_bindless_textures(bool enable)
-{
-    g_xemu_bindless_textures = enable;
-}
-
-bool xemu_get_bindless_textures(void)
-{
-    return g_xemu_bindless_textures;
 }
 
 void xemu_set_async_compile(bool enable)
@@ -1564,60 +1548,24 @@ static void create_pipeline(PGRAPHState *pg)
     VkPushConstantRange push_constant_ranges[2];
     int num_push_ranges = 0;
 
-#if OPT_BINDLESS_TEXTURES
-    VkDescriptorSetLayout bindless_set_layouts[2];
-    if (r->bindless_textures_supported) {
-        bindless_set_layouts[0] = r->bindless_set_layout;
-        bindless_set_layouts[1] = r->ubo_set_layout;
-
-        push_constant_ranges[num_push_ranges++] = (VkPushConstantRange){
-            .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
-            .offset = r->tex_push_offset,
-            .size = NV2A_MAX_TEXTURES * sizeof(uint32_t),
-        };
-    }
-#endif
-
-    VkDescriptorSetLayout push_desc_layouts[2];
-    bool push_desc_path = r->push_descriptors_supported;
-#if OPT_BINDLESS_TEXTURES
-    push_desc_path = push_desc_path && !r->bindless_textures_supported;
-#endif
-    if (push_desc_path) {
-        push_desc_layouts[0] = r->push_tex_set_layout;
-        push_desc_layouts[1] = r->push_ubo_set_layout;
-    }
+    /* Both paths use 2 set layouts: set 0 = textures, set 1 = UBOs */
+    VkDescriptorSetLayout set_layouts[2];
+    set_layouts[0] = r->push_descriptors_supported
+                         ? r->push_tex_set_layout
+                         : r->descriptor_set_layout;
+    set_layouts[1] = r->push_ubo_set_layout;
 
     VkPipelineLayoutCreateInfo pipeline_layout_info = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-#if OPT_BINDLESS_TEXTURES
-        .setLayoutCount = r->bindless_textures_supported ? 2
-                        : push_desc_path ? 2 : 1,
-        .pSetLayouts = r->bindless_textures_supported
-                           ? bindless_set_layouts
-                        : push_desc_path ? push_desc_layouts
-                           : &r->descriptor_set_layout,
-#else
-        .setLayoutCount = push_desc_path ? 2 : 1,
-        .pSetLayouts = push_desc_path ? push_desc_layouts
-                                      : &r->descriptor_set_layout,
-#endif
+        .setLayoutCount = 2,
+        .pSetLayouts = set_layouts,
     };
 
     if (r->use_push_constants_for_uniform_attrs) {
         int num_uniform_attributes =
             __builtin_popcount(r->shader_binding->state.vsh.uniform_attrs);
         if (num_uniform_attributes) {
-#if OPT_BINDLESS_TEXTURES
-            uint32_t vtx_offset =
-                r->bindless_textures_supported
-                    ? (r->tex_push_offset == 0
-                           ? NV2A_MAX_TEXTURES * (uint32_t)sizeof(uint32_t)
-                           : 0)
-                    : 0;
-#else
             uint32_t vtx_offset = 0;
-#endif
             push_constant_ranges[num_push_ranges++] = (VkPushConstantRange){
                 .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
                 .offset = vtx_offset,
@@ -1735,16 +1683,7 @@ static void push_vertex_attr_values(PGRAPHState *pg)
                              values, &num_uniform_attrs);
 
     if (num_uniform_attrs > 0) {
-#if OPT_BINDLESS_TEXTURES
-        uint32_t vtx_offset =
-            r->bindless_textures_supported
-                ? (r->tex_push_offset == 0
-                       ? NV2A_MAX_TEXTURES * (uint32_t)sizeof(uint32_t)
-                       : 0)
-                : 0;
-#else
         uint32_t vtx_offset = 0;
-#endif
         vkCmdPushConstants(r->command_buffer, r->pipeline_binding->layout,
                            VK_SHADER_STAGE_VERTEX_BIT, vtx_offset,
                            num_uniform_attrs * 4 * sizeof(float),
@@ -1756,21 +1695,9 @@ static void push_texture_descriptors(PGRAPHState *pg)
 {
     PGRAPHVkState *r = pg->vk_renderer_state;
 
-    VkWriteDescriptorSet tex_writes[NV2A_MAX_TEXTURES];
-    for (int i = 0; i < NV2A_MAX_TEXTURES; i++) {
-        tex_writes[i] = (VkWriteDescriptorSet){
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstBinding = i,
-            .dstArrayElement = 0,
-            .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            .descriptorCount = 1,
-            .pImageInfo = &r->push_tex_infos[i],
-        };
-    }
-    vkCmdPushDescriptorSetKHR(r->command_buffer,
-                              VK_PIPELINE_BIND_POINT_GRAPHICS,
-                              r->pipeline_binding->layout,
-                              0, NV2A_MAX_TEXTURES, tex_writes);
+    vkCmdPushDescriptorSetWithTemplateKHR(
+        r->command_buffer, r->push_tex_update_template,
+        r->pipeline_binding->layout, 0, r->push_tex_infos);
     r->push_tex_dirty = false;
 }
 
@@ -1783,63 +1710,28 @@ static void bind_descriptor_sets(PGRAPHState *pg)
         (uint32_t)r->uniform_buffer_offsets[1],
     };
 
-#if OPT_BINDLESS_TEXTURES
-    if (r->bindless_textures_supported) {
-        assert(r->ubo_descriptor_set_index >= 1);
-        vkCmdBindDescriptorSets(
-            r->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-            r->pipeline_binding->layout, 1, 1,
-            &r->ubo_descriptor_sets[r->ubo_descriptor_set_index - 1],
-            2, dynamic_offsets);
-    } else
-#endif
+    /* Bind UBO set (set 1) with dynamic offsets — common to both paths */
+    assert(r->push_ubo_set_index >= 1);
+    vkCmdBindDescriptorSets(
+        r->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+        r->pipeline_binding->layout, 1, 1,
+        &r->push_ubo_sets[r->push_ubo_set_index - 1],
+        2, dynamic_offsets);
+
     if (r->push_descriptors_supported) {
-        assert(r->push_ubo_set_index >= 1);
-        vkCmdBindDescriptorSets(
-            r->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-            r->pipeline_binding->layout, 1, 1,
-            &r->push_ubo_sets[r->push_ubo_set_index - 1],
-            2, dynamic_offsets);
         if (r->push_tex_dirty) {
             push_texture_descriptors(pg);
         }
     } else {
+        /* Bind texture set (set 0) — standard path */
         assert(r->descriptor_set_index >= 1);
         vkCmdBindDescriptorSets(
             r->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
             r->pipeline_binding->layout, 0, 1,
             &r->descriptor_sets[r->descriptor_set_index - 1],
-            2, dynamic_offsets);
+            0, NULL);
     }
 }
-
-#if OPT_BINDLESS_TEXTURES
-static void bind_bindless_set(PGRAPHState *pg)
-{
-    PGRAPHVkState *r = pg->vk_renderer_state;
-    if (!r->bindless_textures_supported) return;
-
-    vkCmdBindDescriptorSets(r->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                            r->pipeline_binding->layout, 0, 1,
-                            &r->bindless_descriptor_set, 0, NULL);
-}
-
-static void push_texture_indices(PGRAPHState *pg)
-{
-    PGRAPHVkState *r = pg->vk_renderer_state;
-    if (!r->bindless_textures_supported) return;
-
-    uint32_t tex_indices[NV2A_MAX_TEXTURES];
-    for (int i = 0; i < NV2A_MAX_TEXTURES; i++) {
-        tex_indices[i] = r->texture_bindings[i]->bindless_slot;
-    }
-    vkCmdPushConstants(r->command_buffer, r->pipeline_binding->layout,
-                       VK_SHADER_STAGE_FRAGMENT_BIT,
-                       r->tex_push_offset,
-                       NV2A_MAX_TEXTURES * sizeof(uint32_t),
-                       tex_indices);
-}
-#endif
 
 static void begin_query(PGRAPHVkState *r)
 {
@@ -2171,9 +2063,6 @@ void pgraph_vk_flush_all_frames(PGRAPHState *pg)
     // All GPU work is complete — safe to reuse all descriptor sets
     r->descriptor_set_index = 0;
     r->push_ubo_set_index = 0;
-#if OPT_BINDLESS_TEXTURES
-    r->ubo_descriptor_set_index = 0;
-#endif
     pgraph_vk_compute_finish_complete(r);
 }
 
@@ -2383,10 +2272,7 @@ void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
                  * reuse */
                 r->descriptor_set_index = 0;
                 r->push_ubo_set_index = 0;
-#if OPT_BINDLESS_TEXTURES
-                r->ubo_descriptor_set_index = 0;
-#endif
-                pgraph_vk_compute_finish_complete(r);
+                            pgraph_vk_compute_finish_complete(r);
             }
         } else {
             QemuEvent finish_event;
@@ -2453,10 +2339,7 @@ void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
                 /* Non-deferred: GPU done, descriptor sets safe to reuse */
                 r->descriptor_set_index = 0;
                 r->push_ubo_set_index = 0;
-#if OPT_BINDLESS_TEXTURES
-                r->ubo_descriptor_set_index = 0;
-#endif
-                pgraph_vk_compute_finish_complete(r);
+                            pgraph_vk_compute_finish_complete(r);
             }
         }
 
@@ -2548,10 +2431,7 @@ void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
                 if (!any_in_flight) {
                     r->descriptor_set_index = 0;
                     r->push_ubo_set_index = 0;
-#if OPT_BINDLESS_TEXTURES
-                    r->ubo_descriptor_set_index = 0;
-#endif
-                    pgraph_vk_compute_finish_complete(r);
+                                    pgraph_vk_compute_finish_complete(r);
                 }
             }
 
@@ -2649,9 +2529,6 @@ void pgraph_vk_begin_command_buffer(PGRAPHState *pg)
                             r->gpu_ts_pool, base + 0);
         r->gpu_ts_rp_index = 0;
     }
-#if OPT_BINDLESS_TEXTURES
-    r->bindless_set_bound = false;
-#endif
 }
 
 // FIXME: Refactor below
@@ -2718,25 +2595,11 @@ static void begin_pre_draw(PGRAPHState *pg)
         else if (r->pipeline_state_dirty) { OPT_STAT_INC(sfp_miss_pipe_dirty); sfp_ok = false; }
         else if (r->need_descriptor_rebind) { OPT_STAT_INC(sfp_miss_desc_rebind); sfp_ok = false; }
         else if (r->uniforms_changed)    { OPT_STAT_INC(sfp_miss_uniforms); sfp_ok = false; }
-#if OPT_BINDLESS_TEXTURES
-        else if (r->bindless_textures_supported
-                     ? (r->ubo_descriptor_set_index <= 0)
-                     : r->push_descriptors_supported
-                         ? (r->push_ubo_set_index <= 0)
-                         : (r->descriptor_set_index <= 0)) { OPT_STAT_INC(sfp_miss_no_desc); sfp_ok = false; }
-#else
-        else if (r->push_descriptors_supported
-                     ? (r->push_ubo_set_index <= 0)
-                     : (r->descriptor_set_index <= 0)) { OPT_STAT_INC(sfp_miss_no_desc); sfp_ok = false; }
-#endif
-#if OPT_BINDLESS_TEXTURES
-        else if (!r->bindless_textures_supported &&
-                 !r->push_descriptors_supported &&
-                 pg->texture_state_gen != r->last_texture_state_gen) { OPT_STAT_INC(sfp_miss_tex_gen); sfp_ok = false; }
-#else
+        else if (r->push_ubo_set_index <= 0 ||
+                 (!r->push_descriptors_supported &&
+                  r->descriptor_set_index <= 0)) { OPT_STAT_INC(sfp_miss_no_desc); sfp_ok = false; }
         else if (!r->push_descriptors_supported &&
                  pg->texture_state_gen != r->last_texture_state_gen) { OPT_STAT_INC(sfp_miss_tex_gen); sfp_ok = false; }
-#endif
         else if (pg->non_dynamic_reg_gen != r->last_non_dynamic_reg_gen) { OPT_STAT_INC(sfp_miss_reg_gen); sfp_ok = false; }
         else if (pg->primitive_mode != r->shader_binding->state.geom.primitive_mode) { OPT_STAT_INC(sfp_miss_prim_mode); sfp_ok = false; }
         else if (pg->program_data_dirty) { OPT_STAT_INC(sfp_miss_prog_dirty); sfp_ok = false; }
@@ -2764,18 +2627,6 @@ static void begin_pre_draw(PGRAPHState *pg)
 
             if (tex_vram_clean) {
                 bool sfp_had_tex_change = false;
-#if OPT_BINDLESS_TEXTURES
-                if (r->bindless_textures_supported &&
-                    pg->texture_state_gen != r->last_texture_state_gen) {
-                    NV2AState *d_bl = container_of(pg, NV2AState, pgraph);
-                    pgraph_vk_bind_textures(d_bl);
-                    r->last_texture_state_gen = pg->texture_state_gen;
-                    r->last_texture_vram_gen = r->texture_vram_gen;
-                    push_texture_indices(pg);
-                    OPT_STAT_INC(bindless_tex_fast);
-                }
-                else
-#endif
                 if (r->push_descriptors_supported &&
                     pg->texture_state_gen != r->last_texture_state_gen) {
                     uint32_t saved_shader_gen = pg->shader_state_gen;
@@ -2790,8 +2641,12 @@ static void begin_pre_draw(PGRAPHState *pg)
                         if (r->texture_bindings_changed) {
                             for (int i = 0; i < NV2A_MAX_TEXTURES; i++) {
                                 r->push_tex_infos[i] = (VkDescriptorImageInfo){
-                                    .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                    .imageView = r->texture_bindings[i]->image_view,
+                                    .imageLayout = r->tex_surface_direct[i]
+                                        ? r->tex_surface_direct_layout[i]
+                                        : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                    .imageView = r->tex_surface_direct[i]
+                                        ? r->tex_surface_direct_views[i]
+                                        : r->texture_bindings[i]->image_view,
                                     .sampler = r->texture_bindings[i]->sampler,
                                 };
                             }
@@ -2912,72 +2767,6 @@ static void begin_pre_draw(PGRAPHState *pg)
     }
     OPT_STAT_INC(super_fast_misses);
 
-#if OPT_BINDLESS_TEXTURES
-    if (r->bindless_textures_supported &&
-        !pg->clearing &&
-        r->pipeline_binding &&
-        r->pipeline_binding->pipeline != VK_NULL_HANDLE &&
-        !r->pipeline_binding_changed &&
-        r->in_command_buffer && r->in_render_pass &&
-        r->framebuffer_index > 0 &&
-        !r->framebuffer_dirty &&
-        !r->shader_bindings_changed &&
-        !r->pipeline_state_dirty &&
-        !r->need_descriptor_rebind &&
-        !r->uniforms_changed &&
-        !pg->program_data_dirty &&
-        pg->primitive_mode == r->shader_binding->state.geom.primitive_mode &&
-        pg->non_dynamic_reg_gen == r->last_non_dynamic_reg_gen &&
-        (pg->texture_state_gen != r->last_texture_state_gen ||
-         r->texture_vram_gen != r->last_texture_vram_gen)) {
-        NV2A_VK_DGROUP_BEGIN("bindless-tex-fast-path");
-        NV2AState *d_tex = container_of(pg, NV2AState, pgraph);
-        pgraph_vk_bind_textures(d_tex);
-        r->last_texture_state_gen = pg->texture_state_gen;
-        r->last_texture_vram_gen = r->texture_vram_gen;
-        bool bl_ok = (pg->any_reg_gen == r->last_any_reg_gen);
-        if (bl_ok && pg->vertex_attr_gen != r->pipeline_vertex_attr_gen) {
-            bool bl_count_match =
-                r->num_active_vertex_attribute_descriptions == r->pipeline_num_active_attr_descs &&
-                r->num_active_vertex_binding_descriptions == r->pipeline_num_active_bind_descs;
-            bool bl_desc_match = !g_vaf_disabled && bl_count_match &&
-                !memcmp(r->vertex_attribute_descriptions,
-                        r->pipeline_binding->key.attribute_descriptions,
-                        r->num_active_vertex_attribute_descriptions *
-                            sizeof(r->vertex_attribute_descriptions[0])) &&
-                !memcmp(r->vertex_binding_descriptions,
-                        r->pipeline_binding->key.binding_descriptions,
-                        r->num_active_vertex_binding_descriptions *
-                            sizeof(r->vertex_binding_descriptions[0]));
-            if (bl_desc_match) {
-                r->pipeline_vertex_attr_gen = pg->vertex_attr_gen;
-                r->pipeline_num_active_attr_descs = r->num_active_vertex_attribute_descriptions;
-                r->pipeline_num_active_bind_descs = r->num_active_vertex_binding_descriptions;
-                push_vertex_attr_values(pg);
-                g_vaf_stats.bl_vaf_hit++;
-                if (r->use_push_constants_for_uniform_attrs &&
-                    r->shader_binding->state.vsh.uniform_attrs) {
-                    g_vaf_stats.bl_vaf_uniform_pushed++;
-                }
-                OPT_STAT_INC(vtx_attr_fast);
-            } else {
-                g_vaf_stats.bl_vaf_miss++;
-                bl_ok = false;
-            }
-        }
-        if (bl_ok) {
-            r->last_any_reg_gen = pg->any_reg_gen;
-            r->last_non_dynamic_reg_gen = pg->non_dynamic_reg_gen;
-            push_texture_indices(pg);
-            r->pre_draw_skipped = true;
-            NV2A_VK_DGROUP_END();
-            OPT_STAT_INC(bindless_tex_fast);
-            return;
-        }
-        NV2A_VK_DGROUP_END();
-    }
-#endif
-
     if (!pg->clearing &&
         r->pipeline_binding &&
         r->pipeline_binding->pipeline != VK_NULL_HANDLE &&
@@ -2987,23 +2776,11 @@ static void begin_pre_draw(PGRAPHState *pg)
         !r->shader_bindings_changed &&
         !r->pipeline_state_dirty &&
         !r->need_descriptor_rebind &&
-#if OPT_BINDLESS_TEXTURES
-        (r->bindless_textures_supported
-             ? (r->ubo_descriptor_set_index > 0)
-             : r->push_descriptors_supported
-                 ? (r->push_ubo_set_index > 0)
-                 : (r->descriptor_set_index > 0)) &&
-        (r->bindless_textures_supported || r->push_descriptors_supported ||
-             (pg->texture_state_gen == r->last_texture_state_gen &&
-              r->texture_vram_gen == r->last_texture_vram_gen)) &&
-#else
-        (r->push_descriptors_supported
-             ? (r->push_ubo_set_index > 0)
-             : (r->descriptor_set_index > 0)) &&
+        r->push_ubo_set_index > 0 &&
+        (r->push_descriptors_supported || r->descriptor_set_index > 0) &&
         (r->push_descriptors_supported ||
              (pg->texture_state_gen == r->last_texture_state_gen &&
               r->texture_vram_gen == r->last_texture_vram_gen)) &&
-#endif
         pg->shader_state_gen == r->last_shader_state_gen &&
         pg->pipeline_state_gen == r->last_pipeline_state_gen &&
         pg->primitive_mode == r->shader_binding->state.geom.primitive_mode &&
@@ -3034,17 +2811,6 @@ static void begin_pre_draw(PGRAPHState *pg)
             OPT_STAT_INC(vtx_attr_fast);
         }
         r->pre_draw_skipped = false;
-#if OPT_BINDLESS_TEXTURES
-        if (r->bindless_textures_supported &&
-            (pg->texture_state_gen != r->last_texture_state_gen ||
-             r->texture_vram_gen != r->last_texture_vram_gen)) {
-            NV2AState *d_mfp = container_of(pg, NV2AState, pgraph);
-            pgraph_vk_bind_textures(d_mfp);
-            r->last_texture_state_gen = pg->texture_state_gen;
-            r->last_texture_vram_gen = r->texture_vram_gen;
-            push_texture_indices(pg);
-        } else
-#endif
         if (r->push_descriptors_supported &&
             pg->texture_state_gen != r->last_texture_state_gen) {
             NV2AState *d_mfp_push = container_of(pg, NV2AState, pgraph);
@@ -3054,8 +2820,12 @@ static void begin_pre_draw(PGRAPHState *pg)
             if (r->texture_bindings_changed) {
                 for (int i = 0; i < NV2A_MAX_TEXTURES; i++) {
                     r->push_tex_infos[i] = (VkDescriptorImageInfo){
-                        .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                        .imageView = r->texture_bindings[i]->image_view,
+                        .imageLayout = r->tex_surface_direct[i]
+                            ? r->tex_surface_direct_layout[i]
+                            : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                        .imageView = r->tex_surface_direct[i]
+                            ? r->tex_surface_direct_views[i]
+                            : r->texture_bindings[i]->image_view,
                         .sampler = r->texture_bindings[i]->sampler,
                     };
                 }
@@ -3426,17 +3196,8 @@ static void begin_draw(PGRAPHState *pg)
 #endif
 
         if (!r->pre_draw_skipped) {
-#if OPT_BINDLESS_TEXTURES
-            if (r->bindless_textures_supported && !r->bindless_set_bound) {
-                bind_bindless_set(pg);
-                r->bindless_set_bound = true;
-            }
-#endif
             bind_descriptor_sets(pg);
             push_vertex_attr_values(pg);
-#if OPT_BINDLESS_TEXTURES
-            push_texture_indices(pg);
-#endif
         }
     }
 
@@ -3845,32 +3606,12 @@ static void rebind_ubo_dynamic_offsets(PGRAPHState *pg, uint32_t off0,
         return;
     }
 
-#if OPT_BINDLESS_TEXTURES
-    if (r->bindless_textures_supported) {
-        assert(r->ubo_descriptor_set_index >= 1);
-        vkCmdBindDescriptorSets(
-            r->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-            r->pipeline_binding->layout, 1, 1,
-            &r->ubo_descriptor_sets[r->ubo_descriptor_set_index - 1],
-            2, dyn_off);
-        return;
-    }
-#endif
-    if (r->push_descriptors_supported) {
-        assert(r->push_ubo_set_index >= 1);
-        vkCmdBindDescriptorSets(
-            r->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-            r->pipeline_binding->layout, 1, 1,
-            &r->push_ubo_sets[r->push_ubo_set_index - 1],
-            2, dyn_off);
-    } else {
-        assert(r->descriptor_set_index >= 1);
-        vkCmdBindDescriptorSets(
-            r->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-            r->pipeline_binding->layout, 0, 1,
-            &r->descriptor_sets[r->descriptor_set_index - 1],
-            2, dyn_off);
-    }
+    assert(r->push_ubo_set_index >= 1);
+    vkCmdBindDescriptorSets(
+        r->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+        r->pipeline_binding->layout, 1, 1,
+        &r->push_ubo_sets[r->push_ubo_set_index - 1],
+        2, dyn_off);
 }
 
 static void flush_draw_queue_internal(NV2AState *d)
@@ -4016,17 +3757,8 @@ static void flush_draw_queue_internal(NV2AState *d)
                                      "Merged Indexed (%d)", entry_count);
         begin_draw(pg);
         if (r->pre_draw_skipped) {
-#if OPT_BINDLESS_TEXTURES
-            if (r->bindless_textures_supported && !r->bindless_set_bound) {
-                bind_bindless_set(pg);
-                r->bindless_set_bound = true;
-            }
-#endif
             bind_descriptor_sets(pg);
             push_vertex_attr_values(pg);
-#if OPT_BINDLESS_TEXTURES
-            push_texture_indices(pg);
-#endif
         }
         bind_vertex_buffer(pg, remap.attributes, 0);
 
@@ -4103,17 +3835,8 @@ static void flush_draw_queue_internal(NV2AState *d)
                                      "Merged Draw Arrays (%d)", entry_count);
         begin_draw(pg);
         if (r->pre_draw_skipped) {
-#if OPT_BINDLESS_TEXTURES
-            if (r->bindless_textures_supported && !r->bindless_set_bound) {
-                bind_bindless_set(pg);
-                r->bindless_set_bound = true;
-            }
-#endif
             bind_descriptor_sets(pg);
             push_vertex_attr_values(pg);
-#if OPT_BINDLESS_TEXTURES
-            push_texture_indices(pg);
-#endif
         }
         bind_vertex_buffer(pg, remap.attributes, 0);
 
@@ -4428,22 +4151,13 @@ static bool try_snapshot_draw_arrays(NV2AState *d, ReorderWindowEntry *e)
             clamp_line_width_to_device_limits(pg, pg->surface_scale_factor);
     }
 
-#if OPT_BINDLESS_TEXTURES
-    if (r->bindless_textures_supported) {
-        e->descriptor_set = r->ubo_descriptor_sets[r->ubo_descriptor_set_index - 1];
-        for (int i = 0; i < NV2A_MAX_TEXTURES; i++) {
-            e->tex_indices[i] = r->texture_bindings[i]->bindless_slot;
-        }
-        e->rw_use_push_descriptors = false;
-    } else
-#endif
+    e->descriptor_set = r->push_ubo_sets[r->push_ubo_set_index - 1];
     if (r->push_descriptors_supported) {
-        e->descriptor_set = r->push_ubo_sets[r->push_ubo_set_index - 1];
         memcpy(e->rw_push_tex_infos, r->push_tex_infos,
                sizeof(r->push_tex_infos));
         e->rw_use_push_descriptors = true;
     } else {
-        e->descriptor_set = r->descriptor_sets[r->descriptor_set_index - 1];
+        e->tex_descriptor_set = r->descriptor_sets[r->descriptor_set_index - 1];
         e->rw_use_push_descriptors = false;
     }
     e->dynamic_offsets[0] = (uint32_t)r->uniform_buffer_offsets[0];
@@ -4571,22 +4285,13 @@ static bool try_snapshot_inline_elements(NV2AState *d, ReorderWindowEntry *e)
             clamp_line_width_to_device_limits(pg, pg->surface_scale_factor);
     }
 
-#if OPT_BINDLESS_TEXTURES
-    if (r->bindless_textures_supported) {
-        e->descriptor_set = r->ubo_descriptor_sets[r->ubo_descriptor_set_index - 1];
-        for (int i = 0; i < NV2A_MAX_TEXTURES; i++) {
-            e->tex_indices[i] = r->texture_bindings[i]->bindless_slot;
-        }
-        e->rw_use_push_descriptors = false;
-    } else
-#endif
+    e->descriptor_set = r->push_ubo_sets[r->push_ubo_set_index - 1];
     if (r->push_descriptors_supported) {
-        e->descriptor_set = r->push_ubo_sets[r->push_ubo_set_index - 1];
         memcpy(e->rw_push_tex_infos, r->push_tex_infos,
                sizeof(r->push_tex_infos));
         e->rw_use_push_descriptors = true;
     } else {
-        e->descriptor_set = r->descriptor_sets[r->descriptor_set_index - 1];
+        e->tex_descriptor_set = r->descriptor_sets[r->descriptor_set_index - 1];
         e->rw_use_push_descriptors = false;
     }
     e->dynamic_offsets[0] = (uint32_t)r->uniform_buffer_offsets[0];
@@ -4788,55 +4493,35 @@ static void emit_reorder_entry(PGRAPHState *pg, ReorderWindowEntry *e,
 #endif
 #endif
 
+    /* Bind UBO set (set 1) with dynamic offsets */
     if (pipeline_changed ||
         e->descriptor_set != prev->descriptor_set ||
         e->dynamic_offsets[0] != prev->dynamic_offsets[0] ||
         e->dynamic_offsets[1] != prev->dynamic_offsets[1]) {
-#if OPT_BINDLESS_TEXTURES
-        uint32_t set_num = r->bindless_textures_supported ? 1
-                         : e->rw_use_push_descriptors ? 1 : 0;
-#else
-        uint32_t set_num = e->rw_use_push_descriptors ? 1 : 0;
-#endif
         vkCmdBindDescriptorSets(r->command_buffer,
                                 VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                e->layout, set_num, 1, &e->descriptor_set,
+                                e->layout, 1, 1, &e->descriptor_set,
                                 2, e->dynamic_offsets);
     }
 
-    if (e->rw_use_push_descriptors &&
-        (pipeline_changed ||
-         memcmp(e->rw_push_tex_infos, prev->rw_push_tex_infos,
-                sizeof(e->rw_push_tex_infos)) != 0)) {
-        VkWriteDescriptorSet tex_writes[NV2A_MAX_TEXTURES];
-        for (int i = 0; i < NV2A_MAX_TEXTURES; i++) {
-            tex_writes[i] = (VkWriteDescriptorSet){
-                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                .dstBinding = i,
-                .dstArrayElement = 0,
-                .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                .descriptorCount = 1,
-                .pImageInfo = &e->rw_push_tex_infos[i],
-            };
+    /* Bind texture set (set 0) */
+    if (e->rw_use_push_descriptors) {
+        if (pipeline_changed ||
+            memcmp(e->rw_push_tex_infos, prev->rw_push_tex_infos,
+                   sizeof(e->rw_push_tex_infos)) != 0) {
+            vkCmdPushDescriptorSetWithTemplateKHR(
+                r->command_buffer, r->push_tex_update_template,
+                e->layout, 0, e->rw_push_tex_infos);
         }
-        vkCmdPushDescriptorSetKHR(r->command_buffer,
-                                  VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                  e->layout,
-                                  0, NV2A_MAX_TEXTURES, tex_writes);
+    } else {
+        if (pipeline_changed ||
+            e->tex_descriptor_set != prev->tex_descriptor_set) {
+            vkCmdBindDescriptorSets(r->command_buffer,
+                                    VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    e->layout, 0, 1,
+                                    &e->tex_descriptor_set, 0, NULL);
+        }
     }
-
-#if OPT_BINDLESS_TEXTURES
-    if (r->bindless_textures_supported &&
-        (pipeline_changed ||
-         memcmp(e->tex_indices, prev->tex_indices,
-                sizeof(e->tex_indices)) != 0)) {
-        vkCmdPushConstants(r->command_buffer, e->layout,
-                           VK_SHADER_STAGE_FRAGMENT_BIT,
-                           r->tex_push_offset,
-                           NV2A_MAX_TEXTURES * sizeof(uint32_t),
-                           e->tex_indices);
-    }
-#endif
 
     if (e->use_push_constants && e->num_push_values > 0 &&
         (pipeline_changed ||
@@ -4844,16 +4529,7 @@ static void emit_reorder_entry(PGRAPHState *pg, ReorderWindowEntry *e,
          e->num_push_values != prev->num_push_values ||
          memcmp(e->push_values, prev->push_values,
                 e->num_push_values * 4 * sizeof(float)) != 0)) {
-#if OPT_BINDLESS_TEXTURES
-        uint32_t vtx_offset =
-            r->bindless_textures_supported
-                ? (r->tex_push_offset == 0
-                       ? NV2A_MAX_TEXTURES * (uint32_t)sizeof(uint32_t)
-                       : 0)
-                : 0;
-#else
         uint32_t vtx_offset = 0;
-#endif
         vkCmdPushConstants(r->command_buffer, e->layout,
                            VK_SHADER_STAGE_VERTEX_BIT, vtx_offset,
                            e->num_push_values * 4 * sizeof(float),
@@ -4929,16 +4605,6 @@ static void flush_reorder_window_internal(NV2AState *d)
     g_nv2a_stats.frame_working.counters[NV2A_PROF_REORDER_DRAWS] += w->count;
 
     pgraph_vk_ensure_command_buffer(pg);
-
-#if OPT_BINDLESS_TEXTURES
-    if (r->bindless_textures_supported && !r->bindless_set_bound) {
-        vkCmdBindDescriptorSets(r->command_buffer,
-                                VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                w->entries[0].layout, 0, 1,
-                                &r->bindless_descriptor_set, 0, NULL);
-        r->bindless_set_bound = true;
-    }
-#endif
 
     r->dyn_state.valid = false;
 

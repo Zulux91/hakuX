@@ -38,8 +38,6 @@ extern "C" void xemu_set_draw_reorder(bool enable);
 extern "C" bool xemu_get_draw_reorder(void);
 extern "C" void xemu_set_draw_merge(bool enable);
 extern "C" bool xemu_get_draw_merge(void);
-extern "C" void xemu_set_bindless_textures(bool enable);
-extern "C" bool xemu_get_bindless_textures(void);
 extern "C" void xemu_set_async_compile(bool enable);
 extern "C" bool xemu_get_async_compile(void);
 extern "C" void xemu_set_frame_skip(bool enable);
@@ -560,6 +558,7 @@ struct DisplaySettings {
   std::string filtering = "nearest";
   std::string aspect_ratio = "auto";
   bool use_dsp = false;
+  bool network_enabled = false;
 };
 
 static bool WriteConfigToml(const std::string& config_path,
@@ -647,6 +646,14 @@ static bool WriteConfigToml(const std::string& config_path,
   toml::table* perf = EnsureTable(tbl, "perf");
   if (perf) {
     perf->insert_or_assign("unlock_framerate", ds.unlock_framerate);
+  }
+
+  toml::table* net = EnsureTable(tbl, "net");
+  if (net) {
+    net->insert_or_assign("enable", ds.network_enabled);
+    if (ds.network_enabled) {
+      net->insert_or_assign("backend", "nat");
+    }
   }
 
   files->insert_or_assign("bootrom_path", mcpx);
@@ -817,6 +824,7 @@ static SetupFiles SyncSetupFiles() {
   ds.unlock_framerate = GetPrefBool(env, activity, "unlock_framerate", true);
   ds.validation_layers = GetPrefBool(env, activity, "validation_layers", false);
   ds.use_dsp = GetPrefBool(env, activity, "use_dsp", false);
+  ds.network_enabled = GetPrefBool(env, activity, "setting_network_enable", false);
 
   bool fp_safe = GetPrefBool(env, activity, "fp_safe", true);
   xemu_set_fp_safe(fp_safe);
@@ -842,11 +850,6 @@ static SetupFiles SyncSetupFiles() {
   xemu_set_draw_merge(draw_merge);
   __android_log_print(ANDROID_LOG_INFO, "hakuX",
                       "draw merge: %s", draw_merge ? "ON" : "OFF");
-
-  bool bindless_tex = GetPrefBool(env, activity, "bindless_textures", false);
-  xemu_set_bindless_textures(bindless_tex);
-  __android_log_print(ANDROID_LOG_INFO, "hakuX",
-                      "bindless textures: %s", bindless_tex ? "ON" : "OFF");
 
   bool async_compile = GetPrefBool(env, activity, "async_compile", false);
   xemu_set_async_compile(async_compile);
@@ -1397,18 +1400,6 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_rfandango_haku_1x_SettingsActivity_nativeSetDrawMerge(JNIEnv *, jobject, jboolean enable)
 {
     xemu_set_draw_merge(enable == JNI_TRUE);
-}
-
-extern "C" JNIEXPORT jboolean JNICALL
-Java_com_rfandango_haku_1x_SettingsActivity_nativeGetBindlessTextures(JNIEnv *, jobject)
-{
-    return xemu_get_bindless_textures() ? JNI_TRUE : JNI_FALSE;
-}
-
-extern "C" JNIEXPORT void JNICALL
-Java_com_rfandango_haku_1x_SettingsActivity_nativeSetBindlessTextures(JNIEnv *, jobject, jboolean enable)
-{
-    xemu_set_bindless_textures(enable == JNI_TRUE);
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
