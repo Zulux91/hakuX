@@ -27,6 +27,9 @@ object PerGameSettingsManager {
         "bindless_textures",
         "async_compile",
         "submit_frames",
+        "tier1_threshold",
+        "simple_vblank",
+        "use_dsp",
     )
 
     fun hasOverrides(context: Context, relativePath: String): Boolean {

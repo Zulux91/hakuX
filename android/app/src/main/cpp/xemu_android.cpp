@@ -559,6 +559,7 @@ struct DisplaySettings {
   bool validation_layers = false;
   std::string filtering = "nearest";
   std::string aspect_ratio = "auto";
+  bool use_dsp = false;
 };
 
 static bool WriteConfigToml(const std::string& config_path,
@@ -625,6 +626,7 @@ static bool WriteConfigToml(const std::string& config_path,
   if (!audio_vp->contains("num_workers")) {
     audio_vp->insert_or_assign("num_workers", 0);
   }
+  audio->insert_or_assign("use_dsp", ds.use_dsp);
   if (!audio->contains("hrtf")) {
     audio->insert_or_assign("hrtf", true);
   }
@@ -814,6 +816,7 @@ static SetupFiles SyncSetupFiles() {
   ds.vsync = GetPrefBool(env, activity, "vsync", false);
   ds.unlock_framerate = GetPrefBool(env, activity, "unlock_framerate", true);
   ds.validation_layers = GetPrefBool(env, activity, "validation_layers", false);
+  ds.use_dsp = GetPrefBool(env, activity, "use_dsp", false);
 
   bool fp_safe = GetPrefBool(env, activity, "fp_safe", true);
   xemu_set_fp_safe(fp_safe);

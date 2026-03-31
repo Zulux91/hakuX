@@ -159,19 +159,19 @@
   <string name="settings_unlock_framerate">Unlock frame rate</string>
   <string name="settings_unlock_framerate_desc">Prevents frame rate from locking to 30 FPS when the device can\'t sustain 60 FPS. May affect game speed.</string>
   <string name="settings_fp_safe">Native Floats (Safe)</string>
-  <string name="settings_fp_safe_desc">Use native ARM64 double-precision for x87 FPU arithmetic. Keeps legacy 80-bit storage. Moderate speedup with good compatibility. Takes effect immediately.</string>
+  <string name="settings_fp_safe_desc">Use native ARM64 double-precision for x87 FPU arithmetic. Keeps legacy 80-bit storage. Moderate speedup with good compatibility.</string>
 
   <string name="settings_fp_jit">Native Floats (JIT)</string>
   <string name="settings_fp_jit_desc">Full JIT-level FP optimization: native 64-bit storage + inline FP instructions. Best performance but may reduce accuracy. Applied on next game launch.</string>
 
   <string name="settings_fast_fences">Fast fences (reduce GPU stalls)</string>
-  <string name="settings_fast_fences_desc">Defer GPU fence waits for buffer-space and vertex-dirty flushes. Significantly reduces frame time but may cause geometry popping or flickering. Takes effect immediately.</string>
+  <string name="settings_fast_fences_desc">Defer GPU fence waits for buffer-space and vertex-dirty flushes. Significantly reduces frame time but may cause geometry popping or flickering.</string>
 
   <string name="settings_draw_reorder">Draw reordering (reduce pipeline switches)</string>
-  <string name="settings_draw_reorder_desc">Reorder safe draw calls within small windows to reduce GPU pipeline switches. Improves performance on tiled GPUs (Adreno). May cause minor visual artifacts in some titles. Takes effect immediately.</string>
+  <string name="settings_draw_reorder_desc">Reorder safe draw calls within small windows to reduce GPU pipeline switches. Improves performance on tiled GPUs (Adreno). May cause minor visual artifacts in some titles.</string>
 
   <string name="settings_draw_merge">Draw merging (batch draw calls)</string>
-  <string name="settings_draw_merge_desc">Merge consecutive compatible draw calls into fewer GPU submissions. Reduces driver overhead on tiled GPUs (Adreno). Takes effect immediately.</string>
+  <string name="settings_draw_merge_desc">Merge consecutive compatible draw calls into fewer GPU submissions. Reduces driver overhead on tiled GPUs (Adreno). May introduce visual artifacts in some titles.</string>
 
   <string name="settings_bindless_textures">Bindless textures</string>
   <string name="settings_bindless_textures_desc">Use bindless descriptor indexing for texture access. Faster on modern GPUs (Adreno 740+) but may reduce performance on older GPUs. Applied on next game launch.</string>
@@ -183,10 +183,10 @@
   <string name="settings_frame_skip_desc">Skip rendering when running behind to maintain game speed. May cause visible stuttering.</string>
 
   <string name="settings_submit_frames">Submit frame buffering</string>
-  <string name="settings_submit_frames_desc">Number of GPU submission frames. Higher values increase parallelism but use more memory and add latency. Single = lowest memory, Triple = best throughput. Takes effect immediately.</string>
+  <string name="settings_submit_frames_desc">Number of GPU submission frames. Higher values increase parallelism but use more memory and add latency. Single = lowest memory, Triple = best throughput.</string>
 
   <string name="settings_tier1_threshold">Tier-1 recompilation threshold</string>
-  <string name="settings_tier1_threshold_desc">How many times a code block must execute before it is recompiled with optimizations. Lower = more aggressive optimization (more CPU overhead). Higher = fewer optimizations (less overhead). Takes effect immediately.</string>
+  <string name="settings_tier1_threshold_desc">How many times a code block must execute before it is recompiled with optimizations. Lower = more aggressive optimization (more CPU overhead). Higher = fewer optimizations (less overhead).</string>
 
   <string name="settings_validation_layers">Vulkan validation layers</string>
   <string name="settings_validation_layers_desc">Enable Vulkan validation for graphics debugging. Significant performance impact. Applied on next game launch.</string>
@@ -221,6 +221,11 @@
   <string name="settings_debug_title">Debug</string>
   <string name="settings_index_debug">Debug</string>
   <string name="settings_index_debug_desc">FPS counter, native floats, validation layers, and cache tools.</string>
+  <string name="settings_index_audio">Audio</string>
+  <string name="settings_index_audio_desc">DSP processing and audio quality settings.</string>
+  <string name="settings_audio_title">Audio</string>
+  <string name="settings_use_dsp">Real-time DSP processing</string>
+  <string name="settings_use_dsp_desc">Enable real-time audio DSP processing for more accurate sound emulation. May reduce performance on slower devices.</string>
   <string name="settings_index_eeprom">EEPROM Settings</string>
   <string name="settings_index_eeprom_desc">Xbox system language, video standard, and resolution modes.</string>
 
@@ -282,5 +287,6 @@
   <string name="per_game_settings_save">Save</string>
   <string name="per_game_settings_clear">Clear All</string>
   <string name="library_per_game_settings_option">Game Settings</string>
+  <string name="per_game_settings_revert">Revert to Global Settings</string>
   <string name="library_game_context_title">%1$s</string>
 </resources>

@@ -319,71 +319,111 @@
             android:textAppearance="@style/TextAppearance.Material3.TitleLarge" />
 
           <!-- Renderer -->
-          <TextView
+          <LinearLayout
+            android:id="@+id/group_renderer"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:text="@string/settings_renderer"
-            android:textAppearance="@style/TextAppearance.Material3.TitleSmall" />
-          <com.google.android.material.button.MaterialButton
-            android:id="@+id/btn_renderer"
-            style="?attr/materialButtonOutlinedStyle"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="Vulkan"
-            android:textColor="@color/xemu_text_muted" />
-          <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="4dp"
-            android:layout_marginTop="2dp"
-            android:text="@string/settings_renderer_desc"
-            android:textAppearance="@style/TextAppearance.Material3.BodySmall"
-            android:textColor="@color/xemu_text_muted" />
+            android:orientation="vertical">
+            <TextView
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:layout_marginTop="20dp"
+              android:text="@string/settings_renderer"
+              android:textAppearance="@style/TextAppearance.Material3.BodyMedium"
+              android:textColor="@color/xemu_text_muted" />
+            <com.google.android.material.button.MaterialButton
+              android:id="@+id/btn_renderer"
+              style="?attr/materialButtonOutlinedStyle"
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:layout_marginTop="8dp"
+              android:text="Vulkan"
+              android:textColor="@color/xemu_text_muted" />
+            <TextView
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:layout_marginStart="4dp"
+              android:layout_marginTop="2dp"
+              android:text="@string/settings_renderer_desc"
+              android:textAppearance="@style/TextAppearance.Material3.BodySmall"
+              android:textColor="@color/xemu_text_muted" />
+          </LinearLayout>
 
           <!-- Resolution Scale -->
-          <TextView
+          <LinearLayout
+            android:id="@+id/group_resolution_scale"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:text="@string/settings_resolution_scale"
-            android:textAppearance="@style/TextAppearance.Material3.TitleSmall" />
-          <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="2dp"
-            android:text="@string/settings_resolution_scale_desc"
-            android:textAppearance="@style/TextAppearance.Material3.BodySmall"
-            android:textColor="@color/xemu_text_muted" />
-          <com.google.android.material.button.MaterialButton
-            android:id="@+id/btn_resolution_scale"
-            style="?attr/materialButtonOutlinedStyle"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="1x (Native)"
-            android:textColor="@color/xemu_text_muted" />
+            android:orientation="vertical">
+            <TextView
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:layout_marginTop="20dp"
+              android:text="@string/settings_resolution_scale"
+              android:textAppearance="@style/TextAppearance.Material3.BodyMedium"
+              android:textColor="@color/xemu_text_muted" />
+            <TextView
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:layout_marginTop="2dp"
+              android:text="@string/settings_resolution_scale_desc"
+              android:textAppearance="@style/TextAppearance.Material3.BodySmall"
+              android:textColor="@color/xemu_text_muted" />
+            <com.google.android.material.button.MaterialButton
+              android:id="@+id/btn_resolution_scale"
+              style="?attr/materialButtonOutlinedStyle"
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:layout_marginTop="8dp"
+              android:text="1x (Native)"
+              android:textColor="@color/xemu_text_muted" />
+          </LinearLayout>
 
           <!-- Texture Filtering -->
-          <com.google.android.material.button.MaterialButton
-            android:id="@+id/btn_filtering"
-            style="?attr/materialButtonOutlinedStyle"
+          <LinearLayout
+            android:id="@+id/group_filtering"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:text="Nearest"
-            android:textColor="@color/xemu_text_muted" />
+            android:orientation="vertical">
+            <TextView
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:layout_marginTop="20dp"
+              android:text="@string/settings_filtering"
+              android:textAppearance="@style/TextAppearance.Material3.BodyMedium"
+              android:textColor="@color/xemu_text_muted" />
+            <com.google.android.material.button.MaterialButton
+              android:id="@+id/btn_filtering"
+              style="?attr/materialButtonOutlinedStyle"
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:layout_marginTop="8dp"
+              android:text="Nearest"
+              android:textColor="@color/xemu_text_muted" />
+          </LinearLayout>
 
           <!-- Aspect Ratio -->
-          <com.google.android.material.button.MaterialButton
-            android:id="@+id/btn_aspect_ratio"
-            style="?attr/materialButtonOutlinedStyle"
+          <LinearLayout
+            android:id="@+id/group_aspect_ratio"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:text="Auto"
-            android:textColor="@color/xemu_text_muted" />
+            android:orientation="vertical">
+            <TextView
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:layout_marginTop="20dp"
+              android:text="@string/settings_aspect_ratio"
+              android:textAppearance="@style/TextAppearance.Material3.BodyMedium"
+              android:textColor="@color/xemu_text_muted" />
+            <com.google.android.material.button.MaterialButton
+              android:id="@+id/btn_aspect_ratio"
+              style="?attr/materialButtonOutlinedStyle"
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:layout_marginTop="8dp"
+              android:text="Auto"
+              android:textColor="@color/xemu_text_muted" />
+          </LinearLayout>
 
           <!-- Unlock Frame Rate (hidden: always on) -->
           <com.google.android.material.materialswitch.MaterialSwitch
@@ -495,22 +535,35 @@
             android:textColor="@color/xemu_text_muted" />
 
           <!-- Submit Frames (Buffering) -->
-          <com.google.android.material.button.MaterialButton
-            android:id="@+id/btn_submit_frames"
-            style="?attr/materialButtonOutlinedStyle"
+          <LinearLayout
+            android:id="@+id/group_submit_frames"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:text="Double (2)"
-            android:textColor="@color/xemu_text_muted" />
-          <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="4dp"
-            android:layout_marginTop="2dp"
-            android:text="@string/settings_submit_frames_desc"
-            android:textAppearance="@style/TextAppearance.Material3.BodySmall"
-            android:textColor="@color/xemu_text_muted" />
+            android:orientation="vertical">
+            <TextView
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:layout_marginTop="20dp"
+              android:text="@string/settings_submit_frames"
+              android:textAppearance="@style/TextAppearance.Material3.BodyMedium"
+              android:textColor="@color/xemu_text_muted" />
+            <com.google.android.material.button.MaterialButton
+              android:id="@+id/btn_submit_frames"
+              style="?attr/materialButtonOutlinedStyle"
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:layout_marginTop="8dp"
+              android:text="Double (2)"
+              android:textColor="@color/xemu_text_muted" />
+            <TextView
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:layout_marginStart="4dp"
+              android:layout_marginTop="2dp"
+              android:text="@string/settings_submit_frames_desc"
+              android:textAppearance="@style/TextAppearance.Material3.BodySmall"
+              android:textColor="@color/xemu_text_muted" />
+          </LinearLayout>
 
 
         </LinearLayout>
@@ -791,56 +844,124 @@
             android:textColor="@color/xemu_text_muted" />
 
           <!-- Tier-1 Recompilation Threshold -->
-          <com.google.android.material.button.MaterialButton
-            android:id="@+id/btn_tier1_threshold"
-            style="?attr/materialButtonOutlinedStyle"
+          <LinearLayout
+            android:id="@+id/group_tier1_threshold"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:text="Default (64)"
+            android:orientation="vertical">
+            <TextView
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:layout_marginTop="20dp"
+              android:text="@string/settings_tier1_threshold"
+              android:textAppearance="@style/TextAppearance.Material3.BodyMedium"
+              android:textColor="@color/xemu_text_muted" />
+            <com.google.android.material.button.MaterialButton
+              android:id="@+id/btn_tier1_threshold"
+              style="?attr/materialButtonOutlinedStyle"
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:layout_marginTop="8dp"
+              android:text="Default (64)"
+              android:textColor="@color/xemu_text_muted" />
+            <TextView
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:layout_marginStart="4dp"
+              android:layout_marginTop="2dp"
+              android:text="@string/settings_tier1_threshold_desc"
+              android:textAppearance="@style/TextAppearance.Material3.BodySmall"
+              android:textColor="@color/xemu_text_muted" />
+          </LinearLayout>
+
+          <!-- Clear Shader Cache -->
+          <LinearLayout
+            android:id="@+id/group_clear_shader_cache"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+            <com.google.android.material.button.MaterialButton
+              android:id="@+id/btn_clear_shader_cache"
+              style="?attr/materialButtonOutlinedStyle"
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:layout_marginTop="20dp"
+              android:text="@string/settings_clear_shader_cache" />
+            <TextView
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:layout_marginStart="4dp"
+              android:layout_marginTop="4dp"
+              android:text="@string/settings_clear_shader_cache_desc"
+              android:textAppearance="@style/TextAppearance.Material3.BodySmall"
+              android:textColor="@color/xemu_text_muted" />
+          </LinearLayout>
+
+          <!-- Clear Code Cache -->
+          <LinearLayout
+            android:id="@+id/group_clear_code_cache"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+            <com.google.android.material.button.MaterialButton
+              android:id="@+id/btn_clear_code_cache"
+              style="?attr/materialButtonOutlinedStyle"
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:layout_marginTop="20dp"
+              android:text="@string/settings_clear_code_cache" />
+            <TextView
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:layout_marginStart="4dp"
+              android:layout_marginTop="4dp"
+              android:text="@string/settings_clear_code_cache_desc"
+              android:textAppearance="@style/TextAppearance.Material3.BodySmall"
+              android:textColor="@color/xemu_text_muted" />
+          </LinearLayout>
+        </LinearLayout>
+      </com.google.android.material.card.MaterialCardView>
+
+      <!-- Audio Section -->
+      <com.google.android.material.card.MaterialCardView
+        android:id="@+id/section_audio"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        app:cardBackgroundColor="@color/xemu_surface"
+        app:cardCornerRadius="28dp"
+        app:cardElevation="0dp"
+        app:strokeColor="@color/xemu_outline_variant"
+        app:strokeWidth="1dp">
+
+        <LinearLayout
+          android:layout_width="match_parent"
+          android:layout_height="wrap_content"
+          android:orientation="vertical"
+          android:padding="24dp">
+
+          <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/settings_audio_title"
+            android:textAppearance="@style/TextAppearance.Material3.TitleLarge" />
+
+          <com.google.android.material.materialswitch.MaterialSwitch
+            android:id="@+id/switch_use_dsp"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:text="@string/settings_use_dsp"
             android:textColor="@color/xemu_text_muted" />
           <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginStart="4dp"
             android:layout_marginTop="2dp"
-            android:text="@string/settings_tier1_threshold_desc"
+            android:text="@string/settings_use_dsp_desc"
             android:textAppearance="@style/TextAppearance.Material3.BodySmall"
             android:textColor="@color/xemu_text_muted" />
 
-          <!-- Clear Shader Cache -->
-          <com.google.android.material.button.MaterialButton
-            android:id="@+id/btn_clear_shader_cache"
-            style="?attr/materialButtonOutlinedStyle"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:text="@string/settings_clear_shader_cache" />
-          <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="4dp"
-            android:layout_marginTop="4dp"
-            android:text="@string/settings_clear_shader_cache_desc"
-            android:textAppearance="@style/TextAppearance.Material3.BodySmall"
-            android:textColor="@color/xemu_text_muted" />
-
-          <!-- Clear Code Cache -->
-          <com.google.android.material.button.MaterialButton
-            android:id="@+id/btn_clear_code_cache"
-            style="?attr/materialButtonOutlinedStyle"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:text="@string/settings_clear_code_cache" />
-          <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="4dp"
-            android:layout_marginTop="4dp"
-            android:text="@string/settings_clear_code_cache_desc"
-            android:textAppearance="@style/TextAppearance.Material3.BodySmall"
-            android:textColor="@color/xemu_text_muted" />
         </LinearLayout>
       </com.google.android.material.card.MaterialCardView>
 
@@ -920,7 +1041,8 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
             android:text="@string/settings_eeprom_resolution_modes"
-            android:textAppearance="@style/TextAppearance.Material3.TitleSmall" />
+            android:textAppearance="@style/TextAppearance.Material3.BodyMedium"
+            android:textColor="@color/xemu_text_muted" />
 
           <com.google.android.material.materialswitch.MaterialSwitch
             android:id="@+id/switch_eeprom_480p"
