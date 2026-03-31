@@ -1738,17 +1738,7 @@ DEF_METHOD(NV097, NO_OPERATION)
     unsigned channel_id =
         PG_GET_MASK(NV_PGRAPH_CTX_USER, NV_PGRAPH_CTX_USER_CHID);
 
-#ifdef __ANDROID__
-    /* On Android, skip if a previous NOP is still pending.
-     * The 1ms auto-unstall in pfifo_puller_should_stall clears
-     * waiting_for_nop, but pending_interrupts may still have ERROR.
-     * Overwriting would re-stall PFIFO and make timing worse. */
-    if (pg->pending_interrupts & NV_PGRAPH_INTR_ERROR) {
-        return;
-    }
-#else
     assert(!(pg->pending_interrupts & NV_PGRAPH_INTR_ERROR));
-#endif
 
     PG_SET_MASK(NV_PGRAPH_TRAPPED_ADDR, NV_PGRAPH_TRAPPED_ADDR_CHID,
              channel_id);
@@ -1761,7 +1751,6 @@ DEF_METHOD(NV097, NO_OPERATION)
                  NV_PGRAPH_NSOURCE_NOTIFICATION); /* TODO: check this */
     pg->pending_interrupts |= NV_PGRAPH_INTR_ERROR;
     pg->waiting_for_nop = true;
-    pg->nop_stall_start_ns = nv2a_clock_ns();
 
     qemu_mutex_unlock(&pg->lock);
     bql_lock();

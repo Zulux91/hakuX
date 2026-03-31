@@ -373,44 +373,6 @@ static void nv2a_vblank_timer_cb(void *opaque)
     d->pcrtc.pending_interrupts |= NV_PCRTC_INTR_0_VBLANK;
     d->pcrtc.raster = 0;
 
-#ifdef __ANDROID__
-    /* Flip stall auto-completion and NOP delivery assist. */
-    {
-        if (qatomic_read(&d->pgraph.waiting_for_flip)) {
-            PGRAPHState *pg = &d->pgraph;
-            qemu_mutex_lock(&pg->lock);
-            uint32_t s = pgraph_reg_r(pg, NV_PGRAPH_SURFACE);
-            uint32_t read_3d = GET_MASK(s, NV_PGRAPH_SURFACE_READ_3D);
-            uint32_t write_3d = GET_MASK(s, NV_PGRAPH_SURFACE_WRITE_3D);
-            uint32_t modulo = GET_MASK(s, NV_PGRAPH_SURFACE_MODULO_3D);
-            if (read_3d == write_3d && modulo > 0) {
-                SET_MASK(s, NV_PGRAPH_SURFACE_READ_3D,
-                         (read_3d + 1) % modulo);
-                pgraph_reg_w(pg, NV_PGRAPH_SURFACE, s);
-            }
-            d->flip_active = false;
-            qatomic_set(&pg->waiting_for_flip, false);
-            qemu_mutex_unlock(&pg->lock);
-            pfifo_kick(d);
-        }
-
-        /* NOP interrupt delivery assist.  Force IF=1 when PGRAPH ERROR
-         * is pending so the CPU can acknowledge the NOP fence. Only
-         * fires for ERROR, not for all interrupts — the kernel needs
-         * its IF=0 critical sections for CLI/STI pairs. */
-        if (d->pgraph.pending_interrupts & NV_PGRAPH_INTR_ERROR) {
-            CPUState *cpu = first_cpu;
-            if (cpu) {
-                CPUX86State *env = &X86_CPU(cpu)->env;
-                if (!(env->eflags & 0x200)) { /* IF=0 */
-                    env->eflags |= 0x200;
-                    env->hflags &= ~HF_INHIBIT_IRQ_MASK;
-                    qatomic_set(&cpu->exit_request, 1);
-                }
-            }
-        }
-    }
-#endif
 
     nv2a_update_irq(d);
 

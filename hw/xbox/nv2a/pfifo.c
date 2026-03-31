@@ -238,30 +238,7 @@ static bool pfifo_stall_for_flip(NV2AState *d)
 
 static bool pfifo_puller_should_stall(NV2AState *d)
 {
-    bool nop_stall = qatomic_read(&d->pgraph.waiting_for_nop);
-
-#ifdef __ANDROID__
-    /* Time-bounded NOP stall.  On real Xbox hardware, the CPU
-     * acknowledges the NOP interrupt in ~1µs.  On Android ARM, the
-     * CPU can have IF=0 for milliseconds, causing an indefinite stall.
-     * After 1ms, auto-clear the stall from the PFIFO thread.  The
-     * interrupt is still pending on the CPU and will be delivered
-     * when IF=1.  This keeps the stall short enough that the game's
-     * state machine doesn't time out. */
-    extern bool nv2a_get_simple_vblank(void);
-    if (nop_stall && !nv2a_get_simple_vblank()) {
-        int64_t elapsed = nv2a_clock_ns()
-                        - d->pgraph.nop_stall_start_ns;
-        if (elapsed > 1000000LL) { /* 1ms */
-            /* Only clear the PFIFO stall flag — DON'T clear
-             * pending_interrupts or deassert the PCI IRQ. */
-            qatomic_set(&d->pgraph.waiting_for_nop, false);
-            nop_stall = false;
-        }
-    }
-#endif
-
-    return pfifo_stall_for_flip(d) || nop_stall ||
+    return pfifo_stall_for_flip(d) || qatomic_read(&d->pgraph.waiting_for_nop) ||
            qatomic_read(&d->pgraph.waiting_for_context_switch) ||
            !can_fifo_access(d);
 }
@@ -416,13 +393,8 @@ puller_done:
 
 static bool pfifo_pusher_should_stall(NV2AState *d)
 {
-    /* On Android, the puller handles NOP timeout — pusher doesn't
-     * need to stall on NOP separately (puller already cleared it). */
-    return !can_fifo_access(d)
-#ifndef __ANDROID__
-           || qatomic_read(&d->pgraph.waiting_for_nop)
-#endif
-           ;
+    return !can_fifo_access(d) ||
+           qatomic_read(&d->pgraph.waiting_for_nop);
 }
 
 static void pfifo_run_pusher(NV2AState *d)
