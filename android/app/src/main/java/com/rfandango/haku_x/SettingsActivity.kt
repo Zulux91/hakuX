@@ -66,8 +66,8 @@ class SettingsActivity : AppCompatActivity() {
     "fp_safe" to true, "fp_jit" to true, "unlock_framerate" to true,
     "fast_fences" to false, "draw_reorder" to false, "draw_merge" to false,
     "async_compile" to false, "frame_skip" to false,
-    "simple_vblank" to false,
-    "use_dsp" to false
+    "use_dsp" to false,
+    "skip_boot_anim" to true
   )
   private val intDefaults = mapOf(
     "surface_scale" to 1, "submit_frames" to 3, "tier1_threshold" to 64
@@ -430,6 +430,14 @@ class SettingsActivity : AppCompatActivity() {
       prefs.edit().putBoolean("show_fps", checked).apply()
     }
 
+    val switchSkipBootAnim = findViewById<MaterialSwitch>(R.id.switch_skip_boot_anim)
+    switchSkipBootAnim.isChecked = pgBool("skip_boot_anim", true)
+    switchSkipBootAnim.setOnCheckedChangeListener { _, checked ->
+      pgPutBool("skip_boot_anim", checked)
+      updateHighlight("skip_boot_anim", switchSkipBootAnim)
+    }
+    highlightIfOverridden("skip_boot_anim", switchSkipBootAnim)
+
     val switchUnlockFps = findViewById<MaterialSwitch>(R.id.switch_unlock_framerate)
     switchUnlockFps.isChecked = pgBool("unlock_framerate", true)
     switchUnlockFps.setOnCheckedChangeListener { _, checked ->
@@ -509,15 +517,6 @@ class SettingsActivity : AppCompatActivity() {
     switchValidation.setOnCheckedChangeListener { _, checked ->
       prefs.edit().putBoolean("validation_layers", checked).apply()
     }
-
-    val switchSimpleVblank = findViewById<MaterialSwitch>(R.id.switch_simple_vblank)
-    switchSimpleVblank.isChecked = pgBool("simple_vblank", false)
-    switchSimpleVblank.setOnCheckedChangeListener { _, checked ->
-      pgPutBool("simple_vblank", checked)
-      if (!isPerGameMode) { try { nativeSetSimpleVblank(checked) } catch (_: Throwable) {} }
-      updateHighlight("simple_vblank", switchSimpleVblank)
-    }
-    highlightIfOverridden("simple_vblank", switchSimpleVblank)
 
     val switchDebugTools = findViewById<MaterialSwitch>(R.id.switch_debug_tools)
     switchDebugTools.isChecked = prefs.getBoolean("debug_tools", false)
@@ -1393,8 +1392,6 @@ class SettingsActivity : AppCompatActivity() {
   private external fun nativeSetSubmitFrames(count: Int)
   private external fun nativeGetTier1Threshold(): Int
   private external fun nativeSetTier1Threshold(value: Int)
-  private external fun nativeGetSimpleVblank(): Boolean
-  private external fun nativeSetSimpleVblank(enable: Boolean)
 
   companion object {
     private const val FATX_SUPERBLOCK_SIZE = 4096

@@ -162,6 +162,7 @@
 
   <string name="settings_display_title">Display</string>
   <string name="settings_show_fps">Show FPS counter</string>
+  <string name="settings_skip_boot_anim">Skip boot animation</string>
   <string name="settings_resolution_scale">Resolution Scale</string>
   <string name="settings_resolution_scale_desc">Internal rendering resolution multiplier. Applied on next game launch.</string>
   <string name="settings_filtering">Texture Filtering</string>

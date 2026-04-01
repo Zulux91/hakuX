@@ -236,6 +236,9 @@ bool xemu_settings_load(void)
         if (auto show_welcome = general["show_welcome"].value<bool>()) {
             g_config.general.show_welcome = *show_welcome;
         }
+        if (auto skip_boot = general["skip_boot_anim"].value<bool>()) {
+            g_config.general.skip_boot_anim = *skip_boot;
+        }
 
         // Display settings - default to Vulkan, allow OpenGL via config
         g_config.display.renderer = CONFIG_DISPLAY_RENDERER_VULKAN;
