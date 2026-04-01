@@ -966,14 +966,6 @@ class GameLibraryActivity : AppCompatActivity() {
 
       if (convResult is ConvertResult.Success) {
         updateProgress(100, getString(R.string.library_autoconvert_cleanup))
-        try {
-          val folderUri = gamesFolderUri
-          if (folderUri != null) {
-            val root = DocumentFile.fromTreeUri(this, folderUri)
-            val origDoc = resolveDocumentFile(root, game.relativePath)
-            origDoc?.delete()
-          }
-        } catch (_: Exception) { }
       }
 
       convertThread = null
