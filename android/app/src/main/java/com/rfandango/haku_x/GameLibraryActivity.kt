@@ -1152,26 +1152,21 @@ class GameLibraryActivity : AppCompatActivity() {
   // ── Dashboard Boot ──────────────────────────────────────────────────
 
   private fun launchDashboard() {
+    val TAG = "hakuX-dashboard"
     if (!hasAccessibleCoreFiles()) {
+      val mcpxOk = isConfiguredFileAccessible("mcpxPath", "mcpxUri")
+      val flashOk = isConfiguredFileAccessible("flashPath", "flashUri")
+      val hddOk = isConfiguredFileAccessible("hddPath", "hddUri")
+      Log.w(TAG, "core files check failed: mcpx=$mcpxOk flash=$flashOk hdd=$hddOk")
       Toast.makeText(this, getString(R.string.library_boot_dashboard_failed), Toast.LENGTH_LONG).show()
       return
     }
 
-    resolveConfiguredLocalHddFile()?.let { hddFile ->
-      runCatching { XboxInsigniaHelper.inspectDashboard(hddFile) }
-        .getOrNull()
-        ?.let { dashboardStatus ->
-          if (!dashboardStatus.looksRetailDashboardInstalled) {
-            val messageRes = if (dashboardStatus.hasAnyRetailDashboardFiles) {
-              R.string.library_boot_dashboard_incomplete_retail
-            } else {
-              R.string.library_boot_dashboard_missing_retail
-            }
-            Toast.makeText(this, getString(messageRes), Toast.LENGTH_LONG).show()
-            return
-          }
-        }
-    }
+    /* Skip JNI inspectDashboard — it initializes the QEMU block layer
+     * (main loop, coroutines, thread pool) on the UI thread, which
+     * corrupts coroutine state when QEMU later starts on its own thread.
+     * This is safe to skip because we run in a single process; on x1_box
+     * the inspect runs in a separate :xemu process so it doesn't conflict. */
 
     val launchEditor = prefs.edit()
     PerGameSettingsManager.applyRuntimeOverridesToEditor(
@@ -1205,9 +1200,9 @@ class GameLibraryActivity : AppCompatActivity() {
   }
 
   private fun resolveConfiguredLocalHddFile(): File? {
-    val path = prefs.getString("hddPath", null) ?: return null
-    val file = File(path)
-    return file.takeIf { it.isFile }
+    val base = getExternalFilesDir(null) ?: filesDir
+    val f = File(base, "x1box/hdd.img")
+    return f.takeIf { it.isFile }
   }
 
   private fun dp(value: Int): Int {
