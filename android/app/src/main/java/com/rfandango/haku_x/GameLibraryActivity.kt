@@ -1162,11 +1162,27 @@ class GameLibraryActivity : AppCompatActivity() {
       return
     }
 
-    /* Skip JNI inspectDashboard — it initializes the QEMU block layer
-     * (main loop, coroutines, thread pool) on the UI thread, which
-     * corrupts coroutine state when QEMU later starts on its own thread.
-     * This is safe to skip because we run in a single process; on x1_box
-     * the inspect runs in a separate :xemu process so it doesn't conflict. */
+    val hddFile = resolveConfiguredLocalHddFile()
+    Log.i(TAG, "resolveConfiguredLocalHddFile=${hddFile?.absolutePath ?: "(null)"}")
+    if (hddFile != null) {
+      val result = runCatching { XboxInsigniaHelper.inspectDashboard(hddFile) }
+      val dashboardStatus = result.getOrNull()
+      if (result.isFailure) {
+        Log.e(TAG, "inspectDashboard failed: ${result.exceptionOrNull()?.message}")
+      }
+      if (dashboardStatus != null) {
+        Log.i(TAG, "dashboard installed=${dashboardStatus.looksRetailDashboardInstalled}")
+        if (!dashboardStatus.looksRetailDashboardInstalled) {
+          val messageRes = if (dashboardStatus.hasAnyRetailDashboardFiles) {
+            R.string.library_boot_dashboard_incomplete_retail
+          } else {
+            R.string.library_boot_dashboard_missing_retail
+          }
+          Toast.makeText(this, getString(messageRes), Toast.LENGTH_LONG).show()
+          return
+        }
+      }
+    }
 
     val launchEditor = prefs.edit()
     PerGameSettingsManager.applyRuntimeOverridesToEditor(
