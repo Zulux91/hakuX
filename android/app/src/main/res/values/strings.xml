@@ -28,6 +28,11 @@
   <string name="setup_disc_value">Games Folder: %1$s</string>
 
   <string name="library_title">Game Library</string>
+  <string name="library_boot_dashboard">Boot Dashboard</string>
+  <string name="library_boot_dashboard_note">Requires a hard drive image with the Microsoft dashboard installed.</string>
+  <string name="library_boot_dashboard_failed">Unable to boot the dashboard. One or more core files are no longer accessible.</string>
+  <string name="library_boot_dashboard_missing_retail">No retail dashboard was found on the current HDD image. Import the Microsoft dashboard in Settings first.</string>
+  <string name="library_boot_dashboard_incomplete_retail">Some retail dashboard files are present, but the dashboard looks incomplete. Re-import the Microsoft dashboard files in Settings.</string>
   <string name="library_change_folder">Change Folder</string>
   <string name="library_convert_iso">Convert ISO to XISO</string>
   <string name="library_view_list">List</string>
@@ -100,8 +105,8 @@
   <string name="settings_gpu_driver_reset">Use System Driver</string>
   <string name="settings_gpu_driver_reset_title">Reset GPU Driver</string>
   <string name="settings_gpu_driver_reset_message">Revert to the system default GPU driver? The app will use the change on next launch.</string>
-  <string name="settings_gpu_driver_reset_done">GPU driver reset to system default. Restart the app to apply.</string>
-  <string name="settings_gpu_driver_installed">Driver installed successfully. Restart the app to apply.</string>
+  <string name="settings_gpu_driver_reset_done">GPU driver reset to system default. Applied on next game launch.</string>
+  <string name="settings_gpu_driver_installed">Driver installed successfully. Applied on next game launch.</string>
   <string name="settings_gpu_driver_install_failed">Failed to install driver. The ZIP may be invalid or incompatible.</string>
   <string name="settings_gpu_driver_none_available">No driver ZIPs found. Use \"Install Driver from ZIP\" to add one first.</string>
 
@@ -134,15 +139,20 @@
   <string name="settings_clear_shader_cache">Clear Shader Cache</string>
   <string name="settings_clear_shader_cache_desc">Delete compiled SPIR-V shaders and the Vulkan pipeline cache. They will be rebuilt automatically. Useful after driver updates or if experiencing rendering glitches.</string>
   <string name="settings_clear_code_cache">Clear code cache</string>
-  <string name="settings_clear_code_cache_desc">Delete the translated code block cache (tb_cache.bin). Use this if the app crashes at startup. Requires restart.</string>
-  <string name="settings_clear_code_cache_done">Code cache cleared. Restart the app.</string>
+  <string name="settings_clear_code_cache_desc">Delete the translated code block cache (tb_cache.bin). Use this if the app crashes at startup.</string>
+  <string name="settings_clear_code_cache_done">Code cache cleared. Applied on next game launch.</string>
+  <string name="settings_dump_logs">Export logs</string>
+  <string name="settings_dump_logs_desc">Save logcat output for this session to a file</string>
+  <string name="settings_dump_logs_saving">Saving logs…</string>
+  <string name="settings_dump_logs_success">Logs saved: %s</string>
+  <string name="settings_dump_logs_failed">Failed to save logs</string>
   <string name="settings_clear_shader_cache_confirm_title">Clear shader cache?</string>
   <string name="settings_clear_shader_cache_confirm_message">This will delete all cached SPIR-V shaders and the Vulkan pipeline cache. The emulator will recompile them as needed, which may cause brief stutter on the next launch.</string>
   <string name="settings_clear_shader_cache_success">Shader cache cleared.</string>
   <string name="settings_clear_shader_cache_failed">Failed to clear shader cache: %1$s</string>
 
   <string name="settings_code_cache_title">Code Cache</string>
-  <string name="settings_code_cache_desc">TCG translation block cache settings (requires restart)</string>
+  <string name="settings_code_cache_desc">TCG translation block cache settings</string>
   <string name="settings_tb_cache_size">Cache size</string>
   <string name="settings_tb_cache_size_desc">Memory allocated for translated code blocks. Larger reduces stutter but uses more RAM.</string>
   <string name="settings_clear_tb_hints">Clear cache hints</string>
@@ -153,28 +163,26 @@
   <string name="settings_display_title">Display</string>
   <string name="settings_show_fps">Show FPS counter</string>
   <string name="settings_resolution_scale">Resolution Scale</string>
-  <string name="settings_resolution_scale_desc">Internal rendering resolution multiplier (requires restart)</string>
+  <string name="settings_resolution_scale_desc">Internal rendering resolution multiplier. Applied on next game launch.</string>
   <string name="settings_filtering">Texture Filtering</string>
   <string name="settings_aspect_ratio">Aspect Ratio</string>
   <string name="settings_unlock_framerate">Unlock frame rate</string>
   <string name="settings_unlock_framerate_desc">Prevents frame rate from locking to 30 FPS when the device can\'t sustain 60 FPS. May affect game speed.</string>
   <string name="settings_fp_safe">Native Floats (Safe)</string>
-  <string name="settings_fp_safe_desc">Use native ARM64 double-precision for x87 FPU arithmetic. Keeps legacy 80-bit storage. Moderate speedup with good compatibility. Takes effect immediately.</string>
+  <string name="settings_fp_safe_desc">Use native ARM64 double-precision for x87 FPU arithmetic. Keeps legacy 80-bit storage. Moderate speedup with good compatibility.</string>
 
   <string name="settings_fp_jit">Native Floats (JIT)</string>
-  <string name="settings_fp_jit_desc">Full JIT-level FP optimization: native 64-bit storage + inline FP instructions. Best performance but may reduce accuracy. Requires restart.</string>
+  <string name="settings_fp_jit_desc">Full JIT-level FP optimization: native 64-bit storage + inline FP instructions. Best performance but may reduce accuracy. Applied on next game launch.</string>
 
   <string name="settings_fast_fences">Fast fences (reduce GPU stalls)</string>
-  <string name="settings_fast_fences_desc">Defer GPU fence waits for buffer-space and vertex-dirty flushes. Significantly reduces frame time but may cause geometry popping or flickering. Takes effect immediately.</string>
+  <string name="settings_fast_fences_desc">Defer GPU fence waits for buffer-space and vertex-dirty flushes. Significantly reduces frame time but may cause geometry popping or flickering.</string>
 
   <string name="settings_draw_reorder">Draw reordering (reduce pipeline switches)</string>
-  <string name="settings_draw_reorder_desc">Reorder safe draw calls within small windows to reduce GPU pipeline switches. Improves performance on tiled GPUs (Adreno). May cause minor visual artifacts in some titles. Takes effect immediately.</string>
+  <string name="settings_draw_reorder_desc">Reorder safe draw calls within small windows to reduce GPU pipeline switches. Improves performance on tiled GPUs (Adreno). May cause minor visual artifacts in some titles.</string>
 
   <string name="settings_draw_merge">Draw merging (batch draw calls)</string>
-  <string name="settings_draw_merge_desc">Merge consecutive compatible draw calls into fewer GPU submissions. Reduces driver overhead on tiled GPUs (Adreno). Takes effect immediately.</string>
+  <string name="settings_draw_merge_desc">Merge consecutive compatible draw calls into fewer GPU submissions. Reduces driver overhead on tiled GPUs (Adreno). May introduce visual artifacts in some titles.</string>
 
-  <string name="settings_bindless_textures">Bindless textures</string>
-  <string name="settings_bindless_textures_desc">Use bindless descriptor indexing for texture access. Faster on modern GPUs (Adreno 740+) but may reduce performance on older GPUs. Requires restart to take effect.</string>
 
   <string name="settings_async_compile">Async shader compilation</string>
   <string name="settings_async_compile_desc">Compile shaders in background to reduce stutter. May cause brief visual pop-in.</string>
@@ -183,22 +191,22 @@
   <string name="settings_frame_skip_desc">Skip rendering when running behind to maintain game speed. May cause visible stuttering.</string>
 
   <string name="settings_submit_frames">Submit frame buffering</string>
-  <string name="settings_submit_frames_desc">Number of GPU submission frames. Higher values increase parallelism but use more memory and add latency. Single = lowest memory, Triple = best throughput. Takes effect immediately.</string>
+  <string name="settings_submit_frames_desc">Number of GPU submission frames. Higher values increase parallelism but use more memory and add latency. Single = lowest memory, Triple = best throughput.</string>
 
   <string name="settings_tier1_threshold">Tier-1 recompilation threshold</string>
-  <string name="settings_tier1_threshold_desc">How many times a code block must execute before it is recompiled with optimizations. Lower = more aggressive optimization (more CPU overhead). Higher = fewer optimizations (less overhead). Takes effect immediately.</string>
+  <string name="settings_tier1_threshold_desc">How many times a code block must execute before it is recompiled with optimizations. Lower = more aggressive optimization (more CPU overhead). Higher = fewer optimizations (less overhead).</string>
 
   <string name="settings_validation_layers">Vulkan validation layers</string>
-  <string name="settings_validation_layers_desc">Enable Vulkan validation for graphics debugging. Significant performance impact. Requires app restart.</string>
+  <string name="settings_validation_layers_desc">Enable Vulkan validation for graphics debugging. Significant performance impact. Applied on next game launch.</string>
 
   <string name="settings_env_vars_title">Environment Variables</string>
-  <string name="settings_env_vars_desc">Set custom environment variables applied at startup. One per line: KEY=VALUE. Requires app restart.</string>
+  <string name="settings_env_vars_desc">Set custom environment variables applied at startup. One per line: KEY=VALUE. Applied on next game launch.</string>
   <string name="settings_env_vars_hint">e.g. MESA_VK_WSI_DEBUG=sw</string>
   <string name="settings_env_vars_save">Save</string>
 
   <!-- System Files -->
   <string name="settings_system_files_title">System Files</string>
-  <string name="settings_system_files_desc">Change MCPX ROM, Flash ROM, or HDD image. Files are copied to app storage. Requires app restart.</string>
+  <string name="settings_system_files_desc">Change MCPX ROM, Flash ROM, or HDD image. Files are copied to app storage. Applied on next game launch.</string>
   <string name="settings_pick_mcpx">Change MCPX ROM</string>
   <string name="settings_pick_flash">Change Flash ROM</string>
   <string name="settings_pick_hdd">Change HDD Image</string>
@@ -211,7 +219,7 @@
   <string name="settings_file_not_set">Not set</string>
   <string name="settings_file_copying">Copying file…</string>
   <string name="settings_file_copy_failed">Failed to copy file</string>
-  <string name="settings_file_copied">File updated. Restart app to apply.</string>
+  <string name="settings_file_copied">File updated. Applied on next game launch.</string>
 
   <!-- Settings Index -->
   <string name="settings_index_data">hakuX Data</string>
@@ -221,16 +229,27 @@
   <string name="settings_debug_title">Debug</string>
   <string name="settings_index_debug">Debug</string>
   <string name="settings_index_debug_desc">FPS counter, native floats, validation layers, and cache tools.</string>
+  <string name="settings_index_audio">Audio</string>
+  <string name="settings_index_audio_desc">DSP processing and audio quality settings.</string>
+  <string name="settings_audio_title">Audio</string>
+  <string name="settings_use_dsp">Real-time DSP processing</string>
+  <string name="settings_use_dsp_desc">Enable real-time audio DSP processing for more accurate sound emulation. May reduce performance on slower devices.</string>
   <string name="settings_index_eeprom">EEPROM Settings</string>
   <string name="settings_index_eeprom_desc">Xbox system language, video standard, and resolution modes.</string>
+  <string name="settings_index_xbox">Xbox Dashboard</string>
+  <string name="settings_index_xbox_desc">Online play, HDD tools, and dashboard import.</string>
 
   <!-- Renderer -->
   <string name="settings_renderer">Graphics Renderer</string>
-  <string name="settings_renderer_desc">Vulkan is recommended. OpenGL ES is experimental. Requires restart.</string>
-  <string name="settings_renderer_restart">Restart app to apply renderer change.</string>
+  <string name="settings_renderer_desc">Vulkan is recommended. OpenGL ES is experimental. Applied on next game launch.</string>
+  <string name="settings_renderer_restart">Applied on next game launch.</string>
 
   <!-- EEPROM Settings -->
   <string name="settings_section_eeprom">EEPROM Settings</string>
+  <string name="settings_section_online">Online / Insignia</string>
+  <string name="settings_section_hdd_tools">HDD Tools</string>
+  <string name="settings_section_dashboard_import">Dashboard Import</string>
+  <string name="settings_dashboard_import_desc">Import Microsoft dashboard files from a ZIP archive or folder into the current HDD image.</string>
   <string name="settings_eeprom_desc">Edit Xbox system language and video settings stored in eeprom.bin.</string>
   <string name="settings_eeprom_language">Language</string>
   <string name="settings_eeprom_language_english">English</string>
@@ -269,4 +288,100 @@
   <string name="settings_eeprom_saved">EEPROM saved</string>
   <string name="settings_eeprom_save_failed">EEPROM save failed</string>
   <string name="settings_eeprom_no_changes">No EEPROM changes to save</string>
+
+  <!-- Online / Insignia -->
+  <string name="settings_online_enable">Enable online networking (Insignia)</string>
+  <string name="settings_online_hint">Turns on NAT networking for dashboards and Insignia. Use the helper buttons below to write the DNS preset and boot the Setup Assistant.</string>
+  <string name="settings_insignia_guide_action">Insignia Guide</string>
+  <string name="settings_insignia_sign_up_action">Sign Up With Insignia</string>
+  <string name="settings_insignia_prepare_action">Prepare Insignia Networking</string>
+  <string name="settings_insignia_register_action">Register With Setup Assistant</string>
+  <string name="settings_insignia_status_checking">Checking Insignia setup…</string>
+  <string name="settings_insignia_status_dns">DNS preset: %1$s / %2$s</string>
+  <string name="settings_insignia_status_dashboard_ready">Retail dashboard: detected on C:</string>
+  <string name="settings_insignia_status_dashboard_partial">Retail dashboard: some files were found, but the install looks incomplete</string>
+  <string name="settings_insignia_status_dashboard_missing">Retail dashboard: not detected on C:</string>
+  <string name="settings_insignia_status_dashboard_unavailable">Retail dashboard: unavailable because no local HDD image is configured</string>
+  <string name="settings_insignia_status_dashboard_error">Retail dashboard: failed to inspect the HDD image (%1$s)</string>
+  <string name="settings_insignia_status_eeprom_ready">EEPROM: ready for DNS updates</string>
+  <string name="settings_insignia_status_eeprom_missing">EEPROM: missing. Launch emulation once to create eeprom.bin</string>
+  <string name="settings_insignia_status_setup_selected">Setup Assistant: %1$s</string>
+  <string name="settings_insignia_status_setup_inaccessible">Setup Assistant: %1$s (pick it again to restore access)</string>
+  <string name="settings_insignia_status_setup_missing">Setup Assistant: not selected yet</string>
+  <string name="settings_insignia_prepare_working">Writing Insignia DNS settings…</string>
+  <string name="settings_insignia_prepare_success">Insignia networking is ready. Restart emulation, then sign in through the dashboard or boot the Setup Assistant.</string>
+  <string name="settings_insignia_prepare_success_missing_dashboard">Insignia DNS was written, but the retail dashboard is still missing from C:.</string>
+  <string name="settings_insignia_prepare_failed">Failed to prepare Insignia networking: %1$s</string>
+  <string name="settings_insignia_prepare_no_hdd">No local HDD image is configured. Pick one in the setup wizard first.</string>
+  <string name="settings_insignia_prepare_no_eeprom">EEPROM not found yet. Launch emulation once to create eeprom.bin, then try again.</string>
+  <string name="settings_insignia_register_title">Setup Assistant</string>
+  <string name="settings_insignia_register_message">Boot %1$s now? This launches the Insignia Setup Assistant disc image.</string>
+  <string name="settings_insignia_register_boot_action">Boot Setup Assistant</string>
+  <string name="settings_insignia_register_choose_new">Choose Different Image</string>
+  <string name="settings_insignia_register_pick_prompt">Pick your Insignia Setup Assistant disc image.</string>
+  <string name="settings_insignia_setup_source_unknown">Unknown source</string>
+
+  <!-- HDD Tools -->
+  <string name="settings_hdd_tools_hint">Initializes the current local HDD image with a stock retail layout or optional extended F/G partitions. Raw and QCOW2 images are supported. This does not install a dashboard.</string>
+  <string name="settings_hdd_status_missing">No local HDD image is configured. Pick one in the setup wizard first.</string>
+  <string name="settings_hdd_status_configured">Current HDD image:\n%1$s\nTap Initialize HDD Layout to inspect the image and choose a layout.</string>
+  <string name="settings_hdd_status_ready">Current HDD image: %1$s (%2$s)\n%3$s</string>
+  <string name="settings_hdd_status_too_small">Current HDD image: %1$s (%2$s)\n%3$s\nThis image is smaller than a stock Xbox disk and cannot be initialized as retail.</string>
+  <string name="settings_hdd_status_error">Failed to inspect the current HDD image.\n%1$s</string>
+  <string name="settings_hdd_format_raw">Raw</string>
+  <string name="settings_hdd_format_qcow2">QCOW2</string>
+  <string name="settings_hdd_layout_pick_title">Choose HDD Layout</string>
+  <string name="settings_hdd_layout_retail">Retail Only (X, Y, Z, C, E)</string>
+  <string name="settings_hdd_layout_retail_f">Retail + F</string>
+  <string name="settings_hdd_layout_retail_f_g">Retail + F + G</string>
+  <string name="settings_hdd_layout_summary_retail">Rewrites X, Y, Z, C, and E.</string>
+  <string name="settings_hdd_layout_summary_retail_f">Rewrites X, Y, Z, C, E, and uses all remaining space as F.</string>
+  <string name="settings_hdd_layout_summary_retail_f_g">Rewrites X, Y, Z, C, E, keeps F up to the standard 137 GB boundary, and uses the rest as G.</string>
+  <string name="settings_hdd_layout_unavailable_format">%1$s (%2$s)</string>
+  <string name="settings_hdd_layout_unavailable_title">Layout Unavailable</string>
+  <string name="settings_hdd_layout_unavailable_no_extended_space">This HDD image only has enough room for the stock retail partitions. There is no extra space available for F or G.</string>
+  <string name="settings_hdd_layout_unavailable_needs_standard_g_boundary">Retail + F + G needs an HDD image larger than 128 GiB so G can start at the standard Xbox boundary.</string>
+  <string name="settings_hdd_layout_unavailable_not_enough_space">This HDD image does not have enough usable space for that layout.</string>
+  <string name="settings_hdd_init_title">Initialize HDD Layout</string>
+  <string name="settings_hdd_init_message">Initialize the current HDD image with %1$s?\n\n%2$s\n\nImage: %3$s</string>
+  <string name="settings_hdd_init_action">Initialize HDD Layout</string>
+  <string name="settings_hdd_init_working">Initializing HDD…</string>
+  <string name="settings_hdd_init_success">HDD layout initialized</string>
+  <string name="settings_hdd_init_failed">Failed to initialize HDD: %1$s</string>
+
+  <!-- Dashboard Import -->
+  <string name="settings_dashboard_import_action">Import Dashboard</string>
+  <string name="settings_dashboard_import_source_title">Choose Dashboard Source</string>
+  <string name="settings_dashboard_import_source_zip">Import ZIP</string>
+  <string name="settings_dashboard_import_source_folder">Import Folder</string>
+  <string name="settings_dashboard_import_pick_zip_error">Please pick a dashboard ZIP file.</string>
+  <string name="settings_dashboard_import_preparing">Preparing dashboard import…</string>
+  <string name="settings_dashboard_import_title">Import Dashboard</string>
+  <string name="settings_dashboard_import_message">Import dashboard files into the current HDD image?\n\n%1$s\n\nExisting files with matching names will be backed up and replaced.\n\nBackup folder:\n%2$s</string>
+  <string name="settings_dashboard_import_summary_c">Imports the selected files into C:.</string>
+  <string name="settings_dashboard_import_summary_e">Imports the selected files into E:.</string>
+  <string name="settings_dashboard_import_summary_c_e">Imports the selected C and E folders into the HDD image.</string>
+  <string name="settings_dashboard_import_working">Importing dashboard…</string>
+  <string name="settings_dashboard_import_success">Dashboard imported. Backup saved to %1$s</string>
+  <string name="settings_dashboard_import_success_with_alias">Dashboard imported. Added C:\\xboxdash.xbe for boot compatibility. Backup saved to %1$s</string>
+  <string name="settings_dashboard_import_success_without_retail_boot">Dashboard imported, but no C:\\xboxdash.xbe boot file was detected. Backup saved to %1$s</string>
+  <string name="settings_dashboard_import_failed">Failed to import dashboard: %1$s</string>
+  <string name="settings_dashboard_import_empty">The selected source does not contain any dashboard files.</string>
+  <string name="settings_dashboard_import_boot_alias_note">Boot compatibility: this import did not include C:\\xboxdash.xbe, so %1$s will also be copied as xboxdash.xbe.</string>
+  <string name="settings_dashboard_import_boot_missing_note">Warning: no obvious dashboard XBE was found anywhere under C:. Boot Dashboard may still show the service screen.</string>
+
+  <!-- Per-Game Settings -->
+  <string name="per_game_settings_title">Game Settings</string>
+  <string name="per_game_settings_desc">Override global settings for this game. Unmodified settings use the global value.</string>
+  <string name="per_game_settings_use_global">Use Global</string>
+  <string name="per_game_settings_enabled">Enabled</string>
+  <string name="per_game_settings_disabled">Disabled</string>
+  <string name="per_game_settings_saved">Game settings saved. Applied on next launch.</string>
+  <string name="per_game_settings_cleared">Game settings cleared. Using global defaults.</string>
+  <string name="per_game_settings_missing_game">No game specified</string>
+  <string name="per_game_settings_save">Save</string>
+  <string name="per_game_settings_clear">Clear All</string>
+  <string name="library_per_game_settings_option">Game Settings</string>
+  <string name="per_game_settings_revert">Revert to Global Settings</string>
+  <string name="library_game_context_title">%1$s</string>
 </resources>

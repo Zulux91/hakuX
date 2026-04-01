@@ -26,6 +26,10 @@
 #endif
 
 #include "hw/xbox/nv2a/nv2a_int.h"
+#ifdef __ANDROID__
+#include "hw/core/cpu.h"
+#include "target/i386/cpu.h"
+#endif
 #include "ui/xemu-notifications.h"
 #include "ui/xemu-settings.h"
 #include "util.h"
@@ -731,6 +735,24 @@ uint64_t pgraph_read(void *opaque, hwaddr addr, unsigned int size)
 
     qemu_mutex_unlock(&pg->lock);
 
+#ifdef __ANDROID__
+    {
+        static int pgraph_poll_log = 0;
+        CPUState *cpu = first_cpu;
+        if (cpu && pgraph_poll_log < 200) {
+            CPUX86State *env = &X86_CPU(cpu)->env;
+            uint32_t eip = (uint32_t)env->eip;
+            if (eip >= 0x80015000 && eip <= 0x80016000) {
+                extern int __android_log_print(int, const char*, const char*, ...);
+                __android_log_print(3, "hakuX-mmio",
+                    "PGRAPH read: eip=0x%x reg=0x%x val=0x%x",
+                    eip, (uint32_t)addr, (uint32_t)r);
+                pgraph_poll_log++;
+            }
+        }
+    }
+#endif
+
     nv2a_reg_log_read(NV_PGRAPH, addr, size, r);
     return r;
 }
@@ -761,6 +783,20 @@ void pgraph_write(void *opaque, hwaddr addr, uint64_t val, unsigned int size)
 
     switch (addr) {
     case NV_PGRAPH_INTR:
+#ifdef __ANDROID__
+        {
+            static int intr_write_log = 0;
+            if (intr_write_log < 100) {
+                extern int __android_log_print(int, const char*, const char*, ...);
+                __android_log_print(3, "hakuX-nop",
+                    "PGRAPH_INTR write: val=0x%x pending_before=0x%x "
+                    "nop=%d enabled=0x%x",
+                    (uint32_t)val, pg->pending_interrupts,
+                    (int)pg->waiting_for_nop, pg->enabled_interrupts);
+                intr_write_log++;
+            }
+        }
+#endif
         pg->pending_interrupts &= ~val;
 
         if (!(pg->pending_interrupts & NV_PGRAPH_INTR_ERROR)) {
@@ -1702,7 +1738,18 @@ DEF_METHOD(NV097, NO_OPERATION)
     unsigned channel_id =
         PG_GET_MASK(NV_PGRAPH_CTX_USER, NV_PGRAPH_CTX_USER_CHID);
 
+#ifdef __ANDROID__
+    /* On Android, the CPU may not acknowledge the previous NOP in time
+     * before the next one arrives (slower ARM emulation).  Skip the
+     * duplicate NOP — the previous one's interrupt is still pending
+     * and will be delivered.  On desktop this is an assert because
+     * it should never happen with fast x86 emulation. */
+    if (pg->pending_interrupts & NV_PGRAPH_INTR_ERROR) {
+        return;
+    }
+#else
     assert(!(pg->pending_interrupts & NV_PGRAPH_INTR_ERROR));
+#endif
 
     PG_SET_MASK(NV_PGRAPH_TRAPPED_ADDR, NV_PGRAPH_TRAPPED_ADDR_CHID,
              channel_id);
@@ -4159,6 +4206,19 @@ void pgraph_process_pending(NV2AState *d)
 {
     PGRAPHState *pg = &d->pgraph;
     pg->renderer->ops.process_pending(d);
+
+    /* When a diag capture is pending but the game is idle (no
+     * FLIP_STALL / FLIP_INCREMENT_WRITE), force a flip_stall here
+     * so the pending-to-active transition happens.  The VBLANK timer
+     * kicks the PFIFO to wake us. */
+    if (nv2a_dbg_diag_frame_pending()) {
+        qemu_mutex_unlock(&d->pfifo.lock);
+        qemu_mutex_lock(&d->pgraph.lock);
+        d->pgraph.renderer->ops.surface_update(d, false, true, true);
+        d->pgraph.renderer->ops.flip_stall(d);
+        qemu_mutex_unlock(&d->pgraph.lock);
+        qemu_mutex_lock(&d->pfifo.lock);
+    }
 
     if (g_config.display.renderer != pg->renderer->type &&
         pg->renderer_switch_phase == PGRAPH_RENDERER_SWITCH_PHASE_IDLE) {

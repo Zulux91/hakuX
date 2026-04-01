@@ -20,6 +20,8 @@
  */
 
 #include "hw/xbox/nv2a/nv2a_int.h"
+#include "hw/core/cpu.h"
+#include "target/i386/cpu.h"
 #include "qemu/main-loop.h"
 #include "ui/xemu-settings.h"
 
@@ -52,6 +54,11 @@ void nv2a_update_irq(NV2AState *d)
     } else {
         pci_irq_deassert(PCI_DEVICE(d));
     }
+}
+
+uint8_t *xemu_get_xbox_ram_ptr(void)
+{
+    return g_nv2a ? g_nv2a->vram_ptr : NULL;
 }
 
 DMAObject nv_dma_load(NV2AState *d, hwaddr dma_obj_address)
@@ -207,11 +214,54 @@ static int64_t nv2a_calc_vblank_period_ns(NV2AState *d)
     return 16683750;
 }
 
+#ifdef __ANDROID__
+/* Simple VBLANK mode: matches x1_box behavior.  Just fires the PCRTC
+ * interrupt at a fixed interval — no adaptive deferral, no flip assists,
+ * no NOP recovery.  For debugging game-specific timing issues. */
+static bool g_simple_vblank_mode = false;
+
+void nv2a_set_simple_vblank(bool enable)
+{
+    g_simple_vblank_mode = enable;
+}
+
+bool nv2a_get_simple_vblank(void)
+{
+    return g_simple_vblank_mode;
+}
+
+static void nv2a_simple_vblank_cb(NV2AState *d)
+{
+    /* Pure x1_box behavior: fire PCRTC interrupt, update IRQ.
+     * No adaptive deferral, no flip auto-completion, no NOP assist.
+     * The guest kernel handles everything itself. */
+    d->pcrtc.pending_interrupts |= NV_PCRTC_INTR_0_VBLANK;
+    d->pcrtc.raster = 0;
+    nv2a_update_irq(d);
+
+    int64_t period = nv2a_calc_vblank_period_ns(d);
+    d->vblank_next_target_ns += period;
+    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
+    if (d->vblank_next_target_ns <= now) {
+        d->vblank_next_target_ns = now + period;
+    }
+    timer_mod(d->vblank_timer, d->vblank_next_target_ns);
+}
+#endif
+
 static int64_t s_last_vblank_fire_ns;
 
 static void nv2a_vblank_timer_cb(void *opaque)
 {
     NV2AState *d = opaque;
+
+#ifdef __ANDROID__
+    if (g_simple_vblank_mode) {
+        nv2a_simple_vblank_cb(d);
+        return;
+    }
+#endif
+
     int64_t period = nv2a_calc_vblank_period_ns(d);
     int64_t now = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
 
@@ -280,7 +330,20 @@ static void nv2a_vblank_timer_cb(void *opaque)
     bool in_deferral_window = effective_frame_ns > 0 &&
                               time_in_frame < defer_window;
 
+#ifdef __ANDROID__
+    /* On Android, only defer when the game is above 30fps.  Below 30fps,
+     * each frame spans 2+ VBLANK periods.  Deferral prevents the
+     * intermediate VBLANK from firing, but without deferral the guest
+     * handler increments READ_3D twice per frame, causing every other
+     * flip to stall — locking the game at 30fps.  Above 30fps, deferral
+     * prevents this double-increment by skipping the second VBLANK. */
+    bool android_allow_defer = effective_frame_ns > 0 &&
+                               effective_frame_ns < period * 2;
+#endif
     if (in_deferral_window &&
+#ifdef __ANDROID__
+        android_allow_defer &&
+#endif
         d->flip_active &&
         !qatomic_read(&d->pgraph.waiting_for_flip) &&
         !d->vblank_deferred) {
@@ -322,6 +385,8 @@ static void nv2a_vblank_timer_cb(void *opaque)
 
     d->pcrtc.pending_interrupts |= NV_PCRTC_INTR_0_VBLANK;
     d->pcrtc.raster = 0;
+
+
     nv2a_update_irq(d);
 
     /*
@@ -347,6 +412,12 @@ static void nv2a_vblank_timer_cb(void *opaque)
         }
     }
     timer_mod(d->vblank_timer, d->vblank_next_target_ns);
+
+    /* Wake the PFIFO thread when a diag capture is pending so the
+     * capture starts even if the game is idle (no FLIP_STALL). */
+    if (nv2a_dbg_diag_frame_pending()) {
+        pfifo_kick(d);
+    }
 }
 
 void nv2a_vblank_recalc(NV2AState *d)
@@ -362,6 +433,19 @@ static void nv2a_vga_gfx_update(void *opaque)
 {
     VGACommonState *vga = opaque;
     vga->hw_ops->gfx_update(vga);
+
+#ifdef __ANDROID__
+    /* In simple VBLANK mode, fire the PCRTC interrupt from gfx_update
+     * like x1_box does.  This fires at the display refresh rate (90-120Hz
+     * on modern phones), which makes games run too fast but avoids
+     * timing-dependent freezes. */
+    if (g_simple_vblank_mode) {
+        NV2AState *d = container_of(vga, NV2AState, vga);
+        d->pcrtc.pending_interrupts |= NV_PCRTC_INTR_0_VBLANK;
+        d->pcrtc.raster = 0;
+        nv2a_update_irq(d);
+    }
+#endif
 }
 
 static void nv2a_init_memory(NV2AState *d, MemoryRegion *ram)

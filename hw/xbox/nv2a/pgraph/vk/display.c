@@ -1711,13 +1711,9 @@ void pgraph_vk_render_display(PGRAPHState *pg)
     SurfaceBinding *surface = pgraph_vk_surface_get_within(d, display_addr);
     if (surface == NULL || !surface->color || !surface->width ||
         !surface->height) {
-        static int dbg_no_surf = 0;
-        if (dbg_no_surf < 30) {
-            DBG_LOG("[DISP] no valid surface (surface=%p)", surface);
-            dbg_no_surf++;
-        }
         return;
     }
+
 
     unsigned int width = 0, height = 0;
     d->vga.get_resolution(&d->vga, (int *)&width, (int *)&height);

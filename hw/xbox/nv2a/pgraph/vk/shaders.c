@@ -33,27 +33,28 @@ extern bool xemu_get_async_compile(void);
 
 const size_t MAX_UNIFORM_ATTR_VALUES_SIZE = NV2A_VERTEXSHADER_ATTRIBUTES * 4 * sizeof(float);
 
+/*
+ * Standard texture descriptor sets (used when push descriptors unavailable).
+ * Set 0: NV2A_MAX_TEXTURES combined image samplers (bindings 0..3).
+ * These are separate from UBO sets so that UBO-only changes (the common case)
+ * don't consume a new texture descriptor set.
+ */
 static void create_descriptor_pool(PGRAPHState *pg)
 {
     PGRAPHVkState *r = pg->vk_renderer_state;
+    if (r->push_descriptors_supported) return;
 
     size_t num_sets = r->descriptor_set_count;
 
-    VkDescriptorPoolSize pool_sizes[] = {
-        {
-            .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
-            .descriptorCount = 2 * num_sets,
-        },
-        {
-            .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            .descriptorCount = NV2A_MAX_TEXTURES * num_sets,
-        }
+    VkDescriptorPoolSize pool_size = {
+        .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .descriptorCount = NV2A_MAX_TEXTURES * num_sets,
     };
 
     VkDescriptorPoolCreateInfo pool_info = {
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-        .poolSizeCount = ARRAY_SIZE(pool_sizes),
-        .pPoolSizes = pool_sizes,
+        .poolSizeCount = 1,
+        .pPoolSizes = &pool_size,
         .maxSets = num_sets,
         .flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT,
     };
@@ -64,6 +65,7 @@ static void create_descriptor_pool(PGRAPHState *pg)
 static void destroy_descriptor_pool(PGRAPHState *pg)
 {
     PGRAPHVkState *r = pg->vk_renderer_state;
+    if (r->push_descriptors_supported) return;
 
     vkDestroyDescriptorPool(r->device, r->descriptor_pool, NULL);
     r->descriptor_pool = VK_NULL_HANDLE;
@@ -72,24 +74,12 @@ static void destroy_descriptor_pool(PGRAPHState *pg)
 static void create_descriptor_set_layout(PGRAPHState *pg)
 {
     PGRAPHVkState *r = pg->vk_renderer_state;
+    if (r->push_descriptors_supported) return;
 
-    VkDescriptorSetLayoutBinding bindings[2 + NV2A_MAX_TEXTURES];
-
-    bindings[0] = (VkDescriptorSetLayoutBinding){
-        .binding = VSH_UBO_BINDING,
-        .descriptorCount = 1,
-        .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
-        .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
-    };
-    bindings[1] = (VkDescriptorSetLayoutBinding){
-        .binding = PSH_UBO_BINDING,
-        .descriptorCount = 1,
-        .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
-        .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
-    };
+    VkDescriptorSetLayoutBinding bindings[NV2A_MAX_TEXTURES];
     for (int i = 0; i < NV2A_MAX_TEXTURES; i++) {
-        bindings[2 + i] = (VkDescriptorSetLayoutBinding){
-            .binding = PSH_TEX_BINDING + i,
+        bindings[i] = (VkDescriptorSetLayoutBinding){
+            .binding = i,
             .descriptorCount = 1,
             .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
             .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
@@ -107,6 +97,7 @@ static void create_descriptor_set_layout(PGRAPHState *pg)
 static void destroy_descriptor_set_layout(PGRAPHState *pg)
 {
     PGRAPHVkState *r = pg->vk_renderer_state;
+    if (r->push_descriptors_supported) return;
 
     vkDestroyDescriptorSetLayout(r->device, r->descriptor_set_layout, NULL);
     r->descriptor_set_layout = VK_NULL_HANDLE;
@@ -115,6 +106,8 @@ static void destroy_descriptor_set_layout(PGRAPHState *pg)
 static void create_descriptor_sets(PGRAPHState *pg)
 {
     PGRAPHVkState *r = pg->vk_renderer_state;
+    if (r->push_descriptors_supported) return;
+
     int count = r->descriptor_set_count;
 
     r->descriptor_sets = g_malloc(count * sizeof(VkDescriptorSet));
@@ -138,6 +131,7 @@ static void create_descriptor_sets(PGRAPHState *pg)
 static void destroy_descriptor_sets(PGRAPHState *pg)
 {
     PGRAPHVkState *r = pg->vk_renderer_state;
+    if (r->push_descriptors_supported) return;
 
     vkFreeDescriptorSets(r->device, r->descriptor_pool,
                          r->descriptor_set_count, r->descriptor_sets);
@@ -145,174 +139,15 @@ static void destroy_descriptor_sets(PGRAPHState *pg)
     r->descriptor_sets = NULL;
 }
 
-#if OPT_BINDLESS_TEXTURES
+#define NUM_UBO_SETS 1024
 
-static void create_bindless_descriptor_resources(PGRAPHState *pg)
+/*
+ * UBO descriptor resources: always created, shared by both push and standard
+ * paths. Set 1 in the pipeline layout: 2 dynamic UBO bindings.
+ */
+static void create_ubo_descriptor_resources(PGRAPHState *pg)
 {
     PGRAPHVkState *r = pg->vk_renderer_state;
-    if (!r->bindless_textures_supported) return;
-
-    /* Bindless texture array layout (set 0): 3 bindings for 2D, 3D, Cube */
-    VkDescriptorSetLayoutBinding bl_bindings[3];
-    VkDescriptorBindingFlags bl_flags[3];
-    for (int i = 0; i < 3; i++) {
-        bl_bindings[i] = (VkDescriptorSetLayoutBinding){
-            .binding = i,
-            .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            .descriptorCount = MAX_BINDLESS_TEXTURES,
-            .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
-        };
-        bl_flags[i] =
-            VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |
-            VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
-    }
-    VkDescriptorSetLayoutBindingFlagsCreateInfo flags_info = {
-        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
-        .bindingCount = 3,
-        .pBindingFlags = bl_flags,
-    };
-    VkDescriptorSetLayoutCreateInfo layout_info = {
-        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-        .pNext = &flags_info,
-        .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT,
-        .bindingCount = 3,
-        .pBindings = bl_bindings,
-    };
-    VK_CHECK(vkCreateDescriptorSetLayout(r->device, &layout_info, NULL,
-                                         &r->bindless_set_layout));
-
-    /* UBO-only layout (set 1) */
-    VkDescriptorSetLayoutBinding ubo_bindings[2] = {
-        {
-            .binding = 0,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
-            .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
-        },
-        {
-            .binding = 1,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
-            .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
-        },
-    };
-    VkDescriptorSetLayoutCreateInfo ubo_layout_info = {
-        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-        .bindingCount = 2,
-        .pBindings = ubo_bindings,
-    };
-    VK_CHECK(vkCreateDescriptorSetLayout(r->device, &ubo_layout_info, NULL,
-                                         &r->ubo_set_layout));
-
-    /* Bindless pool: 1 set with 3 * MAX_BINDLESS_TEXTURES samplers */
-    VkDescriptorPoolSize bl_pool_size = {
-        .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-        .descriptorCount = 3 * MAX_BINDLESS_TEXTURES,
-    };
-    VkDescriptorPoolCreateInfo bl_pool_info = {
-        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-        .flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT,
-        .maxSets = 1,
-        .poolSizeCount = 1,
-        .pPoolSizes = &bl_pool_size,
-    };
-    VK_CHECK(vkCreateDescriptorPool(r->device, &bl_pool_info, NULL,
-                                    &r->bindless_descriptor_pool));
-
-    /* Allocate the single bindless descriptor set */
-    VkDescriptorSetAllocateInfo bl_alloc = {
-        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-        .descriptorPool = r->bindless_descriptor_pool,
-        .descriptorSetCount = 1,
-        .pSetLayouts = &r->bindless_set_layout,
-    };
-    VK_CHECK(vkAllocateDescriptorSets(r->device, &bl_alloc,
-                                      &r->bindless_descriptor_set));
-
-    /* UBO pool: cycling sets like the current descriptor pool */
-    r->ubo_descriptor_set_count = NUM_GFX_DESCRIPTOR_SETS;
-    r->ubo_descriptor_set_base_count = NUM_GFX_DESCRIPTOR_SETS;
-    VkDescriptorPoolSize ubo_pool_size = {
-        .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
-        .descriptorCount = 2 * r->ubo_descriptor_set_count,
-    };
-    VkDescriptorPoolCreateInfo ubo_pool_info = {
-        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-        .flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT,
-        .maxSets = r->ubo_descriptor_set_count,
-        .poolSizeCount = 1,
-        .pPoolSizes = &ubo_pool_size,
-    };
-    VK_CHECK(vkCreateDescriptorPool(r->device, &ubo_pool_info, NULL,
-                                    &r->ubo_descriptor_pool));
-
-    /* Allocate all UBO descriptor sets up front */
-    r->ubo_descriptor_sets =
-        g_malloc(r->ubo_descriptor_set_count * sizeof(VkDescriptorSet));
-    VkDescriptorSetLayout *ubo_layouts =
-        g_malloc(r->ubo_descriptor_set_count * sizeof(VkDescriptorSetLayout));
-    for (int i = 0; i < r->ubo_descriptor_set_count; i++) {
-        ubo_layouts[i] = r->ubo_set_layout;
-    }
-    VkDescriptorSetAllocateInfo ubo_alloc = {
-        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-        .descriptorPool = r->ubo_descriptor_pool,
-        .descriptorSetCount = r->ubo_descriptor_set_count,
-        .pSetLayouts = ubo_layouts,
-    };
-    VK_CHECK(vkAllocateDescriptorSets(r->device, &ubo_alloc,
-                                      r->ubo_descriptor_sets));
-    g_free(ubo_layouts);
-
-    r->ubo_descriptor_set_index = 0;
-    memset(r->bindless_slot_bitmap, 0, sizeof(r->bindless_slot_bitmap));
-    r->bindless_slot_bitmap[0] = 1;
-}
-
-static void destroy_bindless_descriptor_resources(PGRAPHState *pg)
-{
-    PGRAPHVkState *r = pg->vk_renderer_state;
-    if (!r->bindless_textures_supported) return;
-
-    vkFreeDescriptorSets(r->device, r->ubo_descriptor_pool,
-                         r->ubo_descriptor_set_count, r->ubo_descriptor_sets);
-    g_free(r->ubo_descriptor_sets);
-    r->ubo_descriptor_sets = NULL;
-    vkDestroyDescriptorPool(r->device, r->ubo_descriptor_pool, NULL);
-    vkDestroyDescriptorPool(r->device, r->bindless_descriptor_pool, NULL);
-    vkDestroyDescriptorSetLayout(r->device, r->ubo_set_layout, NULL);
-    vkDestroyDescriptorSetLayout(r->device, r->bindless_set_layout, NULL);
-}
-
-#endif /* OPT_BINDLESS_TEXTURES */
-
-#define NUM_PUSH_UBO_SETS 1024
-
-static void create_push_descriptor_resources(PGRAPHState *pg)
-{
-    PGRAPHVkState *r = pg->vk_renderer_state;
-    if (!r->push_descriptors_supported) return;
-#if OPT_BINDLESS_TEXTURES
-    if (r->bindless_textures_supported) return;
-#endif
-
-    VkDescriptorSetLayoutBinding tex_bindings[NV2A_MAX_TEXTURES];
-    for (int i = 0; i < NV2A_MAX_TEXTURES; i++) {
-        tex_bindings[i] = (VkDescriptorSetLayoutBinding){
-            .binding = i,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
-        };
-    }
-    VkDescriptorSetLayoutCreateInfo tex_layout_info = {
-        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-        .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR,
-        .bindingCount = NV2A_MAX_TEXTURES,
-        .pBindings = tex_bindings,
-    };
-    VK_CHECK(vkCreateDescriptorSetLayout(r->device, &tex_layout_info, NULL,
-                                         &r->push_tex_set_layout));
 
     VkDescriptorSetLayoutBinding ubo_bindings[2] = {
         {
@@ -336,8 +171,8 @@ static void create_push_descriptor_resources(PGRAPHState *pg)
     VK_CHECK(vkCreateDescriptorSetLayout(r->device, &ubo_layout_info, NULL,
                                          &r->push_ubo_set_layout));
 
-    r->push_ubo_set_count = NUM_PUSH_UBO_SETS;
-    r->push_ubo_set_base_count = NUM_PUSH_UBO_SETS;
+    r->push_ubo_set_count = NUM_UBO_SETS;
+    r->push_ubo_set_base_count = NUM_UBO_SETS;
     VkDescriptorPoolSize pool_size = {
         .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
         .descriptorCount = 2 * r->push_ubo_set_count,
@@ -369,13 +204,9 @@ static void create_push_descriptor_resources(PGRAPHState *pg)
     r->push_ubo_set_index = 0;
 }
 
-static void destroy_push_descriptor_resources(PGRAPHState *pg)
+static void destroy_ubo_descriptor_resources(PGRAPHState *pg)
 {
     PGRAPHVkState *r = pg->vk_renderer_state;
-    if (!r->push_descriptors_supported) return;
-#if OPT_BINDLESS_TEXTURES
-    if (r->bindless_textures_supported) return;
-#endif
 
     vkFreeDescriptorSets(r->device, r->push_ubo_pool,
                          r->push_ubo_set_count, r->push_ubo_sets);
@@ -383,15 +214,89 @@ static void destroy_push_descriptor_resources(PGRAPHState *pg)
     r->push_ubo_sets = NULL;
     vkDestroyDescriptorPool(r->device, r->push_ubo_pool, NULL);
     vkDestroyDescriptorSetLayout(r->device, r->push_ubo_set_layout, NULL);
+}
+
+/*
+ * Push descriptor resources: only created when VK_KHR_push_descriptor is
+ * available. Set 0 uses push descriptors for textures.
+ */
+static void create_push_descriptor_resources(PGRAPHState *pg)
+{
+    PGRAPHVkState *r = pg->vk_renderer_state;
+    if (!r->push_descriptors_supported) return;
+
+    VkDescriptorSetLayoutBinding tex_bindings[NV2A_MAX_TEXTURES];
+    for (int i = 0; i < NV2A_MAX_TEXTURES; i++) {
+        tex_bindings[i] = (VkDescriptorSetLayoutBinding){
+            .binding = i,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+        };
+    }
+    VkDescriptorSetLayoutCreateInfo tex_layout_info = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR,
+        .bindingCount = NV2A_MAX_TEXTURES,
+        .pBindings = tex_bindings,
+    };
+    VK_CHECK(vkCreateDescriptorSetLayout(r->device, &tex_layout_info, NULL,
+                                         &r->push_tex_set_layout));
+
+    /* Create a canonical pipeline layout for the update template */
+    VkDescriptorSetLayout template_set_layouts[2] = {
+        r->push_tex_set_layout,
+        r->push_ubo_set_layout,
+    };
+    VkPipelineLayoutCreateInfo template_layout_info = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .setLayoutCount = 2,
+        .pSetLayouts = template_set_layouts,
+    };
+    VK_CHECK(vkCreatePipelineLayout(r->device, &template_layout_info, NULL,
+                                    &r->push_template_layout));
+
+    /* Create descriptor update template for push texture descriptors */
+    VkDescriptorUpdateTemplateEntry template_entries[NV2A_MAX_TEXTURES];
+    for (int i = 0; i < NV2A_MAX_TEXTURES; i++) {
+        template_entries[i] = (VkDescriptorUpdateTemplateEntry){
+            .dstBinding = i,
+            .dstArrayElement = 0,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            .offset = i * sizeof(VkDescriptorImageInfo),
+            .stride = sizeof(VkDescriptorImageInfo),
+        };
+    }
+    VkDescriptorUpdateTemplateCreateInfo template_info = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_UPDATE_TEMPLATE_CREATE_INFO,
+        .descriptorUpdateEntryCount = NV2A_MAX_TEXTURES,
+        .pDescriptorUpdateEntries = template_entries,
+        .templateType =
+            VK_DESCRIPTOR_UPDATE_TEMPLATE_TYPE_PUSH_DESCRIPTORS_KHR,
+        .descriptorSetLayout = r->push_tex_set_layout,
+        .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
+        .pipelineLayout = r->push_template_layout,
+        .set = 0,
+    };
+    VK_CHECK(vkCreateDescriptorUpdateTemplate(r->device, &template_info, NULL,
+                                              &r->push_tex_update_template));
+}
+
+static void destroy_push_descriptor_resources(PGRAPHState *pg)
+{
+    PGRAPHVkState *r = pg->vk_renderer_state;
+    if (!r->push_descriptors_supported) return;
+
+    vkDestroyDescriptorUpdateTemplate(r->device,
+                                       r->push_tex_update_template, NULL);
+    vkDestroyPipelineLayout(r->device, r->push_template_layout, NULL);
     vkDestroyDescriptorSetLayout(r->device, r->push_tex_set_layout, NULL);
 }
 
 static bool use_push_descriptors(PGRAPHVkState *r)
 {
     if (!r->push_descriptors_supported) return false;
-#if OPT_BINDLESS_TEXTURES
-    if (r->bindless_textures_supported) return false;
-#endif
     return true;
 }
 
@@ -481,14 +386,6 @@ void pgraph_vk_reclaim_descriptor_overflow(PGRAPHVkState *r)
         r->descriptor_sets,
         r->descriptor_set_base_count * sizeof(VkDescriptorSet));
 
-#if OPT_BINDLESS_TEXTURES
-    if (r->ubo_descriptor_set_base_count) {
-        r->ubo_descriptor_set_count = r->ubo_descriptor_set_base_count;
-        r->ubo_descriptor_sets = g_realloc(
-            r->ubo_descriptor_sets,
-            r->ubo_descriptor_set_base_count * sizeof(VkDescriptorSet));
-    }
-#endif
     if (r->push_ubo_set_base_count) {
         r->push_ubo_set_count = r->push_ubo_set_base_count;
         r->push_ubo_sets = g_realloc(
@@ -519,69 +416,17 @@ void pgraph_vk_update_descriptor_sets(PGRAPHState *pg)
 
     bool push_desc = use_push_descriptors(r);
 
-#if OPT_BINDLESS_TEXTURES
-    int *ds_index_ptr;
-    int *ds_count_ptr;
-    VkDescriptorSet **ds_array_ptr;
-    VkDescriptorSetLayout ds_layout;
-    bool ds_include_samplers;
-    if (r->bindless_textures_supported) {
-        ds_index_ptr = &r->ubo_descriptor_set_index;
-        ds_count_ptr = &r->ubo_descriptor_set_count;
-        ds_array_ptr = &r->ubo_descriptor_sets;
-        ds_layout = r->ubo_set_layout;
-        ds_include_samplers = false;
-    } else if (push_desc) {
-        ds_index_ptr = &r->push_ubo_set_index;
-        ds_count_ptr = &r->push_ubo_set_count;
-        ds_array_ptr = &r->push_ubo_sets;
-        ds_layout = r->push_ubo_set_layout;
-        ds_include_samplers = false;
-    } else {
-        ds_index_ptr = &r->descriptor_set_index;
-        ds_count_ptr = &r->descriptor_set_count;
-        ds_array_ptr = &r->descriptor_sets;
-        ds_layout = r->descriptor_set_layout;
-        ds_include_samplers = true;
-    }
-#else
-    int *ds_index_ptr;
-    int *ds_count_ptr;
-    VkDescriptorSet **ds_array_ptr;
-    VkDescriptorSetLayout ds_layout;
-    bool ds_include_samplers;
-    if (push_desc) {
-        ds_index_ptr = &r->push_ubo_set_index;
-        ds_count_ptr = &r->push_ubo_set_count;
-        ds_array_ptr = &r->push_ubo_sets;
-        ds_layout = r->push_ubo_set_layout;
-        ds_include_samplers = false;
-    } else {
-        ds_index_ptr = &r->descriptor_set_index;
-        ds_count_ptr = &r->descriptor_set_count;
-        ds_array_ptr = &r->descriptor_sets;
-        ds_layout = r->descriptor_set_layout;
-        ds_include_samplers = true;
-    }
-#endif
-
-    bool tex_triggers_new_set = !push_desc && (
-#if OPT_BINDLESS_TEXTURES
-        !r->bindless_textures_supported &&
-#endif
-        r->texture_bindings_changed);
-
-    bool need_new_descriptor_set =
+    /* UBO set management (shared by both paths, set index 1) */
+    bool need_new_ubo_set =
         r->shader_bindings_changed ||
-        tex_triggers_new_set ||
         r->need_descriptor_rebind ||
-        !(*ds_index_ptr);
+        !r->push_ubo_set_index;
 
-    if (need_new_descriptor_set && *ds_index_ptr >= *ds_count_ptr) {
+    if (need_new_ubo_set && r->push_ubo_set_index >= r->push_ubo_set_count) {
         OPT_STAT_INC(buf_ds_full);
         pgraph_vk_finish(pg, VK_FINISH_REASON_NEED_BUFFER_SPACE);
         pgraph_vk_flush_all_frames(pg);
-        *ds_index_ptr = 0;
+        r->push_ubo_set_index = 0;
     }
 
     if (r->uniforms_changed) {
@@ -603,6 +448,8 @@ void pgraph_vk_update_descriptor_sets(PGRAPHState *pg)
         r->uniforms_changed = false;
     }
 
+    /* Texture handling: push path stages for push, standard path manages
+     * a separate texture descriptor set */
     if (push_desc && r->texture_bindings_changed) {
         for (int i = 0; i < NV2A_MAX_TEXTURES; i++) {
             r->push_tex_infos[i] = (VkDescriptorImageInfo){
@@ -619,137 +466,168 @@ void pgraph_vk_update_descriptor_sets(PGRAPHState *pg)
         r->texture_bindings_changed = false;
     }
 
-    tex_triggers_new_set = !push_desc && (
-#if OPT_BINDLESS_TEXTURES
-        !r->bindless_textures_supported &&
-#endif
-        r->texture_bindings_changed);
+    /* Standard path: manage texture descriptor sets (set index 0) */
+    bool need_new_tex_set = false;
+    if (!push_desc) {
+        need_new_tex_set = r->texture_bindings_changed ||
+                           r->shader_bindings_changed ||
+                           !r->descriptor_set_index;
 
-    need_new_descriptor_set =
+        if (need_new_tex_set &&
+            r->descriptor_set_index >= r->descriptor_set_count) {
+            OPT_STAT_INC(buf_ds_full);
+            pgraph_vk_finish(pg, VK_FINISH_REASON_NEED_BUFFER_SPACE);
+            pgraph_vk_flush_all_frames(pg);
+            r->descriptor_set_index = 0;
+        }
+    }
+
+    /* Recompute UBO set need after potential flush */
+    need_new_ubo_set =
         r->shader_bindings_changed ||
-        tex_triggers_new_set ||
         r->need_descriptor_rebind ||
-        !(*ds_index_ptr);
+        !r->push_ubo_set_index;
 
-    if (!need_new_descriptor_set) {
+    if (!need_new_ubo_set && !need_new_tex_set) {
         return;
     }
 
-    if (need_new_descriptor_set &&
-        !r->shader_bindings_changed && !r->texture_bindings_changed &&
-        *ds_index_ptr > 0) {
+    if (!r->shader_bindings_changed && !r->texture_bindings_changed &&
+        r->push_ubo_set_index > 0 &&
+        (push_desc || r->descriptor_set_index > 0)) {
         OPT_STAT_INC(desc_rebind_skips);
         r->need_descriptor_rebind = false;
         return;
     }
     OPT_STAT_INC(desc_rebind_full);
 
-    if (*ds_index_ptr >= *ds_count_ptr) {
-        OPT_STAT_INC(buf_ds_full);
-        pgraph_vk_finish(pg, VK_FINISH_REASON_NEED_BUFFER_SPACE);
-        pgraph_vk_flush_all_frames(pg);
-        *ds_index_ptr = 0;
+    /* Write UBO descriptor set */
+    if (need_new_ubo_set) {
+        if (r->push_ubo_set_index >= r->push_ubo_set_count) {
+            OPT_STAT_INC(buf_ds_full);
+            pgraph_vk_finish(pg, VK_FINISH_REASON_NEED_BUFFER_SPACE);
+            pgraph_vk_flush_all_frames(pg);
+            r->push_ubo_set_index = 0;
+        }
+        assert(r->push_ubo_set_index < r->push_ubo_set_count);
+
+        VkWriteDescriptorSet ubo_writes[2];
+        VkDescriptorBufferInfo ubo_buffer_infos[2];
+        for (int i = 0; i < 2; i++) {
+            ubo_buffer_infos[i] = (VkDescriptorBufferInfo){
+                .buffer = r->storage_buffers[BUFFER_UNIFORM].buffer,
+                .offset = 0,
+                .range = layouts[i]->total_size,
+            };
+            ubo_writes[i] = (VkWriteDescriptorSet){
+                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .dstSet = r->push_ubo_sets[r->push_ubo_set_index],
+                .dstBinding = i,
+                .dstArrayElement = 0,
+                .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
+                .descriptorCount = 1,
+                .pBufferInfo = &ubo_buffer_infos[i],
+            };
+        }
+        vkUpdateDescriptorSets(r->device, 2, ubo_writes, 0, NULL);
+        r->push_ubo_set_index++;
     }
 
-    assert(*ds_index_ptr < *ds_count_ptr);
+    /* Write texture descriptor set (standard path only) */
+    if (need_new_tex_set) {
+        assert(!push_desc);
 
-#if OPT_BINDLESS_TEXTURES
-    if (r->bindless_textures_supported) {
-        VkWriteDescriptorSet descriptor_writes[2];
-        VkDescriptorBufferInfo ubo_buffer_infos[2];
-        for (int i = 0; i < 2; i++) {
-            ubo_buffer_infos[i] = (VkDescriptorBufferInfo){
-                .buffer = r->storage_buffers[BUFFER_UNIFORM].buffer,
-                .offset = 0,
-                .range = layouts[i]->total_size,
-            };
-            descriptor_writes[i] = (VkWriteDescriptorSet){
-                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                .dstSet = (*ds_array_ptr)[*ds_index_ptr],
-                .dstBinding = i,
-                .dstArrayElement = 0,
-                .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
-                .descriptorCount = 1,
-                .pBufferInfo = &ubo_buffer_infos[i],
-            };
-        }
-        vkUpdateDescriptorSets(r->device, 2, descriptor_writes, 0, NULL);
-    } else
-#endif
-    if (push_desc) {
-        VkWriteDescriptorSet descriptor_writes[2];
-        VkDescriptorBufferInfo ubo_buffer_infos[2];
-        for (int i = 0; i < 2; i++) {
-            ubo_buffer_infos[i] = (VkDescriptorBufferInfo){
-                .buffer = r->storage_buffers[BUFFER_UNIFORM].buffer,
-                .offset = 0,
-                .range = layouts[i]->total_size,
-            };
-            descriptor_writes[i] = (VkWriteDescriptorSet){
-                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                .dstSet = (*ds_array_ptr)[*ds_index_ptr],
-                .dstBinding = i,
-                .dstArrayElement = 0,
-                .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
-                .descriptorCount = 1,
-                .pBufferInfo = &ubo_buffer_infos[i],
-            };
-        }
-        vkUpdateDescriptorSets(r->device, 2, descriptor_writes, 0, NULL);
-    } else {
-        VkWriteDescriptorSet descriptor_writes[2 + NV2A_MAX_TEXTURES];
-
-        VkDescriptorBufferInfo ubo_buffer_infos[2];
-        for (int i = 0; i < ARRAY_SIZE(layouts); i++) {
-            ubo_buffer_infos[i] = (VkDescriptorBufferInfo){
-                .buffer = r->storage_buffers[BUFFER_UNIFORM].buffer,
-                .offset = 0,
-                .range = layouts[i]->total_size,
-            };
-            descriptor_writes[i] = (VkWriteDescriptorSet){
-                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                .dstSet = (*ds_array_ptr)[*ds_index_ptr],
-                .dstBinding = i == 0 ? VSH_UBO_BINDING : PSH_UBO_BINDING,
-                .dstArrayElement = 0,
-                .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
-                .descriptorCount = 1,
-                .pBufferInfo = &ubo_buffer_infos[i],
-            };
-        }
-
-        VkDescriptorImageInfo image_infos[NV2A_MAX_TEXTURES];
+        /* Build the current texture binding key */
+        VkImageView cur_views[NV2A_MAX_TEXTURES];
+        VkSampler cur_samplers[NV2A_MAX_TEXTURES];
+        VkImageLayout cur_layouts[NV2A_MAX_TEXTURES];
         for (int i = 0; i < NV2A_MAX_TEXTURES; i++) {
-            if (r->texture_bindings[i]->image_view == VK_NULL_HANDLE) {
-                VK_LOG_ERROR("DIAG: descriptor set %d binding tex[%d] "
-                             "has NULL image_view! image=%p",
-                             *ds_index_ptr, i,
-                             (void *)r->texture_bindings[i]->image);
-            }
-            image_infos[i] = (VkDescriptorImageInfo){
-                .imageLayout = r->tex_surface_direct[i]
-                    ? r->tex_surface_direct_layout[i]
-                    : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                .imageView = r->tex_surface_direct[i]
-                    ? r->tex_surface_direct_views[i]
-                    : r->texture_bindings[i]->image_view,
-                .sampler = r->texture_bindings[i]->sampler,
-            };
-            descriptor_writes[2 + i] = (VkWriteDescriptorSet){
-                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                .dstSet = (*ds_array_ptr)[*ds_index_ptr],
-                .dstBinding = PSH_TEX_BINDING + i,
-                .dstArrayElement = 0,
-                .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                .descriptorCount = 1,
-                .pImageInfo = &image_infos[i],
-            };
+            cur_views[i] = r->tex_surface_direct[i]
+                ? r->tex_surface_direct_views[i]
+                : r->texture_bindings[i]->image_view;
+            cur_samplers[i] = r->texture_bindings[i]->sampler;
+            cur_layouts[i] = r->tex_surface_direct[i]
+                ? r->tex_surface_direct_layout[i]
+                : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         }
 
-        vkUpdateDescriptorSets(r->device, 6, descriptor_writes, 0, NULL);
+        /* Hash the key for cache lookup */
+        uint64_t h = 14695981039346656037ULL; /* FNV-1a */
+        const uint8_t *kb = (const uint8_t *)cur_views;
+        for (size_t b = 0; b < sizeof(cur_views); b++) {
+            h ^= kb[b]; h *= 1099511628211ULL;
+        }
+        kb = (const uint8_t *)cur_samplers;
+        for (size_t b = 0; b < sizeof(cur_samplers); b++) {
+            h ^= kb[b]; h *= 1099511628211ULL;
+        }
+        int slot = (int)(h % TEX_DESC_CACHE_SIZE);
+
+        /* Check cache */
+        typeof(r->tex_desc_cache[0]) *ce = &r->tex_desc_cache[slot];
+        bool cache_hit = ce->valid &&
+            !memcmp(ce->image_views, cur_views, sizeof(cur_views)) &&
+            !memcmp(ce->samplers, cur_samplers, sizeof(cur_samplers)) &&
+            !memcmp(ce->layouts, cur_layouts, sizeof(cur_layouts));
+
+        if (cache_hit) {
+            /* Reuse cached descriptor set — no vkUpdateDescriptorSets needed.
+             * Point descriptor_set_index to 0 as a sentinel; bind_descriptor_sets
+             * uses descriptor_set_index - 1, so we store the cached set in
+             * descriptor_sets[descriptor_set_index] temporarily. */
+            OPT_STAT_INC(desc_rebind_skips);
+            /* We don't consume a new set, just adjust index to point at
+             * the cached set. We use a small trick: store the cached set
+             * at the current index position without advancing. */
+            if (r->descriptor_set_index >= r->descriptor_set_count) {
+                r->descriptor_set_index = 0;
+            }
+            r->descriptor_sets[r->descriptor_set_index] = ce->descriptor_set;
+            r->descriptor_set_index++;
+        } else {
+            if (r->descriptor_set_index >= r->descriptor_set_count) {
+                OPT_STAT_INC(buf_ds_full);
+                pgraph_vk_finish(pg, VK_FINISH_REASON_NEED_BUFFER_SPACE);
+                pgraph_vk_flush_all_frames(pg);
+                r->descriptor_set_index = 0;
+                memset(r->tex_desc_cache, 0, sizeof(r->tex_desc_cache));
+            }
+            assert(r->descriptor_set_index < r->descriptor_set_count);
+
+            VkWriteDescriptorSet tex_writes[NV2A_MAX_TEXTURES];
+            VkDescriptorImageInfo image_infos[NV2A_MAX_TEXTURES];
+            for (int i = 0; i < NV2A_MAX_TEXTURES; i++) {
+                image_infos[i] = (VkDescriptorImageInfo){
+                    .imageLayout = cur_layouts[i],
+                    .imageView = cur_views[i],
+                    .sampler = cur_samplers[i],
+                };
+                tex_writes[i] = (VkWriteDescriptorSet){
+                    .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                    .dstSet = r->descriptor_sets[r->descriptor_set_index],
+                    .dstBinding = i,
+                    .dstArrayElement = 0,
+                    .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                    .descriptorCount = 1,
+                    .pImageInfo = &image_infos[i],
+                };
+            }
+            vkUpdateDescriptorSets(r->device, NV2A_MAX_TEXTURES, tex_writes,
+                                   0, NULL);
+
+            /* Store in cache */
+            memcpy(ce->image_views, cur_views, sizeof(cur_views));
+            memcpy(ce->samplers, cur_samplers, sizeof(cur_samplers));
+            memcpy(ce->layouts, cur_layouts, sizeof(cur_layouts));
+            ce->descriptor_set = r->descriptor_sets[r->descriptor_set_index];
+            ce->valid = true;
+
+            r->descriptor_set_index++;
+        }
+        r->texture_bindings_changed = false;
     }
 
     r->need_descriptor_rebind = false;
-    (*ds_index_ptr)++;
 }
 
 static void update_shader_uniform_locs(ShaderBinding *binding)
@@ -878,44 +756,18 @@ static void shader_binding_build_module_keys(
     vsh_key->vsh.glsl_opts.prefix_outputs = *need_geom;
     vsh_key->vsh.glsl_opts.use_push_constants_for_uniform_attrs =
         r->use_push_constants_for_uniform_attrs;
-#if OPT_BINDLESS_TEXTURES
-    if (r->bindless_textures_supported) {
-        vsh_key->vsh.glsl_opts.ubo_binding = 0;
-        vsh_key->vsh.glsl_opts.ubo_set = 1;
-        vsh_key->vsh.glsl_opts.vertex_push_offset =
-            (r->tex_push_offset == 0)
-                ? (int)(NV2A_MAX_TEXTURES * sizeof(uint32_t))
-                : 0;
-    } else
-#endif
-    if (use_push_descriptors(r)) {
-        vsh_key->vsh.glsl_opts.ubo_binding = 0;
-        vsh_key->vsh.glsl_opts.ubo_set = 1;
-    } else {
-        vsh_key->vsh.glsl_opts.ubo_binding = VSH_UBO_BINDING;
-    }
+    /* Both push and standard paths use 2-set layout:
+     * set 0 = textures (bindings 0..3), set 1 = UBOs (bindings 0,1) */
+    vsh_key->vsh.glsl_opts.ubo_binding = 0;
+    vsh_key->vsh.glsl_opts.ubo_set = 1;
 
     memset(psh_key, 0, sizeof(*psh_key));
     psh_key->kind = VK_SHADER_STAGE_FRAGMENT_BIT;
     psh_key->psh.state = binding->state.psh;
     psh_key->psh.glsl_opts.vulkan = true;
-#if OPT_BINDLESS_TEXTURES
-    if (r->bindless_textures_supported) {
-        psh_key->psh.glsl_opts.ubo_binding = 1;
-        psh_key->psh.glsl_opts.ubo_set = 1;
-        psh_key->psh.glsl_opts.bindless = true;
-        psh_key->psh.glsl_opts.tex_push_offset = r->tex_push_offset;
-        psh_key->psh.glsl_opts.tex_binding = PSH_TEX_BINDING;
-    } else
-#endif
-    if (use_push_descriptors(r)) {
-        psh_key->psh.glsl_opts.ubo_binding = 1;
-        psh_key->psh.glsl_opts.ubo_set = 1;
-        psh_key->psh.glsl_opts.tex_binding = 0;
-    } else {
-        psh_key->psh.glsl_opts.ubo_binding = PSH_UBO_BINDING;
-        psh_key->psh.glsl_opts.tex_binding = PSH_TEX_BINDING;
-    }
+    psh_key->psh.glsl_opts.ubo_binding = 1;
+    psh_key->psh.glsl_opts.ubo_set = 1;
+    psh_key->psh.glsl_opts.tex_binding = 0;
 }
 
 #if OPT_ASYNC_COMPILE
@@ -1294,7 +1146,9 @@ void pgraph_vk_update_shader_uniforms(PGRAPHState *pg)
     PGRAPHVkState *r = pg->vk_renderer_state;
     nv2a_profile_inc_counter(NV2A_PROF_SHADER_BIND);
 
-    assert(r->shader_binding);
+    if (!r->shader_binding) {
+        return; /* Shader not yet compiled (async) — skip this draw */
+    }
     ShaderBinding *binding = r->shader_binding;
 
 #if OPT_ASYNC_COMPILE
@@ -1412,30 +1266,19 @@ void pgraph_vk_init_shaders(PGRAPHState *pg)
     r->descriptor_overflow_pools =
         g_array_new(FALSE, FALSE, sizeof(VkDescriptorPool));
     pgraph_vk_init_glsl_compiler();
+    create_ubo_descriptor_resources(pg);
     create_descriptor_pool(pg);
     create_descriptor_set_layout(pg);
     create_descriptor_sets(pg);
-#if OPT_BINDLESS_TEXTURES
-    create_bindless_descriptor_resources(pg);
-#endif
     create_push_descriptor_resources(pg);
 #if OPT_ASYNC_COMPILE
     pgraph_vk_compile_worker_init(r);
 #endif
     shader_cache_init(pg);
 
-#if OPT_BINDLESS_TEXTURES
-    if (r->bindless_textures_supported) {
-        size_t vtx_budget = r->max_vertex_push_attrs * 4 * sizeof(float);
-        r->use_push_constants_for_uniform_attrs =
-            (r->device_props.limits.maxPushConstantsSize >= vtx_budget + 16);
-    } else
-#endif
-    {
-        r->use_push_constants_for_uniform_attrs =
-            (r->device_props.limits.maxPushConstantsSize >=
-             MAX_UNIFORM_ATTR_VALUES_SIZE);
-    }
+    r->use_push_constants_for_uniform_attrs =
+        (r->device_props.limits.maxPushConstantsSize >=
+         MAX_UNIFORM_ATTR_VALUES_SIZE);
 }
 
 void pgraph_vk_finalize_shaders(PGRAPHState *pg)
@@ -1450,9 +1293,6 @@ void pgraph_vk_finalize_shaders(PGRAPHState *pg)
 
     shader_cache_finalize(pg);
     destroy_push_descriptor_resources(pg);
-#if OPT_BINDLESS_TEXTURES
-    destroy_bindless_descriptor_resources(pg);
-#endif
 
     if (r->descriptor_overflow_pools) {
         for (guint i = 0; i < r->descriptor_overflow_pools->len; i++) {
@@ -1467,5 +1307,6 @@ void pgraph_vk_finalize_shaders(PGRAPHState *pg)
     destroy_descriptor_sets(pg);
     destroy_descriptor_set_layout(pg);
     destroy_descriptor_pool(pg);
+    destroy_ubo_descriptor_resources(pg);
     pgraph_vk_finalize_glsl_compiler();
 }

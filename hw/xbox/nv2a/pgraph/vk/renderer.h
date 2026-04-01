@@ -52,8 +52,6 @@
 #define OPT_DRAW_MERGE_MAX      128
 #define OPT_VALIDATE_GEN_COUNTERS 0
 #define REORDER_WINDOW_MAX       64
-#define OPT_BINDLESS_TEXTURES    1
-#define MAX_BINDLESS_TEXTURES    1024
 #define OPT_ASYNC_COMPILE        1
 
 struct OptBisectStats {
@@ -76,7 +74,6 @@ struct OptBisectStats {
     int sfp_miss_prog_dirty;
     int sfp_miss_vtx_gen;
     int sfp_miss_tex_vram;
-    int bindless_tex_fast;
     int push_tex_fast;
     int vtx_attr_fast;
     int pipeline_early_hits;
@@ -703,10 +700,6 @@ typedef struct TextureBinding {
     uint32_t submit_time;
     unsigned int dirty_check_frame;
     bool dirty_check_result;
-#if OPT_BINDLESS_TEXTURES
-    uint32_t bindless_slot;
-    uint32_t bindless_binding;
-#endif
 } TextureBinding;
 
 typedef struct QueryReport {
@@ -897,7 +890,8 @@ typedef enum ReorderDrawMode {
 typedef struct ReorderWindowEntry {
     PipelineBinding *pipeline_binding;
 
-    VkDescriptorSet descriptor_set;
+    VkDescriptorSet descriptor_set;      /* UBO set (set 1) */
+    VkDescriptorSet tex_descriptor_set;  /* Tex set (set 0), standard path */
     uint32_t dynamic_offsets[2];
 
     VkBuffer vertex_buffers[NV2A_VERTEXSHADER_ATTRIBUTES];
@@ -930,9 +924,6 @@ typedef struct ReorderWindowEntry {
     bool use_push_constants;
     VkPipelineLayout layout;
 
-#if OPT_BINDLESS_TEXTURES
-    uint32_t tex_indices[NV2A_MAX_TEXTURES];
-#endif
     VkDescriptorImageInfo rw_push_tex_infos[NV2A_MAX_TEXTURES];
     bool rw_use_push_descriptors;
 
@@ -975,11 +966,6 @@ typedef struct PGRAPHVkState {
 #if OPT_DYNAMIC_BLEND
     bool eds3_blend_supported;
 #endif
-#if OPT_BINDLESS_TEXTURES
-    bool bindless_textures_supported;
-    uint32_t tex_push_offset;
-    int max_vertex_push_attrs;
-#endif
     bool push_descriptors_supported;
     VkDescriptorSetLayout push_tex_set_layout;
     VkDescriptorSetLayout push_ubo_set_layout;
@@ -990,6 +976,8 @@ typedef struct PGRAPHVkState {
     int push_ubo_set_base_count;
     VkDescriptorImageInfo push_tex_infos[NV2A_MAX_TEXTURES];
     bool push_tex_dirty;
+    VkDescriptorUpdateTemplate push_tex_update_template;
+    VkPipelineLayout push_template_layout;
 
     VkPhysicalDevice physical_device;
     VkPhysicalDeviceFeatures enabled_physical_device_features;
@@ -1016,9 +1004,6 @@ typedef struct PGRAPHVkState {
     unsigned int last_stall_draw_time;
     bool in_command_buffer;
     int draws_in_cb;  /* Draw/clear/blit commands recorded in current CB */
-#if OPT_BINDLESS_TEXTURES
-    bool bindless_set_bound;
-#endif
     uint32_t submit_count;
 
     VkCommandBuffer aux_command_buffer;
@@ -1092,20 +1077,17 @@ typedef struct PGRAPHVkState {
     int descriptor_set_base_count;
     bool need_descriptor_rebind;
 
-    GArray *descriptor_overflow_pools;
+    /* Texture descriptor dedup cache (standard path only) */
+#define TEX_DESC_CACHE_SIZE 128
+    struct {
+        VkImageView image_views[NV2A_MAX_TEXTURES];
+        VkSampler samplers[NV2A_MAX_TEXTURES];
+        VkImageLayout layouts[NV2A_MAX_TEXTURES];
+        VkDescriptorSet descriptor_set;
+        bool valid;
+    } tex_desc_cache[TEX_DESC_CACHE_SIZE];
 
-#if OPT_BINDLESS_TEXTURES
-    VkDescriptorSetLayout bindless_set_layout;
-    VkDescriptorPool bindless_descriptor_pool;
-    VkDescriptorSet bindless_descriptor_set;
-    VkDescriptorSetLayout ubo_set_layout;
-    VkDescriptorPool ubo_descriptor_pool;
-    VkDescriptorSet *ubo_descriptor_sets;
-    int ubo_descriptor_set_count;
-    int ubo_descriptor_set_index;
-    int ubo_descriptor_set_base_count;
-    uint64_t bindless_slot_bitmap[MAX_BINDLESS_TEXTURES / 64];
-#endif
+    GArray *descriptor_overflow_pools;
 
     StorageBuffer storage_buffers[BUFFER_COUNT];
     PrimRewriteBuf prim_rewrite_buf;

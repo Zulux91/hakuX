@@ -890,6 +890,9 @@ static bool main_loop_should_exit(int *status)
         qemu_system_powerdown();
     }
     if (qemu_vmstop_requested(&r)) {
+#ifdef __ANDROID__
+        fprintf(stderr, "[hakuX-watchdog] qemu_vmstop_requested: state=%d\n", r);
+#endif
         vm_stop(r);
     }
     return false;

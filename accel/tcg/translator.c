@@ -307,8 +307,16 @@ static bool translator_ld(CPUArchState *env, DisasContextBase *db,
      * In the meantime, assert.
      */
     base = (base & TARGET_PAGE_MASK) + TARGET_PAGE_SIZE;
-    assert(((base ^ pc) & TARGET_PAGE_MASK) == 0);
-    assert(((base ^ last) & TARGET_PAGE_MASK) == 0);
+    if (unlikely(((base ^ pc) & TARGET_PAGE_MASK) != 0) ||
+        unlikely(((base ^ last) & TARGET_PAGE_MASK) != 0)) {
+        /* Page crossing spans more than 2 pages or memory layout
+         * changed since translation started. Bail out gracefully
+         * — the block will be re-translated on demand. */
+        tb_unlock_pages(tb);
+        tb_set_page_addr0(tb, -1);
+        db->max_insns = db->num_insns;
+        return false;
+    }
     host = db->host_addr[1];
 
     if (host == NULL) {

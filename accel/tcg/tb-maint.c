@@ -806,15 +806,22 @@ void tb_flush__exclusive_or_serial(void)
                         qatomic_read(&tb_ctx.tb_flush_count));
 #endif
 
+#ifdef XBOX
+    /* Clear stale tier-1 promotion requests — the TBs they reference
+     * no longer exist after flush. */
+    extern void tier1_clear_all_requests(void);
+    tier1_clear_all_requests();
+#endif
+
     /*
-     * Re-translate the most important blocks immediately so the
-     * emulator doesn't stutter while rebuilding on demand.
+     * Prepare rewarm after flush.  On desktop, this translates blocks
+     * inline.  On Android, this only sorts hints and marks incremental
+     * rewarm pending — actual translation happens in cpu_exec_loop()
+     * a few blocks per iteration to avoid blocking the CPU thread.
      */
-#ifndef __ANDROID__
     if (current_cpu) {
         tb_cache_rewarm_after_flush(current_cpu);
     }
-#endif
 
     qemu_plugin_flush_cb();
 }

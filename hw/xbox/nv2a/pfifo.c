@@ -20,6 +20,11 @@
  */
 
 #include "nv2a_int.h"
+#ifdef __ANDROID__
+#include <android/log.h>
+#include "hw/core/cpu.h"
+#include "target/i386/cpu.h"
+#endif
 
 #ifndef XEMU_OPT_THREAD_AFFINITY
 #define XEMU_OPT_THREAD_AFFINITY 0
@@ -36,6 +41,7 @@
 #ifndef XEMU_OPT_FIFO_SPIN
 #define XEMU_OPT_FIFO_SPIN 1
 #endif
+
 
 #if XEMU_OPT_FIFO_SPIN
 #define FIFO_SPIN_ACTIVE_NS 100000 /* 100µs active spin window */
@@ -126,6 +132,24 @@ uint64_t pfifo_read(void *opaque, hwaddr addr, unsigned int size)
     }
 
     qemu_mutex_unlock(&d->pfifo.lock);
+
+#ifdef __ANDROID__
+    {
+        static int pfifo_poll_log = 0;
+        CPUState *cpu = first_cpu;
+        if (cpu && pfifo_poll_log < 200) {
+            CPUX86State *env = &X86_CPU(cpu)->env;
+            uint32_t eip = (uint32_t)env->eip;
+            if (eip >= 0x80015000 && eip <= 0x80016000) {
+                extern int __android_log_print(int, const char*, const char*, ...);
+                __android_log_print(3, "hakuX-mmio",
+                    "PFIFO read: eip=0x%x reg=0x%x val=0x%x",
+                    eip, (uint32_t)addr, (uint32_t)r);
+                pfifo_poll_log++;
+            }
+        }
+    }
+#endif
 
     nv2a_reg_log_read(NV_PFIFO, addr, size, r);
     return r;

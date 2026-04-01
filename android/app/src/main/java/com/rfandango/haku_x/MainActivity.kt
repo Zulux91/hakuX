@@ -55,23 +55,35 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
 
   private fun initializeGpuDriver() {
     GpuDriverHelper.init(this)
-    if (GpuDriverHelper.supportsCustomDriverLoading()) {
-      val driverLib = GpuDriverHelper.getInstalledDriverLibrary()
-      if (driverLib != null) {
-        android.util.Log.i("MainActivity", "GPU driver: loading custom driver=$driverLib")
-        GpuDriverHelper.initializeDriver(driverLib)
-      } else {
-        android.util.Log.i("MainActivity", "GPU driver: no custom driver installed, using system default")
-      }
-    } else {
+    if (!GpuDriverHelper.supportsCustomDriverLoading()) {
       android.util.Log.i("MainActivity", "GPU driver: custom loading not supported on this device")
+      return
+    }
+
+    // Check per-game override: "system" forces system driver, "custom" or null uses installed
+    val driverOverride = getSharedPreferences("x1box_prefs", MODE_PRIVATE)
+      .getString(PerGameSettingsManager.runtimeKey("gpu_driver"), null)
+
+    if (driverOverride == "system") {
+      android.util.Log.i("MainActivity", "GPU driver: per-game override forces system driver")
+      return
+    }
+
+    val driverLib = GpuDriverHelper.getInstalledDriverLibrary()
+    if (driverLib != null) {
+      android.util.Log.i("MainActivity", "GPU driver: loading custom driver=$driverLib")
+      GpuDriverHelper.initializeDriver(driverLib)
+    } else {
+      android.util.Log.i("MainActivity", "GPU driver: no custom driver installed, using system default")
     }
   }
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
-    val rendererPref = getSharedPreferences("x1box_prefs", MODE_PRIVATE)
-      .getString("renderer", "vulkan") ?: "vulkan"
+    val prefs = getSharedPreferences("x1box_prefs", MODE_PRIVATE)
+    // Per-game overrides take precedence over global settings
+    val rendererPref = prefs.getString(PerGameSettingsManager.runtimeKey("renderer"), null)
+      ?: prefs.getString("renderer", "vulkan") ?: "vulkan"
     SDLActivity.nativeSetenv("XEMU_RENDERER", rendererPref)
     SDLActivity.nativeSetenv("SDL_ANDROID_TRAP_BACK_BUTTON", "1")
     setupOnScreenController()
@@ -135,12 +147,20 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
   private fun setupPauseMenu() {
     pauseMenuOverlay = PauseMenuOverlay(this).apply {
       onExitEmulation = {
-        nativeExitEmulation()
+        // Launch the library activity FIRST so the intent is queued
+        // before we do any blocking work or kill the process.
         val intent = Intent(this@MainActivity, GameLibraryActivity::class.java).apply {
           flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
         }
         startActivity(intent)
         finish()
+        // nativeExitEmulation blocks until the display loop exits and
+        // RCU callbacks are drained, so QEMU threads are quiescent
+        // before we kill the process.
+        Thread {
+          nativeExitEmulation()
+          android.os.Process.killProcess(android.os.Process.myPid())
+        }.start()
       }
       onDismiss = {
         togglePauseMenu()

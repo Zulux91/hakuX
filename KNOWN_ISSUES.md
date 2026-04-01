@@ -53,3 +53,29 @@
 **Current handling:** FP settings changes delete `tb_cache.bin`. FP state is XORed into the game hash for cache rejection. A "Clear code cache" button is available in Debug settings.
 
 **Remaining risk:** Build-to-build changes that affect code generation (e.g. GLSL changes) don't auto-invalidate the cache. Users must manually clear the code cache after updates.
+
+---
+
+## Xbox Kernel Crashes (BugCheck 0x1E) — Game-Specific Freezes
+
+**Symptom:** Game freezes at a specific gameplay point with the last frame stuck on screen, sound continuing, and the app remaining responsive. The CPU gets stuck at `eip=0x800151ed` (kernel halt loop: `CLI; HLT; JMP $-2`).
+
+**Root cause:** The game code dereferences a NULL object pointer, triggering a kernel BugCheck 0x1E (KMODE_EXCEPTION_NOT_HANDLED) with STATUS_ACCESS_VIOLATION (0xC0000005). A game-internal lookup function returns NULL because an array is empty or a search key isn't found. On desktop xemu the same lookup succeeds — the difference is caused by an upstream xemu rendering pipeline change (primitive rewriting moved from geometry shader to CPU) that alters GPU operation timing on Android.
+
+This is a pre-existing issue in the base Android xemu migration, present since the initial port. It is NOT caused by any hakuX-specific additions (tier-1 recompilation, hint system, VBLANK deferral, safety valves, etc.).
+
+**Detection:** Kernel crashes are automatically detected and logged via `hakuX-crash`:
+
+```
+adb logcat | Select-String "hakuX-crash"
+```
+
+The crash dump includes BugCheck code, exception type, all CPU registers, CR2 (faulting address), code context around the halt loop, and on NULL page faults: extended code dumps, CALL target analysis, and stack frame walks.
+
+**Affected games:**
+
+| Game | Crash EIP | CR2 | Details |
+|------|-----------|-----|---------|
+| NightCaster | 0x197ED3 | 0x418 | NULL object pointer at field offset 0x418; lookup function at 0x1FAD07 returns NULL |
+
+**Workaround:** None currently available. The game runs correctly on desktop xemu.

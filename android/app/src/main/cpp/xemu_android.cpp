@@ -38,8 +38,6 @@ extern "C" void xemu_set_draw_reorder(bool enable);
 extern "C" bool xemu_get_draw_reorder(void);
 extern "C" void xemu_set_draw_merge(bool enable);
 extern "C" bool xemu_get_draw_merge(void);
-extern "C" void xemu_set_bindless_textures(bool enable);
-extern "C" bool xemu_get_bindless_textures(void);
 extern "C" void xemu_set_async_compile(bool enable);
 extern "C" bool xemu_get_async_compile(void);
 extern "C" void xemu_set_frame_skip(bool enable);
@@ -48,6 +46,8 @@ extern "C" void xemu_set_submit_frames(int count);
 extern "C" int xemu_get_submit_frames(void);
 extern "C" void xemu_set_tier1_threshold(int value);
 extern "C" int xemu_get_tier1_threshold(void);
+extern "C" void nv2a_set_simple_vblank(bool enable);
+extern "C" bool nv2a_get_simple_vblank(void);
 extern "C" bool runstate_is_running(void);
 extern "C" void xemu_android_pause_emulation(void);
 extern "C" void xemu_android_resume_emulation(void);
@@ -368,7 +368,23 @@ static std::string GetPrefString(JNIEnv* env, jobject activity, const char* key)
   return out;
 }
 
+/*
+ * Check for a per-game runtime override (stored as a string by
+ * PerGameSettingsManager.applyRuntimeOverridesToEditor).
+ * Returns the override value or empty string if not set.
+ */
+static std::string GetRuntimeOverride(JNIEnv* env, jobject activity, const char* key) {
+    std::string runtimeKey = std::string("runtime_override_") + key;
+    return GetPrefString(env, activity, runtimeKey.c_str());
+}
+
 static int GetPrefInt(JNIEnv* env, jobject activity, const char* key, int defaultValue) {
+    // Check per-game override first
+    std::string ovr = GetRuntimeOverride(env, activity, key);
+    if (!ovr.empty()) {
+        try { return std::stoi(ovr); } catch (...) {}
+    }
+
   jclass activityClass = env->GetObjectClass(activity);
   jmethodID getPrefs = env->GetMethodID(activityClass, "getSharedPreferences",
                                         "(Ljava/lang/String;I)Landroid/content/SharedPreferences;");
@@ -391,6 +407,12 @@ static int GetPrefInt(JNIEnv* env, jobject activity, const char* key, int defaul
 }
 
 static bool GetPrefBool(JNIEnv* env, jobject activity, const char* key, bool defaultValue) {
+    // Check per-game override first
+    std::string ovr = GetRuntimeOverride(env, activity, key);
+    if (!ovr.empty()) {
+        return ovr == "true" || ovr == "1";
+    }
+
   jclass activityClass = env->GetObjectClass(activity);
   jmethodID getPrefs = env->GetMethodID(activityClass, "getSharedPreferences",
                                         "(Ljava/lang/String;I)Landroid/content/SharedPreferences;");
@@ -535,6 +557,8 @@ struct DisplaySettings {
   bool validation_layers = false;
   std::string filtering = "nearest";
   std::string aspect_ratio = "auto";
+  bool use_dsp = false;
+  bool network_enabled = false;
 };
 
 static bool WriteConfigToml(const std::string& config_path,
@@ -601,6 +625,7 @@ static bool WriteConfigToml(const std::string& config_path,
   if (!audio_vp->contains("num_workers")) {
     audio_vp->insert_or_assign("num_workers", 0);
   }
+  audio->insert_or_assign("use_dsp", ds.use_dsp);
   if (!audio->contains("hrtf")) {
     audio->insert_or_assign("hrtf", true);
   }
@@ -621,6 +646,14 @@ static bool WriteConfigToml(const std::string& config_path,
   toml::table* perf = EnsureTable(tbl, "perf");
   if (perf) {
     perf->insert_or_assign("unlock_framerate", ds.unlock_framerate);
+  }
+
+  toml::table* net = EnsureTable(tbl, "net");
+  if (net) {
+    net->insert_or_assign("enable", ds.network_enabled);
+    if (ds.network_enabled) {
+      net->insert_or_assign("backend", "nat");
+    }
   }
 
   files->insert_or_assign("bootrom_path", mcpx);
@@ -783,9 +816,15 @@ static SetupFiles SyncSetupFiles() {
   ds.surface_scale = GetPrefInt(env, activity, "surface_scale", 1);
   if (ds.surface_scale < 1) ds.surface_scale = 1;
   if (ds.surface_scale > 4) ds.surface_scale = 4;
+  __android_log_print(ANDROID_LOG_INFO, "hakuX",
+                      "surface_scale=%d (override=%s)",
+                      ds.surface_scale,
+                      GetRuntimeOverride(env, activity, "surface_scale").c_str());
   ds.vsync = GetPrefBool(env, activity, "vsync", false);
   ds.unlock_framerate = GetPrefBool(env, activity, "unlock_framerate", true);
   ds.validation_layers = GetPrefBool(env, activity, "validation_layers", false);
+  ds.use_dsp = GetPrefBool(env, activity, "use_dsp", false);
+  ds.network_enabled = GetPrefBool(env, activity, "setting_network_enable", false);
 
   bool fp_safe = GetPrefBool(env, activity, "fp_safe", true);
   xemu_set_fp_safe(fp_safe);
@@ -812,11 +851,6 @@ static SetupFiles SyncSetupFiles() {
   __android_log_print(ANDROID_LOG_INFO, "hakuX",
                       "draw merge: %s", draw_merge ? "ON" : "OFF");
 
-  bool bindless_tex = GetPrefBool(env, activity, "bindless_textures", false);
-  xemu_set_bindless_textures(bindless_tex);
-  __android_log_print(ANDROID_LOG_INFO, "hakuX",
-                      "bindless textures: %s", bindless_tex ? "ON" : "OFF");
-
   bool async_compile = GetPrefBool(env, activity, "async_compile", false);
   xemu_set_async_compile(async_compile);
   __android_log_print(ANDROID_LOG_INFO, "hakuX",
@@ -837,9 +871,16 @@ static SetupFiles SyncSetupFiles() {
   __android_log_print(ANDROID_LOG_INFO, "hakuX",
                       "tier1 threshold: %d", tier1_threshold);
 
-  std::string filterPref = GetPrefString(env, activity, "filtering");
+  bool simpleVblank = GetPrefBool(env, activity, "simple_vblank", false);
+  nv2a_set_simple_vblank(simpleVblank);
+  __android_log_print(ANDROID_LOG_INFO, "hakuX",
+                      "simple vblank: %s", simpleVblank ? "on" : "off");
+
+  std::string filterOvr = GetRuntimeOverride(env, activity, "filtering");
+  std::string filterPref = !filterOvr.empty() ? filterOvr : GetPrefString(env, activity, "filtering");
   if (!filterPref.empty()) ds.filtering = filterPref;
-  std::string arPref = GetPrefString(env, activity, "aspect_ratio");
+  std::string arOvr = GetRuntimeOverride(env, activity, "aspect_ratio");
+  std::string arPref = !arOvr.empty() ? arOvr : GetPrefString(env, activity, "aspect_ratio");
   if (!arPref.empty()) ds.aspect_ratio = arPref;
 
   WriteConfigToml(out.config_path, out.mcpx, out.flash, out.hdd, out.dvd, out.eeprom, tbSize, ds);
@@ -1362,18 +1403,6 @@ Java_com_rfandango_haku_1x_SettingsActivity_nativeSetDrawMerge(JNIEnv *, jobject
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_com_rfandango_haku_1x_SettingsActivity_nativeGetBindlessTextures(JNIEnv *, jobject)
-{
-    return xemu_get_bindless_textures() ? JNI_TRUE : JNI_FALSE;
-}
-
-extern "C" JNIEXPORT void JNICALL
-Java_com_rfandango_haku_1x_SettingsActivity_nativeSetBindlessTextures(JNIEnv *, jobject, jboolean enable)
-{
-    xemu_set_bindless_textures(enable == JNI_TRUE);
-}
-
-extern "C" JNIEXPORT jboolean JNICALL
 Java_com_rfandango_haku_1x_SettingsActivity_nativeGetAsyncCompile(JNIEnv *, jobject)
 {
     return xemu_get_async_compile() ? JNI_TRUE : JNI_FALSE;
@@ -1437,6 +1466,18 @@ Java_com_rfandango_haku_1x_SettingsActivity_nativeSetFpJit(JNIEnv *, jobject, jb
         snprintf(path, sizeof(path), "%s/x1box/tb_cache.bin", storage);
         remove(path);
     }
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_rfandango_haku_1x_SettingsActivity_nativeGetSimpleVblank(JNIEnv *, jobject)
+{
+    return nv2a_get_simple_vblank() ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_rfandango_haku_1x_SettingsActivity_nativeSetSimpleVblank(JNIEnv *, jobject, jboolean enable)
+{
+    nv2a_set_simple_vblank(enable == JNI_TRUE);
 }
 
 extern "C" JNIEXPORT void JNICALL

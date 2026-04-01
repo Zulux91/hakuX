@@ -124,13 +124,11 @@ class PauseMenuOverlay(context: Context) : FrameLayout(context) {
             bg.setColor(Color.argb(200, 40, 100, 70))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
             setOnClickListener {
-                android.util.Log.i("hakuX-diag", "capture: dismissing first (resume), then setting $frames frame pending")
+                android.util.Log.i("hakuX-diag", "capture: setting $frames frame pending, then resuming")
+                // Set the pending flag BEFORE resuming so the first
+                // FLIP_STALL / FLIP_INCREMENT_WRITE after unpause picks it up.
+                onDiagCapture?.invoke(frames)
                 onDismiss?.invoke()
-                // Post with delay to let the game produce a few frames first
-                postDelayed({
-                    android.util.Log.i("hakuX-diag", "capture: now setting $frames frame pending")
-                    onDiagCapture?.invoke(frames)
-                }, 2000)
             }
         }
     }

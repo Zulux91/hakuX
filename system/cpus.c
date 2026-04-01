@@ -295,6 +295,13 @@ static int do_vm_stop(RunState state, bool send_stop)
 {
     int ret = 0;
     RunState oldstate = runstate_get();
+#ifdef __ANDROID__
+    {
+        extern int __android_log_print(int prio, const char *tag, const char *fmt, ...);
+        __android_log_print(4, "hakuX-watchdog",
+                            "do_vm_stop: new=%d old=%d send=%d", state, oldstate, send_stop);
+    }
+#endif
 
     if (runstate_is_live(oldstate)) {
         vm_was_suspended = (oldstate == RUN_STATE_SUSPENDED);
@@ -741,6 +748,14 @@ void cpu_stop_current(void)
 
 int vm_stop(RunState state)
 {
+#ifdef __ANDROID__
+    {
+        /* Use android log directly since fprintf may not reach logcat */
+        extern int __android_log_print(int prio, const char *tag, const char *fmt, ...);
+        __android_log_print(4 /*ANDROID_LOG_INFO*/, "hakuX-watchdog",
+                            "vm_stop: state=%d vcpu=%d", state, qemu_in_vcpu_thread());
+    }
+#endif
     if (qemu_in_vcpu_thread()) {
         qemu_system_vmstop_request_prepare();
         qemu_system_vmstop_request(state);

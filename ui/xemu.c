@@ -54,6 +54,7 @@
 #include "data/xemu_64x64.png.h"
 
 #include "hw/xbox/smbus.h" // For eject, drive tray
+#include "hw/core/cpu.h"
 #include "hw/xbox/nv2a/nv2a.h"
 #include "hw/xbox/nv2a/nv2a_int.h"
 #include "hw/xbox/nv2a/debug.h"
@@ -138,8 +139,10 @@ int bdrv_flush_all(void);
 static bool g_android_gl_bgra_supported = true;
 static bool g_android_paused = false;
 static bool g_android_should_quit = false;
+static volatile bool g_android_display_loop_exited = false;
 static volatile bool g_android_vm_pause_requested = false;
 static volatile bool g_android_vm_resume_requested = false;
+static volatile bool g_android_flush_requested = false;
 static uint64_t g_android_frame_counter = 0;
 static int g_android_target_fps = 60;
 static int64_t g_android_frame_interval_ns = 16666666;
@@ -899,15 +902,15 @@ void sdl2_poll_events(struct sdl2_console *scon)
             shutdown_action = SHUTDOWN_ACTION_POWEROFF;
             qemu_system_shutdown_request(SHUTDOWN_CAUSE_HOST_UI);
             g_android_should_quit = true;
-            bdrv_flush_all();
+            g_android_flush_requested = true;
             __android_log_print(ANDROID_LOG_INFO, "hakuX",
-                                "android: app terminating, flushed block devices");
+                                "android: app terminating, flush requested");
             break;
         case SDL_APP_WILLENTERBACKGROUND:
             g_android_paused = true;
-            bdrv_flush_all();
+            g_android_flush_requested = true;
             __android_log_print(ANDROID_LOG_INFO, "hakuX",
-                                "android: app entering background, flushed block devices");
+                                "android: app entering background, flush requested");
             break;
         case SDL_APP_DIDENTERBACKGROUND:
             break;
@@ -1415,6 +1418,7 @@ void xemu_android_display_loop(void)
 {
 #ifdef __ANDROID__
     g_android_should_quit = false;
+    g_android_display_loop_exited = false;
     g_android_paused = false;
     g_android_vm_pause_requested = false;
     g_android_vm_resume_requested = false;
@@ -1516,6 +1520,16 @@ void xemu_android_display_loop(void)
             __android_log_print(ANDROID_LOG_INFO, "hakuX-diag",
                 "display_loop: resumed, running=%d", runstate_is_running());
         }
+        if (g_android_flush_requested) {
+            g_android_flush_requested = false;
+            qemu_mutex_lock_main_loop();
+            bql_lock();
+            bdrv_flush_all();
+            bql_unlock();
+            qemu_mutex_unlock_main_loop();
+            __android_log_print(ANDROID_LOG_INFO, "hakuX",
+                                "deferred bdrv_flush_all completed");
+        }
         if (g_android_paused || sdl2_console[0].hidden) {
             qemu_mutex_lock_main_loop();
             bql_lock();
@@ -1534,6 +1548,10 @@ void xemu_android_display_loop(void)
         assert(glGetError() == GL_NO_ERROR);
 #endif
     }
+
+    /* Signal that the display loop has exited so the exit path can
+     * safely drain RCU before the process is killed. */
+    g_android_display_loop_exited = true;
 }
 
 void xemu_android_pause_emulation(void)
@@ -1551,6 +1569,20 @@ void xemu_android_request_exit(void)
     shutdown_action = SHUTDOWN_ACTION_POWEROFF;
     qemu_system_shutdown_request(SHUTDOWN_CAUSE_HOST_UI);
     g_android_should_quit = true;
+
+    /* Wait for the display loop to exit so QEMU threads wind down
+     * before the Java side kills the process.  Without this, the
+     * detached call_rcu_thread can SIGSEGV walking stale reader
+     * pointers from threads that died during process teardown. */
+    for (int i = 0; i < 200 && !g_android_display_loop_exited; i++) {
+        usleep(5000); /* 5 ms, up to 1 s total */
+    }
+
+    if (g_android_display_loop_exited) {
+        /* Drain pending RCU callbacks so call_rcu_thread reaches a
+         * quiescent state before the process is killed. */
+        drain_call_rcu();
+    }
 }
 #endif
 
@@ -1923,14 +1955,72 @@ void sdl2_gl_refresh(DisplayChangeListener *dcl)
     android_log_gl_error("refresh-get-fb");
     if ((g_android_frame_counter % 120) == 0) {
         __android_log_print(ANDROID_LOG_INFO, "hakuX",
-                            "refresh frame=%llu tex=%u flip=%d surface=%p size=%dx%d runstate=%d",
+                            "refresh frame=%llu tex=%u flip=%d surface=%p size=%dx%d rs=%d(%s)",
                             (unsigned long long)g_android_frame_counter,
                             (unsigned)tex,
                             flip_required ? 1 : 0,
                             (void *)scon->surface,
                             scon->surface ? surface_width(scon->surface) : 0,
                             scon->surface ? surface_height(scon->surface) : 0,
-                            (int)runstate_get());
+                            (int)runstate_get(),
+                            runstate_is_running() ? "running" : "stopped");
+
+        /* Detect stall: same frame for 4 seconds */
+        static uint64_t last_stall_check_frame = 0;
+        static int stall_same_count = 0;
+        extern NV2AState *g_nv2a;
+        if (g_android_frame_counter == last_stall_check_frame + 120) {
+            /* No new GPU frames in ~2 seconds (120 display refreshes at 60fps) */
+            stall_same_count++;
+            if (stall_same_count >= 2 && g_nv2a) {
+                __android_log_print(ANDROID_LOG_WARN, "hakuX-watchdog",
+                    "STALL: frames=%llu running=%d "
+                    "halt=%d kick=%d "
+                    "flip=%d nop=%d ctx=%d "
+                    "flip_active=%d vblank_defer=%d "
+                    "get=0x%x put=0x%x "
+                    "pfifo_halt=%d fifo_access=%d",
+                    (unsigned long long)g_android_frame_counter,
+                    runstate_is_running(),
+                    qatomic_read(&g_nv2a->pfifo.halt),
+                    g_nv2a->pfifo.fifo_kick,
+                    qatomic_read(&g_nv2a->pgraph.waiting_for_flip),
+                    qatomic_read(&g_nv2a->pgraph.waiting_for_nop),
+                    qatomic_read(&g_nv2a->pgraph.waiting_for_context_switch),
+                    g_nv2a->flip_active,
+                    qatomic_read(&g_nv2a->vblank_deferred),
+                    g_nv2a->pfifo.regs[NV_PFIFO_CACHE1_DMA_GET],
+                    g_nv2a->pfifo.regs[NV_PFIFO_CACHE1_DMA_PUT],
+                    qatomic_read(&g_nv2a->pfifo.halt),
+                    (qatomic_read(&g_nv2a->pgraph.regs_[NV_PGRAPH_FIFO]) &
+                     NV_PGRAPH_FIFO_ACCESS) ? 1 : 0);
+
+                /*
+                 * If waiting_for_nop is set, PFIFO is stalled waiting for
+                 * the CPU to acknowledge a PGRAPH error interrupt.  The CPU
+                 * may be stuck in the inner execution loop with IF=0, unable
+                 * to deliver the interrupt — and the heartbeat can't run
+                 * because it's in the same thread.
+                 *
+                 * Force the CPU out of the inner loop by setting exit_request.
+                 * This lets the heartbeat run, which can force IF=1 and
+                 * deliver the pending interrupt.
+                 */
+                if (qatomic_read(&g_nv2a->pgraph.waiting_for_nop)) {
+                    CPUState *cpu = first_cpu;
+                    if (cpu) {
+                        qatomic_set(&cpu->exit_request, 1);
+                        __android_log_print(ANDROID_LOG_WARN, "hakuX-watchdog",
+                            "NOP stall: forced exit_request on CPU");
+                    }
+                }
+
+                stall_same_count = 0;
+            }
+        } else {
+            stall_same_count = 0;
+        }
+        last_stall_check_frame = g_android_frame_counter;
     }
 #endif
     if (tex == 0) {
@@ -2006,8 +2096,22 @@ void sdl2_gl_refresh(DisplayChangeListener *dcl)
     android_log_gl_error("refresh-swap");
 #endif
 
-#ifndef __ANDROID__
-    /* VGA update for dirty-region tracking (not needed on Android NV2A path) */
+#ifdef __ANDROID__
+    /* In simple VBLANK mode, call graphic_hw_update every refresh
+     * like x1_box does — this fires the PCRTC interrupt from
+     * nv2a_vga_gfx_update at the display refresh rate. */
+    {
+        extern bool nv2a_get_simple_vblank(void);
+        if (nv2a_get_simple_vblank()) {
+            qemu_mutex_lock_main_loop();
+            bql_lock();
+            graphic_hw_update(scon->dcl.con);
+            bql_unlock();
+            qemu_mutex_unlock_main_loop();
+        }
+    }
+#else
+    /* VGA update for dirty-region tracking */
     qemu_mutex_lock_main_loop();
     bql_lock();
     graphic_hw_update(scon->dcl.con);

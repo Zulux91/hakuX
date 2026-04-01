@@ -632,6 +632,139 @@ bool x86_cpu_tlb_fill(CPUState *cs, vaddr addr, int size,
         return true;
     }
 
+#ifdef __ANDROID__
+    /*
+     * Xbox NULL pointer retry.  When a page fault hits page 0 (NULL
+     * pointer dereference), it's often a race condition: the GPU or
+     * another thread hasn't written a pointer yet.  Instead of
+     * immediately crashing, yield the CPU briefly and retry the TB.
+     * The pointer-loading instruction re-reads memory — if the GPU
+     * has written the value, the retry succeeds.
+     *
+     * Limited to a few retries per fault site to prevent infinite loops
+     * on genuine NULL pointer bugs.
+     */
+    if ((addr & TARGET_PAGE_MASK) == 0 &&
+        err.exception_index == EXCP0E_PAGE) {
+        static uint32_t retry_eip = 0;
+        static int retry_count = 0;
+
+        if ((uint32_t)env->eip != retry_eip) {
+            /* New fault site — reset counter */
+            retry_eip = (uint32_t)env->eip;
+            retry_count = 0;
+        }
+
+        retry_count++;
+
+        {
+            extern int __android_log_print(int, const char*, const char*, ...);
+            if (retry_count <= 5 || (retry_count % 100 == 0)) {
+                __android_log_print(5, "hakuX-crash",
+                    "NULL FAULT RETRY #%d: %s addr=0x%lx EIP=0x%lx "
+                    "EAX=0x%x ECX=0x%x",
+                    retry_count,
+                    access_type == MMU_DATA_STORE ? "WRITE" :
+                    access_type == MMU_DATA_LOAD ? "READ" : "EXEC",
+                    (unsigned long)addr, (unsigned long)env->eip,
+                    (uint32_t)env->regs[R_EAX],
+                    (uint32_t)env->regs[R_ECX]);
+            }
+        }
+
+        /* Dump extended context on first fault for diagnosis */
+        if (retry_count == 1) {
+            extern int __android_log_print(int, const char*, const char*, ...);
+            extern uint8_t *xemu_get_xbox_ram_ptr(void);
+            uint32_t eip = (uint32_t)env->eip;
+            uint8_t *ram = xemu_get_xbox_ram_ptr();
+
+            __android_log_print(5, "hakuX-crash",
+                "ALL REGS: EAX=%08x EBX=%08x ECX=%08x EDX=%08x "
+                "ESI=%08x EDI=%08x EBP=%08x ESP=%08x",
+                (uint32_t)env->regs[R_EAX], (uint32_t)env->regs[R_EBX],
+                (uint32_t)env->regs[R_ECX], (uint32_t)env->regs[R_EDX],
+                (uint32_t)env->regs[R_ESI], (uint32_t)env->regs[R_EDI],
+                (uint32_t)env->regs[R_EBP], (uint32_t)env->regs[R_ESP]);
+
+            if (ram && eip >= 0x80 && (eip & 0x0FFFFFFF) < 64*1024*1024 - 128) {
+                /* Dump 128 bytes: 64 before + 64 after faulting EIP */
+                uint32_t phys = (eip - 0x40) & 0x0FFFFFFF;
+                uint8_t *p = ram + phys;
+                char hex1[400], hex2[400];
+                int pos;
+
+                /* First 64 bytes (EIP-64 to EIP) */
+                pos = 0;
+                for (int i = 0; i < 64 && pos < 390; i++)
+                    pos += snprintf(hex1+pos, 400-pos, "%02x ", p[i]);
+                __android_log_print(5, "hakuX-crash",
+                    "CODE[eip-64]: %s", hex1);
+
+                /* Next 64 bytes (EIP to EIP+64) */
+                pos = 0;
+                for (int i = 64; i < 128 && pos < 390; i++)
+                    pos += snprintf(hex2+pos, 400-pos, "%02x ", p[i]);
+                __android_log_print(5, "hakuX-crash",
+                    "CODE[eip+0]:  %s", hex2);
+
+                /* Scan backwards for CALL instructions (e8 xx xx xx xx)
+                 * to find what function was called before the fault */
+                for (int scan = 60; scan >= 5; scan--) {
+                    if (p[scan] == 0xe8) {
+                        /* Potential CALL rel32 */
+                        int32_t rel = (int32_t)(p[scan+1] |
+                                     (p[scan+2] << 8) |
+                                     (p[scan+3] << 16) |
+                                     (p[scan+4] << 24));
+                        uint32_t call_addr = (eip - 0x40 + scan);
+                        uint32_t target = call_addr + 5 + rel;
+                        __android_log_print(5, "hakuX-crash",
+                            "CALL at 0x%x → target 0x%x (rel=0x%x)",
+                            call_addr, target, rel);
+
+                        /* Dump first 64 bytes of call target */
+                        uint32_t tgt_phys = target & 0x0FFFFFFF;
+                        if (tgt_phys < 64*1024*1024 - 64) {
+                            uint8_t *t = ram + tgt_phys;
+                            char thex[200];
+                            pos = 0;
+                            for (int j = 0; j < 48 && pos < 190; j++)
+                                pos += snprintf(thex+pos, 200-pos,
+                                               "%02x ", t[j]);
+                            __android_log_print(5, "hakuX-crash",
+                                "TARGET 0x%x code: %s", target, thex);
+                        }
+                    }
+                }
+
+                /* Dump guest stack (try to walk it via EBP chain) */
+                uint32_t ebp = (uint32_t)env->regs[R_EBP];
+                uint32_t esp = (uint32_t)env->regs[R_ESP];
+                __android_log_print(5, "hakuX-crash",
+                    "STACK walk (ESP=0x%x EBP=0x%x):", esp, ebp);
+                /* Try to read stack if it's in low physical RAM */
+                for (int frame = 0; frame < 8; frame++) {
+                    uint32_t bp_phys = ebp & 0x0FFFFFFF;
+                    if (bp_phys >= 64*1024*1024 - 8 || bp_phys < 0x1000)
+                        break;
+                    uint32_t *fp = (uint32_t *)(ram + bp_phys);
+                    uint32_t saved_ebp = fp[0];
+                    uint32_t ret_addr = fp[1];
+                    __android_log_print(5, "hakuX-crash",
+                        "  frame %d: EBP=0x%x ret=0x%x",
+                        frame, ebp, ret_addr);
+                    if (saved_ebp <= ebp || saved_ebp == 0)
+                        break;
+                    ebp = saved_ebp;
+                }
+            }
+        }
+        retry_eip = 0;
+        retry_count = 0;
+    }
+#endif
+
     if (probe) {
         /* This will be used if recursing for stage2 translation. */
         env->error_code = err.error_code;

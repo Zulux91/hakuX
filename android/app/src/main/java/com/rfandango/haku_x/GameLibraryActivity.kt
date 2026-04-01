@@ -64,6 +64,7 @@ class GameLibraryActivity : AppCompatActivity() {
   private lateinit var emptyText: TextView
   private lateinit var gamesListContainer: LinearLayout
   private lateinit var gamesGridContainer: LinearLayout
+  private lateinit var btnBootDashboard: MaterialButton
   private lateinit var btnSettings: ImageButton
   private lateinit var viewModeToggle: MaterialButtonToggleGroup
   private lateinit var switchBoxArtLookup: MaterialSwitch
@@ -92,6 +93,7 @@ class GameLibraryActivity : AppCompatActivity() {
     emptyText = findViewById(R.id.library_empty_text)
     gamesListContainer = findViewById(R.id.library_games_container)
     gamesGridContainer = findViewById(R.id.library_games_grid_container)
+    btnBootDashboard = findViewById(R.id.btn_boot_dashboard)
     btnSettings = findViewById(R.id.btn_library_settings)
     viewModeToggle = findViewById(R.id.library_view_mode_toggle)
     switchBoxArtLookup = findViewById(R.id.switch_box_art_lookup)
@@ -104,6 +106,13 @@ class GameLibraryActivity : AppCompatActivity() {
     viewModeToggle.check(if (useCoverGrid) R.id.btn_view_grid else R.id.btn_view_list)
     syncDisplayModeUi()
 
+    btnBootDashboard.setOnClickListener {
+      if (isConvertingIso) {
+        Toast.makeText(this, getString(R.string.library_convert_busy), Toast.LENGTH_SHORT).show()
+        return@setOnClickListener
+      }
+      launchDashboard()
+    }
     btnSettings.setOnClickListener {
       startActivity(Intent(this, SettingsIndexActivity::class.java))
     }
@@ -220,6 +229,7 @@ class GameLibraryActivity : AppCompatActivity() {
       pathText.text = getString(R.string.library_game_path, game.relativePath)
 
       item.setOnClickListener { launchGame(game) }
+      item.setOnLongClickListener { showGameContextMenu(game); true }
       gamesListContainer.addView(item)
     }
   }
@@ -260,6 +270,7 @@ class GameLibraryActivity : AppCompatActivity() {
       nameText.text = game.title
       sizeText.text = getString(R.string.library_game_size, formatSize(game.sizeBytes))
       item.setOnClickListener { launchGame(game) }
+      item.setOnLongClickListener { showGameContextMenu(game); true }
       bindCoverArt(coverImage, game)
     }
 
@@ -766,7 +777,35 @@ class GameLibraryActivity : AppCompatActivity() {
     return "$stem.xiso.iso"
   }
 
+  private fun showGameContextMenu(game: GameEntry) {
+    val hasOverrides = PerGameSettingsManager.hasOverrides(this, game.relativePath)
+    val options = mutableListOf(getString(R.string.library_per_game_settings_option))
+    if (hasOverrides) {
+      options.add(getString(R.string.per_game_settings_revert))
+    }
+    com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+      .setTitle(game.title)
+      .setItems(options.toTypedArray()) { _, which ->
+        when (which) {
+          0 -> startActivity(
+            android.content.Intent(this, SettingsIndexActivity::class.java)
+              .putExtra(SettingsIndexActivity.EXTRA_PER_GAME, true)
+              .putExtra(SettingsIndexActivity.EXTRA_GAME_TITLE, game.title)
+              .putExtra(SettingsIndexActivity.EXTRA_GAME_RELATIVE_PATH, game.relativePath)
+          )
+          1 -> {
+            PerGameSettingsManager.clearOverrides(this, game.relativePath)
+            android.widget.Toast.makeText(this,
+              R.string.per_game_settings_cleared,
+              android.widget.Toast.LENGTH_SHORT).show()
+          }
+        }
+      }
+      .show()
+  }
+
   private fun launchGame(game: GameEntry) {
+    currentGameRelativePath = game.relativePath
     val TAG = "hakuX-xiso"
     Log.i(TAG, "launchGame: path=${game.relativePath} uri=${game.uri} size=${game.sizeBytes}")
     // If this is a .xiso.iso file, verify integrity before launching
@@ -831,13 +870,24 @@ class GameLibraryActivity : AppCompatActivity() {
     }
   }
 
+  private var currentGameRelativePath: String? = null
+
   private fun launchGameDirectly(uri: Uri) {
     persistUriPermission(uri)
-    prefs.edit()
+    val editor = prefs.edit()
+
+    // Apply per-game settings overrides if available
+    PerGameSettingsManager.applyRuntimeOverridesToEditor(
+      context = this,
+      editor = editor,
+      relativePath = currentGameRelativePath,
+    )
+
+    editor
       .putString("dvdUri", uri.toString())
       .remove("dvdPath")
       .putBoolean("skip_game_picker", false)
-      .apply()
+      .commit()
 
     startActivity(Intent(this, MainActivity::class.java))
     finish()
@@ -1080,6 +1130,67 @@ class GameLibraryActivity : AppCompatActivity() {
       return name
     }
     return uri.toString()
+  }
+
+  // ── Dashboard Boot ──────────────────────────────────────────────────
+
+  private fun launchDashboard() {
+    if (!hasAccessibleCoreFiles()) {
+      Toast.makeText(this, getString(R.string.library_boot_dashboard_failed), Toast.LENGTH_LONG).show()
+      return
+    }
+
+    resolveConfiguredLocalHddFile()?.let { hddFile ->
+      runCatching { XboxInsigniaHelper.inspectDashboard(hddFile) }
+        .getOrNull()
+        ?.let { dashboardStatus ->
+          if (!dashboardStatus.looksRetailDashboardInstalled) {
+            val messageRes = if (dashboardStatus.hasAnyRetailDashboardFiles) {
+              R.string.library_boot_dashboard_incomplete_retail
+            } else {
+              R.string.library_boot_dashboard_missing_retail
+            }
+            Toast.makeText(this, getString(messageRes), Toast.LENGTH_LONG).show()
+            return
+          }
+        }
+    }
+
+    val launchEditor = prefs.edit()
+    PerGameSettingsManager.applyRuntimeOverridesToEditor(
+      context = this,
+      editor = launchEditor,
+      relativePath = null,
+    )
+    launchEditor
+      .remove("dvdUri")
+      .remove("dvdPath")
+      .putBoolean("skip_game_picker", false)
+      .commit()
+
+    startActivity(Intent(this, MainActivity::class.java))
+    finish()
+  }
+
+  private fun hasAccessibleCoreFiles(): Boolean {
+    return isConfiguredFileAccessible("mcpxPath", "mcpxUri") &&
+      isConfiguredFileAccessible("flashPath", "flashUri") &&
+      isConfiguredFileAccessible("hddPath", "hddUri")
+  }
+
+  private fun isConfiguredFileAccessible(pathKey: String, uriKey: String): Boolean {
+    val localPath = prefs.getString(pathKey, null)
+    if (!localPath.isNullOrBlank() && File(localPath).isFile) {
+      return true
+    }
+    val uri = prefs.getString(uriKey, null)?.let(Uri::parse)
+    return uri != null && hasPersistedReadPermission(uri)
+  }
+
+  private fun resolveConfiguredLocalHddFile(): File? {
+    val path = prefs.getString("hddPath", null) ?: return null
+    val file = File(path)
+    return file.takeIf { it.isFile }
   }
 
   private fun dp(value: Int): Int {

@@ -1,34 +1,180 @@
 package com.rfandango.haku_x
 
+import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
+import android.provider.OpenableColumns
+import android.text.format.Formatter
 import android.view.View
+import android.widget.ArrayAdapter
+import android.widget.AutoCompleteTextView
+import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.documentfile.provider.DocumentFile
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.materialswitch.MaterialSwitch
-import android.util.Log
-import android.widget.ArrayAdapter
-import android.widget.AutoCompleteTextView
 import com.google.android.material.textfield.TextInputLayout
+import android.util.Log
+import java.io.BufferedInputStream
+import java.io.BufferedOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
 import java.io.RandomAccessFile
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.zip.Deflater
+import java.util.zip.ZipEntry
+import java.util.zip.ZipInputStream
+import java.util.zip.ZipOutputStream
 
 class SettingsActivity : AppCompatActivity() {
   private val prefs by lazy { getSharedPreferences("x1box_prefs", MODE_PRIVATE) }
+
+  // Per-game mode state
+  private var isPerGameMode = false
+  private var gameRelativePath: String? = null
+  private val gameOverrides = mutableMapOf<String, String?>()
+  private val overrideColor = 0xFF4CAF50.toInt()
+  private val mutedColor: Int get() = resources.getColor(R.color.xemu_text_muted, theme)
+
+  /** Read bool, per-game override first */
+  private fun pgBool(key: String, def: Boolean): Boolean {
+    if (isPerGameMode) gameOverrides[key]?.let { return it == "true" }
+    return prefs.getBoolean(key, def)
+  }
+  /** Read int, per-game override first */
+  private fun pgInt(key: String, def: Int): Int {
+    if (isPerGameMode) gameOverrides[key]?.let { return it.toIntOrNull() ?: def }
+    return prefs.getInt(key, def)
+  }
+  /** Read string, per-game override first */
+  private fun pgStr(key: String, def: String): String {
+    if (isPerGameMode) gameOverrides[key]?.let { return it }
+    return prefs.getString(key, def) ?: def
+  }
+  // Global defaults for boolean settings (must match what native code uses)
+  private val boolDefaults = mapOf(
+    "fp_safe" to true, "fp_jit" to true, "unlock_framerate" to true,
+    "fast_fences" to false, "draw_reorder" to false, "draw_merge" to false,
+    "async_compile" to false, "frame_skip" to false,
+    "simple_vblank" to false,
+    "use_dsp" to false
+  )
+  private val intDefaults = mapOf(
+    "surface_scale" to 1, "submit_frames" to 3, "tier1_threshold" to 64
+  )
+  private val strDefaults = mapOf(
+    "renderer" to "vulkan", "filtering" to "nearest", "aspect_ratio" to "auto"
+  )
+
+  /** Write setting. In per-game mode, stores override only if different from global. */
+  private fun pgPutBool(key: String, v: Boolean) {
+    if (isPerGameMode) {
+      val globalVal = prefs.getBoolean(key, boolDefaults[key] ?: false)
+      if (v == globalVal) gameOverrides.remove(key)
+      else gameOverrides[key] = v.toString()
+    } else {
+      prefs.edit().putBoolean(key, v).apply()
+    }
+  }
+  private fun pgPutInt(key: String, v: Int) {
+    if (isPerGameMode) {
+      val globalVal = prefs.getInt(key, intDefaults[key] ?: 0)
+      if (v == globalVal) gameOverrides.remove(key)
+      else gameOverrides[key] = v.toString()
+    } else {
+      prefs.edit().putInt(key, v).apply()
+    }
+  }
+  private fun pgPutStr(key: String, v: String) {
+    if (isPerGameMode) {
+      val globalVal = prefs.getString(key, strDefaults[key] ?: "") ?: ""
+      if (v == globalVal) gameOverrides.remove(key)
+      else gameOverrides[key] = v
+    } else {
+      prefs.edit().putString(key, v).apply()
+    }
+  }
+
+  /** Apply or remove highlight on a view based on per-game override state. */
+  private fun updateHighlight(key: String, vararg views: View) {
+    if (!isPerGameMode) return
+    val isOverridden = gameOverrides.containsKey(key)
+    val dp = resources.displayMetrics.density
+    for (v in views) {
+      when (v) {
+        is com.google.android.material.materialswitch.MaterialSwitch -> {
+          v.setTextColor(if (isOverridden) overrideColor else mutedColor)
+          v.setTypeface(null, if (isOverridden) android.graphics.Typeface.BOLD else android.graphics.Typeface.NORMAL)
+        }
+        is MaterialButton -> {
+          v.setTextColor(if (isOverridden) overrideColor else mutedColor)
+          v.strokeColor = android.content.res.ColorStateList.valueOf(
+            if (isOverridden) overrideColor else mutedColor)
+          v.strokeWidth = if (isOverridden) (2 * dp).toInt() else (1 * dp).toInt()
+        }
+      }
+      // For buttons inside group wrappers, highlight the title label
+      // (first plain TextView in the group). Skip for switches — their
+      // text IS the label and is already colored above.
+      if (v is MaterialButton) {
+        val parent = v.parent as? android.view.ViewGroup ?: continue
+        for (j in 0 until parent.childCount) {
+          val child = parent.getChildAt(j)
+          if (child is TextView &&
+              child !is android.widget.Button &&
+              child !is com.google.android.material.materialswitch.MaterialSwitch) {
+            child.setTextColor(if (isOverridden) overrideColor else mutedColor)
+            child.setTypeface(null, if (isOverridden) android.graphics.Typeface.BOLD else android.graphics.Typeface.NORMAL)
+            break
+          }
+        }
+      }
+    }
+  }
+
+  /** Convenience alias for initial setup */
+  private fun highlightIfOverridden(key: String, vararg views: View) = updateHighlight(key, *views)
 
   private data class EepromLanguageOption(val value: XboxEepromEditor.Language, val labelRes: Int)
   private data class EepromVideoOption(val value: XboxEepromEditor.VideoStandard, val labelRes: Int)
   private data class EepromAspectRatioOption(val value: XboxEepromEditor.AspectRatio, val labelRes: Int)
   private data class EepromRefreshRateOption(val value: XboxEepromEditor.RefreshRate, val labelRes: Int)
+
+  private data class DashboardImportPlan(
+    val hddFile: File,
+    val workingDir: File,
+    val sourceDir: File,
+    val backupDir: File,
+    val summary: String,
+    val bootNote: String?,
+    val bootAliasCreated: Boolean,
+    val retailBootReady: Boolean,
+  )
+
+  private data class DashboardBootPreparation(
+    val note: String?,
+    val aliasCreated: Boolean,
+    val retailBootReady: Boolean,
+  )
+
+  private data class InsigniaStatusSnapshot(
+    val hasLocalHdd: Boolean,
+    val hasEeprom: Boolean,
+    val dashboardStatus: XboxInsigniaHelper.DashboardStatus?,
+    val dashboardError: String?,
+    val setupAssistantName: String?,
+    val setupAssistantReady: Boolean,
+  )
 
   private val eepromLanguageOptions = listOf(
     EepromLanguageOption(XboxEepromEditor.Language.ENGLISH, R.string.settings_eeprom_language_english),
@@ -78,6 +224,21 @@ class SettingsActivity : AppCompatActivity() {
   private var eepromEditable = false
   private var eepromMissing = false
   private var eepromError = false
+
+  private var isInitializingHdd = false
+  private var isImportingDashboard = false
+  private var isPreparingInsignia = false
+
+  private lateinit var tvInsigniaStatus: TextView
+  private lateinit var tvHddToolsStatus: TextView
+  private lateinit var switchNetworkEnable: MaterialSwitch
+  private lateinit var btnInsigniaGuide: MaterialButton
+  private lateinit var btnInsigniaSignUp: MaterialButton
+  private lateinit var btnPrepareInsignia: MaterialButton
+  private lateinit var btnRegisterInsignia: MaterialButton
+  private lateinit var btnDashboardImportZip: MaterialButton
+  private lateinit var btnDashboardImportFolder: MaterialButton
+  private lateinit var btnInitializeRetailHdd: MaterialButton
 
   private lateinit var driverStatusText: TextView
   private lateinit var gpuNotSupportedText: TextView
@@ -129,6 +290,11 @@ class SettingsActivity : AppCompatActivity() {
       }
     }
 
+  private val pickLogDir =
+    registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+      if (uri != null) dumpLogsToDir(uri)
+    }
+
   private val pickGamesFolder =
     registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
       if (uri != null) {
@@ -142,9 +308,55 @@ class SettingsActivity : AppCompatActivity() {
       }
     }
 
+  private val pickDashboardZip =
+    registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
+      uri ?: return@registerForActivityResult
+      persistUriPermission(uri)
+      if (!isZipSelection(uri)) {
+        Toast.makeText(this, R.string.settings_dashboard_import_pick_zip_error, Toast.LENGTH_LONG).show()
+        return@registerForActivityResult
+      }
+      prepareDashboardImportFromZip(uri)
+    }
+
+  private val pickDashboardFolder =
+    registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri: Uri? ->
+      uri ?: return@registerForActivityResult
+      persistUriPermission(uri)
+      prepareDashboardImportFromFolder(uri)
+    }
+
+  private val pickInsigniaSetupAssistant =
+    registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
+      uri ?: return@registerForActivityResult
+      persistUriPermission(uri)
+
+      val name = getFileName(uri)
+        ?: uri.lastPathSegment
+        ?: getString(R.string.settings_insignia_setup_source_unknown)
+      prefs.edit()
+        .putString(PREF_INSIGNIA_SETUP_URI, uri.toString())
+        .putString(PREF_INSIGNIA_SETUP_NAME, name)
+        .apply()
+
+      refreshInsigniaStatus()
+      launchInsigniaSetupAssistant(uri)
+    }
+
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     setContentView(R.layout.activity_settings)
+
+    // Per-game mode init
+    isPerGameMode = intent.getBooleanExtra(SettingsIndexActivity.EXTRA_PER_GAME, false)
+    gameRelativePath = intent.getStringExtra(SettingsIndexActivity.EXTRA_GAME_RELATIVE_PATH)
+    if (isPerGameMode && gameRelativePath != null) {
+      val saved = PerGameSettingsManager.loadOverrides(this, gameRelativePath!!)
+      gameOverrides.putAll(saved.mapValues { it.value })
+      val title = intent.getStringExtra(SettingsIndexActivity.EXTRA_GAME_TITLE)
+        ?: gameRelativePath!!.substringAfterLast('/')
+      findViewById<android.widget.TextView>(R.id.settings_header_title)?.text = title
+    }
 
     driverStatusText = findViewById(R.id.settings_gpu_driver_status)
     gpuNotSupportedText = findViewById(R.id.settings_gpu_not_supported)
@@ -219,98 +431,75 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     val switchUnlockFps = findViewById<MaterialSwitch>(R.id.switch_unlock_framerate)
-    switchUnlockFps.isChecked = prefs.getBoolean("unlock_framerate", true)
+    switchUnlockFps.isChecked = pgBool("unlock_framerate", true)
     switchUnlockFps.setOnCheckedChangeListener { _, checked ->
-      prefs.edit().putBoolean("unlock_framerate", checked).apply()
+      pgPutBool("unlock_framerate", checked)
+      updateHighlight("unlock_framerate", switchUnlockFps)
     }
+    highlightIfOverridden("unlock_framerate", switchUnlockFps)
 
     val switchFpSafe = findViewById<MaterialSwitch>(R.id.switch_fp_safe)
-    try {
-      switchFpSafe.isChecked = nativeGetFpSafe()
-    } catch (_: Throwable) {
-      switchFpSafe.isChecked = prefs.getBoolean("fp_safe", true)
-    }
+    switchFpSafe.isChecked = pgBool("fp_safe", true)
     switchFpSafe.setOnCheckedChangeListener { _, checked ->
-      prefs.edit().putBoolean("fp_safe", checked).apply()
-      try { nativeSetFpSafe(checked) } catch (_: Throwable) {}
+      pgPutBool("fp_safe", checked)
+      if (!isPerGameMode) { try { nativeSetFpSafe(checked) } catch (_: Throwable) {} }
+      updateHighlight("fp_safe", switchFpSafe)
     }
+    highlightIfOverridden("fp_safe", switchFpSafe)
 
     val switchFpJit = findViewById<MaterialSwitch>(R.id.switch_fp_jit)
-    try {
-      switchFpJit.isChecked = nativeGetFpJit()
-    } catch (_: Throwable) {
-      switchFpJit.isChecked = prefs.getBoolean("fp_jit", true)
-    }
+    switchFpJit.isChecked = pgBool("fp_jit", true)
     switchFpJit.setOnCheckedChangeListener { _, checked ->
-      prefs.edit().putBoolean("fp_jit", checked).apply()
-      try { nativeSetFpJit(checked) } catch (_: Throwable) {}
+      pgPutBool("fp_jit", checked)
+      if (!isPerGameMode) { try { nativeSetFpJit(checked) } catch (_: Throwable) {} }
+      updateHighlight("fp_jit", switchFpJit)
     }
+    highlightIfOverridden("fp_jit", switchFpJit)
 
     val switchFastFences = findViewById<MaterialSwitch>(R.id.switch_fast_fences)
-    try {
-      switchFastFences.isChecked = nativeGetFastFences()
-    } catch (_: Throwable) {
-      switchFastFences.isChecked = prefs.getBoolean("fast_fences", false)
-    }
+    switchFastFences.isChecked = pgBool("fast_fences", false)
     switchFastFences.setOnCheckedChangeListener { _, checked ->
-      prefs.edit().putBoolean("fast_fences", checked).apply()
-      try { nativeSetFastFences(checked) } catch (_: Throwable) {}
+      pgPutBool("fast_fences", checked)
+      if (!isPerGameMode) { try { nativeSetFastFences(checked) } catch (_: Throwable) {} }
+      updateHighlight("fast_fences", switchFastFences)
     }
+    highlightIfOverridden("fast_fences", switchFastFences)
 
     val switchDrawReorder = findViewById<MaterialSwitch>(R.id.switch_draw_reorder)
-    try {
-      switchDrawReorder.isChecked = nativeGetDrawReorder()
-    } catch (_: Throwable) {
-      switchDrawReorder.isChecked = prefs.getBoolean("draw_reorder", false)
-    }
+    switchDrawReorder.isChecked = pgBool("draw_reorder", false)
     switchDrawReorder.setOnCheckedChangeListener { _, checked ->
-      prefs.edit().putBoolean("draw_reorder", checked).apply()
-      try { nativeSetDrawReorder(checked) } catch (_: Throwable) {}
+      pgPutBool("draw_reorder", checked)
+      if (!isPerGameMode) { try { nativeSetDrawReorder(checked) } catch (_: Throwable) {} }
+      updateHighlight("draw_reorder", switchDrawReorder)
     }
+    highlightIfOverridden("draw_reorder", switchDrawReorder)
 
     val switchDrawMerge = findViewById<MaterialSwitch>(R.id.switch_draw_merge)
-    try {
-      switchDrawMerge.isChecked = nativeGetDrawMerge()
-    } catch (_: Throwable) {
-      switchDrawMerge.isChecked = prefs.getBoolean("draw_merge", false)
-    }
+    switchDrawMerge.isChecked = pgBool("draw_merge", false)
     switchDrawMerge.setOnCheckedChangeListener { _, checked ->
-      prefs.edit().putBoolean("draw_merge", checked).apply()
-      try { nativeSetDrawMerge(checked) } catch (_: Throwable) {}
+      pgPutBool("draw_merge", checked)
+      if (!isPerGameMode) { try { nativeSetDrawMerge(checked) } catch (_: Throwable) {} }
+      updateHighlight("draw_merge", switchDrawMerge)
     }
-
-    val switchBindless = findViewById<MaterialSwitch>(R.id.switch_bindless_textures)
-    try {
-      switchBindless.isChecked = nativeGetBindlessTextures()
-    } catch (_: Throwable) {
-      switchBindless.isChecked = prefs.getBoolean("bindless_textures", false)
-    }
-    switchBindless.setOnCheckedChangeListener { _, checked ->
-      prefs.edit().putBoolean("bindless_textures", checked).apply()
-      try { nativeSetBindlessTextures(checked) } catch (_: Throwable) {}
-    }
+    highlightIfOverridden("draw_merge", switchDrawMerge)
 
     val switchAsyncCompile = findViewById<MaterialSwitch>(R.id.switch_async_compile)
-    try {
-      switchAsyncCompile.isChecked = nativeGetAsyncCompile()
-    } catch (_: Throwable) {
-      switchAsyncCompile.isChecked = prefs.getBoolean("async_compile", false)
-    }
+    switchAsyncCompile.isChecked = pgBool("async_compile", false)
     switchAsyncCompile.setOnCheckedChangeListener { _, checked ->
-      prefs.edit().putBoolean("async_compile", checked).apply()
-      try { nativeSetAsyncCompile(checked) } catch (_: Throwable) {}
+      pgPutBool("async_compile", checked)
+      if (!isPerGameMode) { try { nativeSetAsyncCompile(checked) } catch (_: Throwable) {} }
+      updateHighlight("async_compile", switchAsyncCompile)
     }
+    highlightIfOverridden("async_compile", switchAsyncCompile)
 
     val switchFrameSkip = findViewById<MaterialSwitch>(R.id.switch_frame_skip)
-    try {
-      switchFrameSkip.isChecked = nativeGetFrameSkip()
-    } catch (_: Throwable) {
-      switchFrameSkip.isChecked = prefs.getBoolean("frame_skip", false)
-    }
+    switchFrameSkip.isChecked = pgBool("frame_skip", false)
     switchFrameSkip.setOnCheckedChangeListener { _, checked ->
-      prefs.edit().putBoolean("frame_skip", checked).apply()
-      try { nativeSetFrameSkip(checked) } catch (_: Throwable) {}
+      pgPutBool("frame_skip", checked)
+      if (!isPerGameMode) { try { nativeSetFrameSkip(checked) } catch (_: Throwable) {} }
+      updateHighlight("frame_skip", switchFrameSkip)
     }
+    highlightIfOverridden("frame_skip", switchFrameSkip)
 
     setupSubmitFramesPicker()
     setupTier1ThresholdPicker()
@@ -320,6 +509,15 @@ class SettingsActivity : AppCompatActivity() {
     switchValidation.setOnCheckedChangeListener { _, checked ->
       prefs.edit().putBoolean("validation_layers", checked).apply()
     }
+
+    val switchSimpleVblank = findViewById<MaterialSwitch>(R.id.switch_simple_vblank)
+    switchSimpleVblank.isChecked = pgBool("simple_vblank", false)
+    switchSimpleVblank.setOnCheckedChangeListener { _, checked ->
+      pgPutBool("simple_vblank", checked)
+      if (!isPerGameMode) { try { nativeSetSimpleVblank(checked) } catch (_: Throwable) {} }
+      updateHighlight("simple_vblank", switchSimpleVblank)
+    }
+    highlightIfOverridden("simple_vblank", switchSimpleVblank)
 
     val switchDebugTools = findViewById<MaterialSwitch>(R.id.switch_debug_tools)
     switchDebugTools.isChecked = prefs.getBoolean("debug_tools", false)
@@ -339,6 +537,10 @@ class SettingsActivity : AppCompatActivity() {
       clearCodeCache()
     }
 
+    findViewById<MaterialButton>(R.id.btn_dump_logs).setOnClickListener {
+      pickLogDir.launch(null)
+    }
+
     findViewById<MaterialButton>(R.id.btn_recreate_hdd).setOnClickListener {
       confirmRecreateHdd()
     }
@@ -352,6 +554,15 @@ class SettingsActivity : AppCompatActivity() {
       }
     }
 
+    // Audio - DSP
+    val switchUseDsp = findViewById<MaterialSwitch>(R.id.switch_use_dsp)
+    switchUseDsp.isChecked = pgBool("use_dsp", false)
+    switchUseDsp.setOnCheckedChangeListener { _, checked ->
+      pgPutBool("use_dsp", checked)
+      updateHighlight("use_dsp", switchUseDsp)
+    }
+    highlightIfOverridden("use_dsp", switchUseDsp)
+
     setupRendererPicker()
     setupResolutionScale()
     setupFilteringPicker()
@@ -363,12 +574,37 @@ class SettingsActivity : AppCompatActivity() {
       applyEepromEdits()
     }
 
+    // Xbox dashboard management sections
+    tvInsigniaStatus = findViewById(R.id.tv_insignia_status)
+    tvHddToolsStatus = findViewById(R.id.tv_hdd_tools_status)
+    switchNetworkEnable = findViewById(R.id.switch_online_enable)
+    btnInsigniaGuide = findViewById(R.id.btn_insignia_guide)
+    btnInsigniaSignUp = findViewById(R.id.btn_insignia_sign_up)
+    btnPrepareInsignia = findViewById(R.id.btn_insignia_prepare)
+    btnRegisterInsignia = findViewById(R.id.btn_insignia_register)
+    btnDashboardImportZip = findViewById(R.id.btn_dashboard_import_zip)
+    btnDashboardImportFolder = findViewById(R.id.btn_dashboard_import_folder)
+    btnInitializeRetailHdd = findViewById(R.id.btn_hdd_init)
+
+    setupOnlineSection()
+    setupHddToolsSection()
+    setupDashboardImportSection()
+    refreshInsigniaStatus()
+    refreshHddToolsState()
+
     refreshDriverStatus()
 
     // Show only the relevant sections based on the index selection
     val section = intent.getStringExtra("section")
     if (section != null) {
       applySectionFilter(section)
+    }
+  }
+
+  override fun onPause() {
+    super.onPause()
+    if (isPerGameMode && gameRelativePath != null) {
+      PerGameSettingsManager.saveOverrides(this, gameRelativePath!!, gameOverrides)
     }
   }
 
@@ -380,8 +616,12 @@ class SettingsActivity : AppCompatActivity() {
       R.id.section_display,
       R.id.card_gpu_driver,
       R.id.section_env_vars,
+      R.id.section_audio,
       R.id.section_debug,
-      R.id.section_eeprom
+      R.id.section_eeprom,
+      R.id.section_online,
+      R.id.section_hdd_tools,
+      R.id.section_dashboard_import
     )
 
     val (title, visibleSections) = when (section) {
@@ -389,18 +629,41 @@ class SettingsActivity : AppCompatActivity() {
         setOf(R.id.section_games_folder, R.id.section_system_files, R.id.section_hard_disk)
       "graphics" -> getString(R.string.settings_index_graphics) to
         setOf(R.id.section_display, R.id.card_gpu_driver, R.id.section_env_vars)
+      "audio" -> getString(R.string.settings_index_audio) to
+        setOf(R.id.section_audio)
       "debug" -> getString(R.string.settings_index_debug) to
         setOf(R.id.section_debug)
       "eeprom" -> getString(R.string.settings_index_eeprom) to
         setOf(R.id.section_eeprom)
+      "xbox" -> getString(R.string.settings_index_xbox) to
+        setOf(R.id.section_online, R.id.section_hdd_tools, R.id.section_dashboard_import)
       else -> return
     }
 
-    findViewById<android.widget.TextView>(R.id.settings_header_title)?.text = title
+    if (!isPerGameMode) {
+      findViewById<android.widget.TextView>(R.id.settings_header_title)?.text = title
+    }
 
     for (id in allSections) {
       findViewById<View>(id)?.visibility =
         if (id in visibleSections) View.VISIBLE else View.GONE
+    }
+
+    // In per-game mode, hide non-overridable widgets within visible sections
+    if (isPerGameMode) {
+      val hideInPerGame = listOf(
+        R.id.switch_show_fps,
+        R.id.switch_validation_layers,
+        R.id.switch_debug_tools,
+        R.id.group_clear_shader_cache,
+        R.id.group_clear_code_cache,
+        R.id.section_env_vars
+      )
+      for (id in hideInPerGame) {
+        findViewById<View>(id)?.visibility = View.GONE
+      }
+      // Hide entire GPU driver section
+      findViewById<View>(R.id.card_gpu_driver)?.visibility = View.GONE
     }
   }
 
@@ -441,20 +704,20 @@ class SettingsActivity : AppCompatActivity() {
     val btn = findViewById<MaterialButton>(R.id.btn_renderer)
     val labels = arrayOf("Vulkan", "OpenGL ES")
     val keys = arrayOf("vulkan", "opengl")
-    val current = prefs.getString("renderer", "vulkan") ?: "vulkan"
+    val current = pgStr("renderer", "vulkan")
     val idx = keys.indexOf(current).coerceAtLeast(0)
     btn.text = labels[idx]
+    highlightIfOverridden("renderer", btn)
     btn.setOnClickListener {
-      val cur = prefs.getString("renderer", "vulkan") ?: "vulkan"
-      val sel = keys.indexOf(cur).coerceAtLeast(0)
+      val sel = keys.indexOf(pgStr("renderer", "vulkan")).coerceAtLeast(0)
       MaterialAlertDialogBuilder(this)
         .setTitle(R.string.settings_renderer)
         .setSingleChoiceItems(labels, sel) { dialog, which ->
-          prefs.edit().putString("renderer", keys[which]).apply()
+          pgPutStr("renderer", keys[which])
           btn.text = labels[which]
+          updateHighlight("renderer", btn)
           dialog.dismiss()
-          clearAllShaderCaches()
-          Toast.makeText(this, getString(R.string.settings_renderer_restart), Toast.LENGTH_LONG).show()
+          if (!isPerGameMode) clearAllShaderCaches()
         }
         .setNegativeButton(android.R.string.cancel, null)
         .show()
@@ -465,16 +728,18 @@ class SettingsActivity : AppCompatActivity() {
     val btn = findViewById<MaterialButton>(R.id.btn_resolution_scale)
     val labels = arrayOf("1x (Native)", "2x", "3x", "4x")
     val values = intArrayOf(1, 2, 3, 4)
-    val current = prefs.getInt("surface_scale", 1)
+    val current = pgInt("surface_scale", 1)
     val idx = values.indexOf(current).coerceAtLeast(0)
     btn.text = labels[idx]
+    highlightIfOverridden("surface_scale", btn)
     btn.setOnClickListener {
-      val sel = values.indexOf(prefs.getInt("surface_scale", 1)).coerceAtLeast(0)
+      val sel = values.indexOf(pgInt("surface_scale", 1)).coerceAtLeast(0)
       MaterialAlertDialogBuilder(this)
         .setTitle(R.string.settings_resolution_scale)
         .setSingleChoiceItems(labels, sel) { dialog, which ->
-          prefs.edit().putInt("surface_scale", values[which]).apply()
+          pgPutInt("surface_scale", values[which])
           btn.text = labels[which]
+          updateHighlight("surface_scale", btn)
           dialog.dismiss()
         }
         .setNegativeButton(android.R.string.cancel, null)
@@ -486,17 +751,18 @@ class SettingsActivity : AppCompatActivity() {
     val btn = findViewById<MaterialButton>(R.id.btn_filtering)
     val labels = arrayOf("Nearest", "Linear")
     val keys = arrayOf("nearest", "linear")
-    val current = prefs.getString("filtering", "nearest") ?: "nearest"
+    val current = pgStr("filtering", "nearest")
     val idx = keys.indexOf(current).coerceAtLeast(0)
     btn.text = labels[idx]
+    highlightIfOverridden("filtering", btn)
     btn.setOnClickListener {
-      val cur = prefs.getString("filtering", "nearest") ?: "nearest"
-      val sel = keys.indexOf(cur).coerceAtLeast(0)
+      val sel = keys.indexOf(pgStr("filtering", "nearest")).coerceAtLeast(0)
       MaterialAlertDialogBuilder(this)
         .setTitle(R.string.settings_filtering)
         .setSingleChoiceItems(labels, sel) { dialog, which ->
-          prefs.edit().putString("filtering", keys[which]).apply()
+          pgPutStr("filtering", keys[which])
           btn.text = labels[which]
+          updateHighlight("filtering", btn)
           dialog.dismiss()
         }
         .setNegativeButton(android.R.string.cancel, null)
@@ -508,17 +774,18 @@ class SettingsActivity : AppCompatActivity() {
     val btn = findViewById<MaterialButton>(R.id.btn_aspect_ratio)
     val labels = arrayOf("Auto", "Native (4:3)", "16:9", "Fit")
     val keys = arrayOf("auto", "native", "16:9", "fit")
-    val current = prefs.getString("aspect_ratio", "auto") ?: "auto"
+    val current = pgStr("aspect_ratio", "auto")
     val idx = keys.indexOf(current).coerceAtLeast(0)
     btn.text = labels[idx]
+    highlightIfOverridden("aspect_ratio", btn)
     btn.setOnClickListener {
-      val cur = prefs.getString("aspect_ratio", "auto") ?: "auto"
-      val sel = keys.indexOf(cur).coerceAtLeast(0)
+      val sel = keys.indexOf(pgStr("aspect_ratio", "auto")).coerceAtLeast(0)
       MaterialAlertDialogBuilder(this)
         .setTitle(R.string.settings_aspect_ratio)
         .setSingleChoiceItems(labels, sel) { dialog, which ->
-          prefs.edit().putString("aspect_ratio", keys[which]).apply()
+          pgPutStr("aspect_ratio", keys[which])
           btn.text = labels[which]
+          updateHighlight("aspect_ratio", btn)
           dialog.dismiss()
         }
         .setNegativeButton(android.R.string.cancel, null)
@@ -532,7 +799,7 @@ class SettingsActivity : AppCompatActivity() {
     editText.setText(prefs.getString("env_vars", "") ?: "")
     btnSave.setOnClickListener {
       prefs.edit().putString("env_vars", editText.text.toString()).apply()
-      Toast.makeText(this, "Saved. Restart app to apply.", Toast.LENGTH_SHORT).show()
+      Toast.makeText(this, "Applied on next game launch", Toast.LENGTH_SHORT).show()
     }
   }
 
@@ -540,22 +807,19 @@ class SettingsActivity : AppCompatActivity() {
     val btn = findViewById<MaterialButton>(R.id.btn_submit_frames)
     val labels = arrayOf("Single (1)", "Double (2)", "Triple (3)")
     val values = intArrayOf(1, 2, 3)
-    var current = try { nativeGetSubmitFrames() } catch (_: Throwable) {
-      prefs.getInt("submit_frames", 3)
-    }
+    val current = pgInt("submit_frames", 3)
     val idx = values.indexOf(current).coerceAtLeast(0)
     btn.text = labels[idx]
+    highlightIfOverridden("submit_frames", btn)
     btn.setOnClickListener {
-      val cur = try { nativeGetSubmitFrames() } catch (_: Throwable) {
-        prefs.getInt("submit_frames", 3)
-      }
-      val sel = values.indexOf(cur).coerceAtLeast(0)
+      val sel = values.indexOf(pgInt("submit_frames", 3)).coerceAtLeast(0)
       MaterialAlertDialogBuilder(this)
         .setTitle(R.string.settings_submit_frames)
         .setSingleChoiceItems(labels, sel) { dialog, which ->
-          prefs.edit().putInt("submit_frames", values[which]).apply()
-          try { nativeSetSubmitFrames(values[which]) } catch (_: Throwable) {}
+          pgPutInt("submit_frames", values[which])
+          if (!isPerGameMode) { try { nativeSetSubmitFrames(values[which]) } catch (_: Throwable) {} }
           btn.text = labels[which]
+          updateHighlight("submit_frames", btn)
           dialog.dismiss()
         }
         .setNegativeButton(android.R.string.cancel, null)
@@ -565,20 +829,22 @@ class SettingsActivity : AppCompatActivity() {
 
   private fun setupTier1ThresholdPicker() {
     val btn = findViewById<MaterialButton>(R.id.btn_tier1_threshold)
-    val labels = arrayOf("Aggressive (16)", "Early (32)", "Default (64)", "Conservative (128)", "Lazy (256)")
-    val values = intArrayOf(16, 32, 64, 128, 256)
-    val saved = prefs.getInt("tier1_threshold", 64)
-    val idx = values.indexOf(saved).let { if (it < 0) 2 else it }
+    val labels = arrayOf("Disabled", "Aggressive (16)", "Early (32)", "Default (64)", "Conservative (128)", "Lazy (256)")
+    val values = intArrayOf(0, 16, 32, 64, 128, 256)
+    val saved = pgInt("tier1_threshold", 64)
+    val idx = values.indexOf(saved).let { if (it < 0) 3 else it }
     btn.text = labels[idx]
+    highlightIfOverridden("tier1_threshold", btn)
     btn.setOnClickListener {
-      val cur = prefs.getInt("tier1_threshold", 64)
-      val sel = values.indexOf(cur).let { if (it < 0) 2 else it }
+      val cur = pgInt("tier1_threshold", 64)
+      val sel = values.indexOf(cur).let { if (it < 0) 3 else it }
       MaterialAlertDialogBuilder(this)
         .setTitle(R.string.settings_tier1_threshold)
         .setSingleChoiceItems(labels, sel) { dialog, which ->
-          prefs.edit().putInt("tier1_threshold", values[which]).apply()
-          try { nativeSetTier1Threshold(values[which]) } catch (_: Throwable) {}
+          pgPutInt("tier1_threshold", values[which])
+          if (!isPerGameMode) { try { nativeSetTier1Threshold(values[which]) } catch (_: Throwable) {} }
           btn.text = labels[which]
+          updateHighlight("tier1_threshold", btn)
           dialog.dismiss()
         }
         .setNegativeButton(android.R.string.cancel, null)
@@ -676,6 +942,44 @@ class SettingsActivity : AppCompatActivity() {
     if (inf.exists()) return internalPath
     Log.w(tag, "  no HDD image found at any candidate path")
     return null
+  }
+
+  private fun dumpLogsToDir(treeUri: android.net.Uri) {
+    Toast.makeText(this, getString(R.string.settings_dump_logs_saving), Toast.LENGTH_SHORT).show()
+    Thread {
+      try {
+        val pid = android.os.Process.myPid()
+        val timestamp = java.text.SimpleDateFormat(
+          "yyyy-MM-dd_HHmmss", java.util.Locale.US
+        ).format(java.util.Date())
+        val fileName = "hakux_log_${timestamp}.txt"
+
+        val dir = androidx.documentfile.provider.DocumentFile.fromTreeUri(this, treeUri)
+        val file = dir?.createFile("text/plain", fileName)
+        if (file == null) {
+          runOnUiThread { Toast.makeText(this, getString(R.string.settings_dump_logs_failed), Toast.LENGTH_LONG).show() }
+          return@Thread
+        }
+
+        val process = Runtime.getRuntime().exec(arrayOf("logcat", "-d", "--pid=$pid"))
+        val output = contentResolver.openOutputStream(file.uri)
+        if (output == null) {
+          runOnUiThread { Toast.makeText(this, getString(R.string.settings_dump_logs_failed), Toast.LENGTH_LONG).show() }
+          return@Thread
+        }
+
+        process.inputStream.use { input -> output.use { out -> input.copyTo(out) } }
+        process.waitFor()
+
+        runOnUiThread {
+          Toast.makeText(this, getString(R.string.settings_dump_logs_success, fileName), Toast.LENGTH_LONG).show()
+        }
+      } catch (e: Exception) {
+        runOnUiThread {
+          Toast.makeText(this, getString(R.string.settings_dump_logs_failed), Toast.LENGTH_LONG).show()
+        }
+      }
+    }.start()
   }
 
   private fun clearCodeCache() {
@@ -867,7 +1171,7 @@ class SettingsActivity : AppCompatActivity() {
     val uriStr = prefs.getString("gamesFolderUri", null)
     val label = if (uriStr != null) {
       val uri = Uri.parse(uriStr)
-      androidx.documentfile.provider.DocumentFile.fromTreeUri(this, uri)?.name ?: uri.toString()
+      DocumentFile.fromTreeUri(this, uri)?.name ?: uri.toString()
     } else {
       getString(R.string.settings_file_not_set)
     }
@@ -1081,8 +1385,6 @@ class SettingsActivity : AppCompatActivity() {
   private external fun nativeSetDrawReorder(enable: Boolean)
   private external fun nativeGetDrawMerge(): Boolean
   private external fun nativeSetDrawMerge(enable: Boolean)
-  private external fun nativeGetBindlessTextures(): Boolean
-  private external fun nativeSetBindlessTextures(enable: Boolean)
   private external fun nativeGetAsyncCompile(): Boolean
   private external fun nativeSetAsyncCompile(enable: Boolean)
   private external fun nativeGetFrameSkip(): Boolean
@@ -1091,12 +1393,18 @@ class SettingsActivity : AppCompatActivity() {
   private external fun nativeSetSubmitFrames(count: Int)
   private external fun nativeGetTier1Threshold(): Int
   private external fun nativeSetTier1Threshold(value: Int)
+  private external fun nativeGetSimpleVblank(): Boolean
+  private external fun nativeSetSimpleVblank(enable: Boolean)
 
   companion object {
     private const val FATX_SUPERBLOCK_SIZE = 4096
     private const val FATX_MAGIC = 0x46415458 // "FATX" read as big-endian int
     private const val QCOW2_MAGIC = 0x514649fb.toInt() // "QFI\xfb"
     private const val WIPE_SIZE = 1 * 1024 * 1024L
+    private const val PREF_INSIGNIA_SETUP_URI = "setting_insignia_setup_assistant_uri"
+    private const val PREF_INSIGNIA_SETUP_NAME = "setting_insignia_setup_assistant_name"
+    private const val INSIGNIA_SIGN_UP_URL = "https://insignia.live/"
+    private const val INSIGNIA_GUIDE_URL = "https://insignia.live/guide/connect"
 
     private val STANDARD_CACHE_OFFSETS = longArrayOf(
       0x00080000L, // X
@@ -1270,5 +1578,1148 @@ class SettingsActivity : AppCompatActivity() {
     for (i in 0 until remaining) sb.put(0xFF.toByte())
     raf.seek(physOffset)
     raf.write(sb.array())
+  }
+
+  // ── Resolve HDD file (wraps resolveHddPath) ────────────────────────────
+
+  private fun resolveHddFile(): File? {
+    val path = resolveHddPath() ?: return null
+    val file = File(path)
+    return file.takeIf { it.isFile }
+  }
+
+  // ── Online / Insignia ──────────────────────────────────────────────────
+
+  private fun setupOnlineSection() {
+    switchNetworkEnable.isChecked = prefs.getBoolean("setting_network_enable", false)
+    switchNetworkEnable.setOnCheckedChangeListener { _, checked ->
+      prefs.edit().putBoolean("setting_network_enable", checked).apply()
+    }
+    btnInsigniaGuide.setOnClickListener {
+      openExternalLink(INSIGNIA_GUIDE_URL)
+    }
+    btnInsigniaSignUp.setOnClickListener {
+      openExternalLink(INSIGNIA_SIGN_UP_URL)
+    }
+    btnPrepareInsignia.setOnClickListener {
+      prepareInsigniaNetworking()
+    }
+    btnRegisterInsignia.setOnClickListener {
+      showInsigniaSetupAssistantPrompt()
+    }
+  }
+
+  private fun refreshInsigniaStatus() {
+    val hddFile = resolveHddFile()
+    val eepromFile = resolveEepromFile()
+    val setupUri = resolveInsigniaSetupAssistantUri()
+    val setupName = resolveInsigniaSetupAssistantName()
+    val setupReady = setupUri != null && hasPersistedReadPermission(setupUri)
+
+    tvInsigniaStatus.text = getString(R.string.settings_insignia_status_checking)
+
+    Thread {
+      var dashboardStatus: XboxInsigniaHelper.DashboardStatus? = null
+      var dashboardError: String? = null
+
+      if (hddFile != null) {
+        try {
+          dashboardStatus = XboxInsigniaHelper.inspectDashboard(hddFile)
+        } catch (error: Exception) {
+          dashboardError = error.message ?: error.javaClass.simpleName
+        }
+      }
+
+      val snapshot = InsigniaStatusSnapshot(
+        hasLocalHdd = hddFile != null,
+        hasEeprom = eepromFile.isFile,
+        dashboardStatus = dashboardStatus,
+        dashboardError = dashboardError,
+        setupAssistantName = setupName,
+        setupAssistantReady = setupReady,
+      )
+
+      runOnUiThread {
+        if (isFinishing || isDestroyed) {
+          return@runOnUiThread
+        }
+        tvInsigniaStatus.text = buildInsigniaStatusText(snapshot)
+      }
+    }.start()
+  }
+
+  private fun buildInsigniaStatusText(snapshot: InsigniaStatusSnapshot): String {
+    val dashboardLine = when {
+      !snapshot.hasLocalHdd ->
+        getString(R.string.settings_insignia_status_dashboard_unavailable)
+      snapshot.dashboardError != null ->
+        getString(R.string.settings_insignia_status_dashboard_error, snapshot.dashboardError)
+      snapshot.dashboardStatus?.looksRetailDashboardInstalled == true ->
+        getString(R.string.settings_insignia_status_dashboard_ready)
+      snapshot.dashboardStatus?.hasAnyRetailDashboardFiles == true ->
+        getString(R.string.settings_insignia_status_dashboard_partial)
+      else ->
+        getString(R.string.settings_insignia_status_dashboard_missing)
+    }
+
+    val eepromLine = if (snapshot.hasEeprom) {
+      getString(R.string.settings_insignia_status_eeprom_ready)
+    } else {
+      getString(R.string.settings_insignia_status_eeprom_missing)
+    }
+
+    val setupLine = when {
+      snapshot.setupAssistantReady ->
+        getString(
+          R.string.settings_insignia_status_setup_selected,
+          snapshot.setupAssistantName ?: getString(R.string.settings_insignia_setup_source_unknown),
+        )
+      snapshot.setupAssistantName != null ->
+        getString(R.string.settings_insignia_status_setup_inaccessible, snapshot.setupAssistantName)
+      else ->
+        getString(R.string.settings_insignia_status_setup_missing)
+    }
+
+    return listOf(
+      getString(
+        R.string.settings_insignia_status_dns,
+        XboxInsigniaHelper.PRIMARY_DNS,
+        XboxInsigniaHelper.SECONDARY_DNS,
+      ),
+      dashboardLine,
+      eepromLine,
+      setupLine,
+    ).joinToString("\n")
+  }
+
+  private fun prepareInsigniaNetworking() {
+    if (isPreparingInsignia || isInitializingHdd || isImportingDashboard) {
+      return
+    }
+
+    val hddFile = resolveHddFile()
+    if (hddFile == null) {
+      Toast.makeText(this, R.string.settings_insignia_prepare_no_hdd, Toast.LENGTH_LONG).show()
+      refreshInsigniaStatus()
+      return
+    }
+
+    val eepromFile = resolveEepromFile()
+    if (!eepromFile.isFile) {
+      Toast.makeText(this, R.string.settings_insignia_prepare_no_eeprom, Toast.LENGTH_LONG).show()
+      refreshInsigniaStatus()
+      return
+    }
+
+    switchNetworkEnable.isChecked = true
+    prefs.edit().putBoolean("setting_network_enable", true).apply()
+
+    isPreparingInsignia = true
+    Toast.makeText(this, R.string.settings_insignia_prepare_working, Toast.LENGTH_SHORT).show()
+
+    Thread {
+      val result = runCatching {
+        XboxInsigniaHelper.applyConfigSectorDns(hddFile)
+        XboxEepromEditor.applyXboxLiveDns(eepromFile, XboxInsigniaHelper.primaryDnsBytes())
+        runCatching { XboxInsigniaHelper.inspectDashboard(hddFile) }.getOrNull()
+      }
+
+      runOnUiThread {
+        isPreparingInsignia = false
+        if (isFinishing || isDestroyed) {
+          return@runOnUiThread
+        }
+
+        result.onSuccess { dashboardStatus ->
+          refreshInsigniaStatus()
+          val messageRes = if (dashboardStatus?.looksRetailDashboardInstalled == false) {
+            R.string.settings_insignia_prepare_success_missing_dashboard
+          } else {
+            R.string.settings_insignia_prepare_success
+          }
+          Toast.makeText(this, messageRes, Toast.LENGTH_LONG).show()
+        }.onFailure { error ->
+          Toast.makeText(
+            this,
+            getString(
+              R.string.settings_insignia_prepare_failed,
+              error.message ?: error.javaClass.simpleName,
+            ),
+            Toast.LENGTH_LONG,
+          ).show()
+          refreshInsigniaStatus()
+        }
+      }
+    }.start()
+  }
+
+  private fun showInsigniaSetupAssistantPrompt() {
+    val setupUri = resolveInsigniaSetupAssistantUri()
+    if (setupUri == null || !hasPersistedReadPermission(setupUri)) {
+      if (setupUri != null) {
+        prefs.edit()
+          .remove(PREF_INSIGNIA_SETUP_URI)
+          .remove(PREF_INSIGNIA_SETUP_NAME)
+          .apply()
+      }
+      refreshInsigniaStatus()
+      Toast.makeText(this, R.string.settings_insignia_register_pick_prompt, Toast.LENGTH_SHORT).show()
+      pickInsigniaSetupAssistant.launch(arrayOf("*/*"))
+      return
+    }
+
+    val setupName = resolveInsigniaSetupAssistantName()
+      ?: getString(R.string.settings_insignia_setup_source_unknown)
+    MaterialAlertDialogBuilder(this)
+      .setTitle(R.string.settings_insignia_register_title)
+      .setMessage(getString(R.string.settings_insignia_register_message, setupName))
+      .setPositiveButton(R.string.settings_insignia_register_boot_action) { _, _ ->
+        launchInsigniaSetupAssistant(setupUri)
+      }
+      .setNeutralButton(R.string.settings_insignia_register_choose_new) { _, _ ->
+        pickInsigniaSetupAssistant.launch(arrayOf("*/*"))
+      }
+      .setNegativeButton(android.R.string.cancel, null)
+      .show()
+  }
+
+  private fun launchInsigniaSetupAssistant(uri: Uri) {
+    persistUriPermission(uri)
+    switchNetworkEnable.isChecked = true
+    val launchEditor = prefs.edit()
+    PerGameSettingsManager.applyRuntimeOverridesToEditor(
+      context = this,
+      editor = launchEditor,
+      relativePath = null,
+    )
+    launchEditor
+      .putBoolean("setting_network_enable", true)
+      .putString("dvdUri", uri.toString())
+      .remove("dvdPath")
+      .putBoolean("skip_game_picker", false)
+      .commit()
+
+    startActivity(Intent(this, MainActivity::class.java))
+  }
+
+  private fun resolveInsigniaSetupAssistantUri(): Uri? {
+    return prefs.getString(PREF_INSIGNIA_SETUP_URI, null)?.let(Uri::parse)
+  }
+
+  private fun resolveInsigniaSetupAssistantName(): String? {
+    return prefs.getString(PREF_INSIGNIA_SETUP_NAME, null)
+  }
+
+  private fun openExternalLink(url: String) {
+    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+      addCategory(Intent.CATEGORY_BROWSABLE)
+    }
+    try {
+      startActivity(intent)
+    } catch (_: Exception) {
+      Toast.makeText(this, getString(R.string.library_about_open_failed), Toast.LENGTH_SHORT).show()
+    }
+  }
+
+  // ── HDD Tools ──────────────────────────────────────────────────────────
+
+  private fun setupHddToolsSection() {
+    btnInitializeRetailHdd.setOnClickListener {
+      showInitializeHddLayoutPicker()
+    }
+  }
+
+  private fun refreshHddToolsState() {
+    val hddFile = resolveHddFile()
+    if (hddFile == null) {
+      tvHddToolsStatus.text = getString(R.string.settings_hdd_status_missing)
+      btnInitializeRetailHdd.isEnabled = false
+      return
+    }
+
+    val inspection = runCatching { XboxHddFormatter.inspect(hddFile) }.getOrElse { error ->
+      tvHddToolsStatus.text = getString(
+        R.string.settings_hdd_status_error,
+        error.message ?: hddFile.absolutePath,
+      )
+      btnInitializeRetailHdd.isEnabled = false
+      return
+    }
+
+    val sizeLabel = Formatter.formatFileSize(this, inspection.totalBytes)
+    val formatLabel = getString(hddFormatLabelRes(inspection.format))
+    tvHddToolsStatus.text = when {
+      inspection.totalBytes < XboxHddFormatter.MINIMUM_RETAIL_DISK_BYTES -> getString(
+        R.string.settings_hdd_status_too_small,
+        formatLabel,
+        sizeLabel,
+        hddFile.absolutePath,
+      )
+      else -> getString(
+        R.string.settings_hdd_status_ready,
+        formatLabel,
+        sizeLabel,
+        hddFile.absolutePath,
+      )
+    }
+    btnInitializeRetailHdd.isEnabled = !isInitializingHdd && XboxHddFormatter.supportedLayouts(inspection).isNotEmpty()
+  }
+
+  private fun showInitializeHddLayoutPicker() {
+    val hddFile = resolveHddFile()
+    if (hddFile == null) {
+      refreshHddToolsState()
+      return
+    }
+
+    val inspection = runCatching { XboxHddFormatter.inspect(hddFile) }.getOrElse { error ->
+      tvHddToolsStatus.text = getString(
+        R.string.settings_hdd_status_error,
+        error.message ?: hddFile.absolutePath,
+      )
+      btnInitializeRetailHdd.isEnabled = false
+      return
+    }
+
+    if (!inspection.supportsRetailFormat) {
+      refreshHddToolsState()
+      return
+    }
+
+    val supportedLayouts = XboxHddFormatter.supportedLayouts(inspection).toSet()
+    if (supportedLayouts.isEmpty()) {
+      refreshHddToolsState()
+      return
+    }
+
+    val allLayouts = XboxHddFormatter.Layout.entries
+    val labels = allLayouts
+      .map { layout ->
+        val label = getString(hddLayoutLabelRes(layout))
+        val availability = XboxHddFormatter.availabilityFor(inspection, layout)
+        if (availability == XboxHddFormatter.LayoutAvailability.AVAILABLE) {
+          label
+        } else {
+          getString(
+            R.string.settings_hdd_layout_unavailable_format,
+            label,
+            getString(hddLayoutUnavailableReasonRes(availability)),
+          )
+        }
+      }
+      .toTypedArray()
+    val dp = resources.displayMetrics.density
+    lateinit var hddDialog: androidx.appcompat.app.AlertDialog
+
+    val buttonList = LinearLayout(this).apply {
+      orientation = LinearLayout.VERTICAL
+      setPadding((20 * dp).toInt(), (12 * dp).toInt(), (20 * dp).toInt(), 0)
+      labels.forEachIndexed { i, label ->
+        addView(MaterialButton(this@SettingsActivity, null,
+          com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
+          text = label
+          isAllCaps = false
+          layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+          ).also { lp -> lp.bottomMargin = (8 * dp).toInt() }
+          setOnClickListener {
+            hddDialog.dismiss()
+            val layout = allLayouts[i]
+            val availability = XboxHddFormatter.availabilityFor(inspection, layout)
+            if (availability == XboxHddFormatter.LayoutAvailability.AVAILABLE) {
+              showInitializeHddConfirmation(hddFile, layout)
+            } else {
+              MaterialAlertDialogBuilder(this@SettingsActivity)
+                .setTitle(R.string.settings_hdd_layout_unavailable_title)
+                .setMessage(getString(hddLayoutUnavailableReasonRes(availability)))
+                .setPositiveButton(android.R.string.ok, null)
+                .show()
+            }
+          }
+        })
+      }
+    }
+
+    hddDialog = MaterialAlertDialogBuilder(this)
+      .setTitle(R.string.settings_hdd_layout_pick_title)
+      .setView(buttonList)
+      .setNegativeButton(android.R.string.cancel, null)
+      .create()
+    hddDialog.show()
+  }
+
+  private fun showInitializeHddConfirmation(
+    hddFile: File,
+    layout: XboxHddFormatter.Layout,
+  ) {
+    MaterialAlertDialogBuilder(this)
+      .setTitle(R.string.settings_hdd_init_title)
+      .setMessage(
+        getString(
+          R.string.settings_hdd_init_message,
+          getString(hddLayoutLabelRes(layout)),
+          getString(hddLayoutSummaryRes(layout)),
+          hddFile.absolutePath,
+        )
+      )
+      .setPositiveButton(R.string.settings_hdd_init_action) { _, _ ->
+        initializeHddLayout(hddFile, layout)
+      }
+      .setNegativeButton(android.R.string.cancel, null)
+      .show()
+  }
+
+  private fun initializeHddLayout(
+    hddFile: File,
+    layout: XboxHddFormatter.Layout,
+  ) {
+    if (isInitializingHdd) {
+      return
+    }
+
+    isInitializingHdd = true
+    btnInitializeRetailHdd.isEnabled = false
+    Toast.makeText(this, R.string.settings_hdd_init_working, Toast.LENGTH_SHORT).show()
+
+    Thread {
+      val result = runCatching {
+        XboxHddFormatter.initialize(hddFile, layout)
+      }
+
+      runOnUiThread {
+        isInitializingHdd = false
+        refreshHddToolsState()
+        refreshInsigniaStatus()
+        result.onSuccess {
+          Toast.makeText(this, R.string.settings_hdd_init_success, Toast.LENGTH_SHORT).show()
+        }.onFailure { error ->
+          Toast.makeText(
+            this,
+            getString(
+              R.string.settings_hdd_init_failed,
+              error.message ?: hddFile.absolutePath,
+            ),
+            Toast.LENGTH_LONG,
+          ).show()
+        }
+      }
+    }.start()
+  }
+
+  private fun hddFormatLabelRes(format: XboxHddFormatter.ImageFormat): Int {
+    return when (format) {
+      XboxHddFormatter.ImageFormat.RAW -> R.string.settings_hdd_format_raw
+      XboxHddFormatter.ImageFormat.QCOW2 -> R.string.settings_hdd_format_qcow2
+    }
+  }
+
+  private fun hddLayoutLabelRes(layout: XboxHddFormatter.Layout): Int {
+    return when (layout) {
+      XboxHddFormatter.Layout.RETAIL -> R.string.settings_hdd_layout_retail
+      XboxHddFormatter.Layout.RETAIL_PLUS_F -> R.string.settings_hdd_layout_retail_f
+      XboxHddFormatter.Layout.RETAIL_PLUS_F_G -> R.string.settings_hdd_layout_retail_f_g
+    }
+  }
+
+  private fun hddLayoutSummaryRes(layout: XboxHddFormatter.Layout): Int {
+    return when (layout) {
+      XboxHddFormatter.Layout.RETAIL -> R.string.settings_hdd_layout_summary_retail
+      XboxHddFormatter.Layout.RETAIL_PLUS_F -> R.string.settings_hdd_layout_summary_retail_f
+      XboxHddFormatter.Layout.RETAIL_PLUS_F_G -> R.string.settings_hdd_layout_summary_retail_f_g
+    }
+  }
+
+  private fun hddLayoutUnavailableReasonRes(
+    availability: XboxHddFormatter.LayoutAvailability,
+  ): Int {
+    return when (availability) {
+      XboxHddFormatter.LayoutAvailability.AVAILABLE ->
+        R.string.settings_hdd_layout_unavailable_not_enough_space
+      XboxHddFormatter.LayoutAvailability.NO_EXTENDED_SPACE ->
+        R.string.settings_hdd_layout_unavailable_no_extended_space
+      XboxHddFormatter.LayoutAvailability.NEEDS_STANDARD_G_BOUNDARY ->
+        R.string.settings_hdd_layout_unavailable_needs_standard_g_boundary
+      XboxHddFormatter.LayoutAvailability.NOT_ENOUGH_SPACE ->
+        R.string.settings_hdd_layout_unavailable_not_enough_space
+    }
+  }
+
+  // ── Dashboard Import ───────────────────────────────────────────────────
+
+  private fun setupDashboardImportSection() {
+    btnDashboardImportZip.setOnClickListener {
+      val hddFile = resolveHddFile()
+      if (hddFile == null) {
+        Toast.makeText(this, R.string.settings_hdd_status_missing, Toast.LENGTH_LONG).show()
+        return@setOnClickListener
+      }
+      if (isImportingDashboard) return@setOnClickListener
+      pickDashboardZip.launch(arrayOf("application/zip", "application/octet-stream"))
+    }
+    btnDashboardImportFolder.setOnClickListener {
+      val hddFile = resolveHddFile()
+      if (hddFile == null) {
+        Toast.makeText(this, R.string.settings_hdd_status_missing, Toast.LENGTH_LONG).show()
+        return@setOnClickListener
+      }
+      if (isImportingDashboard) return@setOnClickListener
+      pickDashboardFolder.launch(null)
+    }
+  }
+
+  private fun setDashboardImportEnabled(enabled: Boolean) {
+    btnDashboardImportZip.isEnabled = enabled
+    btnDashboardImportFolder.isEnabled = enabled
+  }
+
+  private fun showDashboardImportSourcePicker() {
+    val hddFile = resolveHddFile()
+    if (hddFile == null) {
+      Toast.makeText(this, R.string.settings_hdd_status_missing, Toast.LENGTH_LONG).show()
+      return
+    }
+    if (isImportingDashboard) {
+      return
+    }
+
+    val labels = arrayOf(
+      getString(R.string.settings_dashboard_import_source_zip),
+      getString(R.string.settings_dashboard_import_source_folder),
+    )
+    val dp = resources.displayMetrics.density
+    lateinit var importDialog: androidx.appcompat.app.AlertDialog
+
+    val buttonList = LinearLayout(this).apply {
+      orientation = LinearLayout.VERTICAL
+      setPadding((20 * dp).toInt(), (12 * dp).toInt(), (20 * dp).toInt(), 0)
+      labels.forEachIndexed { i, label ->
+        addView(MaterialButton(this@SettingsActivity, null,
+          com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
+          text = label
+          layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+          ).also { lp -> lp.bottomMargin = (8 * dp).toInt() }
+          setOnClickListener {
+            importDialog.dismiss()
+            when (i) {
+              0 -> pickDashboardZip.launch(arrayOf("application/zip", "application/octet-stream"))
+              else -> pickDashboardFolder.launch(null)
+            }
+          }
+        })
+      }
+    }
+
+    importDialog = MaterialAlertDialogBuilder(this)
+      .setTitle(R.string.settings_dashboard_import_source_title)
+      .setView(buttonList)
+      .setNegativeButton(android.R.string.cancel, null)
+      .create()
+    importDialog.show()
+  }
+
+  private fun prepareDashboardImportFromZip(uri: Uri) {
+    val hddFile = resolveHddFile()
+    if (hddFile == null) {
+      Toast.makeText(this, R.string.settings_hdd_status_missing, Toast.LENGTH_LONG).show()
+      return
+    }
+
+    startDashboardImportPreparation(hddFile) { workingDir ->
+      extractDashboardZipToDirectory(uri, workingDir)
+    }
+  }
+
+  private fun prepareDashboardImportFromFolder(uri: Uri) {
+    val hddFile = resolveHddFile()
+    if (hddFile == null) {
+      Toast.makeText(this, R.string.settings_hdd_status_missing, Toast.LENGTH_LONG).show()
+      return
+    }
+
+    startDashboardImportPreparation(hddFile) { workingDir ->
+      copyDashboardTreeToDirectory(uri, workingDir)
+    }
+  }
+
+  private fun startDashboardImportPreparation(
+    hddFile: File,
+    prepareSource: (File) -> File,
+  ) {
+    if (isImportingDashboard) {
+      return
+    }
+
+    isImportingDashboard = true
+    setDashboardImportEnabled(false)
+    Toast.makeText(this, R.string.settings_dashboard_import_preparing, Toast.LENGTH_SHORT).show()
+
+    Thread {
+      var workingDir: File? = null
+      val result = runCatching {
+        workingDir = createDashboardWorkingDirectory()
+        val preparedRoot = prepareSource(workingDir!!)
+        val sourceRoot = normalizeDashboardSourceRoot(preparedRoot)
+        if (!dashboardSourceHasFiles(sourceRoot)) {
+          throw IOException(getString(R.string.settings_dashboard_import_empty))
+        }
+        val importLayoutRoot = buildDashboardImportLayout(sourceRoot, workingDir!!)
+        val bootPreparation = prepareDashboardBootFiles(importLayoutRoot)
+
+        DashboardImportPlan(
+          hddFile = hddFile,
+          workingDir = workingDir!!,
+          sourceDir = importLayoutRoot,
+          backupDir = createDashboardBackupDirectory(),
+          summary = describeDashboardSource(importLayoutRoot),
+          bootNote = bootPreparation.note,
+          bootAliasCreated = bootPreparation.aliasCreated,
+          retailBootReady = bootPreparation.retailBootReady,
+        )
+      }
+
+      runOnUiThread {
+        result.onSuccess { plan ->
+          showDashboardImportConfirmation(plan)
+        }.onFailure { error ->
+          workingDir?.deleteRecursively()
+          isImportingDashboard = false
+          setDashboardImportEnabled(true)
+          Toast.makeText(
+            this,
+            getString(
+              R.string.settings_dashboard_import_failed,
+              error.message ?: getString(R.string.settings_dashboard_import_empty),
+            ),
+            Toast.LENGTH_LONG,
+          ).show()
+        }
+      }
+    }.start()
+  }
+
+  private fun showDashboardImportConfirmation(plan: DashboardImportPlan) {
+    MaterialAlertDialogBuilder(this)
+      .setTitle(R.string.settings_dashboard_import_title)
+      .setMessage(
+        buildString {
+          append(
+            getString(
+              R.string.settings_dashboard_import_message,
+              plan.summary,
+              plan.backupDir.absolutePath,
+            )
+          )
+          if (!plan.bootNote.isNullOrBlank()) {
+            append("\n\n")
+            append(plan.bootNote)
+          }
+        }
+      )
+      .setPositiveButton(R.string.settings_dashboard_import_action) { _, _ ->
+        importDashboard(plan)
+      }
+      .setNegativeButton(android.R.string.cancel) { _, _ ->
+        plan.workingDir.deleteRecursively()
+        isImportingDashboard = false
+        setDashboardImportEnabled(true)
+      }
+      .setOnCancelListener {
+        plan.workingDir.deleteRecursively()
+        isImportingDashboard = false
+        setDashboardImportEnabled(true)
+      }
+      .show()
+  }
+
+  private fun importDashboard(plan: DashboardImportPlan) {
+    Toast.makeText(this, R.string.settings_dashboard_import_working, Toast.LENGTH_SHORT).show()
+
+    Thread {
+      val result = runCatching {
+        XboxDashboardImporter.importDashboard(
+          hddFile = plan.hddFile,
+          sourceRoot = plan.sourceDir,
+          backupRoot = plan.backupDir,
+        )
+      }
+
+      runOnUiThread {
+        plan.workingDir.deleteRecursively()
+        isImportingDashboard = false
+        setDashboardImportEnabled(true)
+        refreshInsigniaStatus()
+        result.onSuccess {
+          val messageRes = when {
+            plan.bootAliasCreated -> R.string.settings_dashboard_import_success_with_alias
+            !plan.retailBootReady -> R.string.settings_dashboard_import_success_without_retail_boot
+            else -> R.string.settings_dashboard_import_success
+          }
+          Toast.makeText(this, getString(messageRes, plan.backupDir.absolutePath), Toast.LENGTH_LONG).show()
+        }.onFailure { error ->
+          Toast.makeText(
+            this,
+            getString(
+              R.string.settings_dashboard_import_failed,
+              error.message ?: plan.hddFile.absolutePath,
+            ),
+            Toast.LENGTH_LONG,
+          ).show()
+        }
+      }
+    }.start()
+  }
+
+  private fun createDashboardWorkingDirectory(): File {
+    val dir = File(cacheDir, "dashboard-import-${System.currentTimeMillis()}")
+    if (!dir.mkdirs()) {
+      throw IOException("Failed to prepare a temporary dashboard import folder.")
+    }
+    return dir
+  }
+
+  private fun createDashboardBackupDirectory(): File {
+    val base = getExternalFilesDir(null) ?: filesDir
+    val root = File(File(base, "x1box"), "dashboard-backups")
+    val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
+    val dir = File(root, "dashboard-$stamp")
+    if (!dir.mkdirs()) {
+      throw IOException("Failed to prepare the dashboard backup folder.")
+    }
+    return dir
+  }
+
+  private fun extractDashboardZipToDirectory(uri: Uri, targetDir: File): File {
+    val canonicalRoot = targetDir.canonicalFile
+    contentResolver.openInputStream(uri)?.use { rawInput ->
+      ZipInputStream(BufferedInputStream(rawInput)).use { zip ->
+        while (true) {
+          val entry = zip.nextEntry ?: break
+          if (entry.name.isBlank()) {
+            continue
+          }
+          val outFile = File(targetDir, entry.name).canonicalFile
+          val rootPath = canonicalRoot.path + File.separator
+          if (outFile.path != canonicalRoot.path && !outFile.path.startsWith(rootPath)) {
+            throw IOException("The selected ZIP contains an invalid path.")
+          }
+          if (entry.isDirectory) {
+            if (!outFile.exists() && !outFile.mkdirs()) {
+              throw IOException("Failed to create ${outFile.name} from the ZIP.")
+            }
+            continue
+          }
+
+          outFile.parentFile?.let { parent ->
+            if (!parent.exists() && !parent.mkdirs()) {
+              throw IOException("Failed to create ${parent.name} from the ZIP.")
+            }
+          }
+          FileOutputStream(outFile).use { output ->
+            zip.copyTo(output)
+          }
+          zip.closeEntry()
+        }
+      }
+    } ?: throw IOException("Failed to open the selected dashboard ZIP.")
+
+    return targetDir
+  }
+
+  private fun copyDashboardTreeToDirectory(uri: Uri, targetDir: File): File {
+    val root = DocumentFile.fromTreeUri(this, uri)
+      ?: throw IOException("Failed to open the selected dashboard folder.")
+    copyDocumentFileRecursively(root, targetDir)
+    return targetDir
+  }
+
+  private fun copyDocumentFileRecursively(source: DocumentFile, target: File) {
+    if (source.isDirectory) {
+      val children = source.listFiles()
+      for (child in children) {
+        val name = child.name ?: continue
+        val childTarget = File(target, name)
+        if (child.isDirectory) {
+          if (!childTarget.exists() && !childTarget.mkdirs()) {
+            throw IOException("Failed to create ${childTarget.name}.")
+          }
+          copyDocumentFileRecursively(child, childTarget)
+        } else if (child.isFile) {
+          childTarget.parentFile?.mkdirs()
+          contentResolver.openInputStream(child.uri)?.use { input ->
+            FileOutputStream(childTarget).use { output ->
+              input.copyTo(output)
+            }
+          } ?: throw IOException("Failed to copy ${child.name}.")
+        }
+      }
+      return
+    }
+
+    if (source.isFile) {
+      contentResolver.openInputStream(source.uri)?.use { input ->
+        FileOutputStream(target).use { output ->
+          input.copyTo(output)
+        }
+      } ?: throw IOException("Failed to copy ${source.name}.")
+    }
+  }
+
+  private fun normalizeDashboardSourceRoot(root: File): File {
+    var current = root
+
+    while (true) {
+      val children = dashboardSourceEntries(current)
+      if (children.size != 1 || !children.first().isDirectory) {
+        break
+      }
+      current = children.first()
+    }
+
+    if (looksLikeDashboardSourceRoot(current)) {
+      return current
+    }
+
+    return findNestedDashboardSourceRoot(current) ?: current
+  }
+
+  private fun buildDashboardImportLayout(sourceRoot: File, workingDir: File): File {
+    val entries = sourceRoot.listFiles()
+      ?.filterNot { shouldSkipDashboardSourceEntry(it.name) }
+      .orEmpty()
+    val layoutRoot = File(workingDir, "dashboard-layout")
+    if (layoutRoot.exists()) {
+      layoutRoot.deleteRecursively()
+    }
+    if (!layoutRoot.mkdirs()) {
+      throw IOException("Failed to prepare the dashboard import layout.")
+    }
+
+    val sourceC = entries.firstOrNull { it.isDirectory && it.name.equals("C", ignoreCase = true) }
+      ?.let(::normalizeDashboardPartitionRoot)
+    val sourceE = entries.firstOrNull { it.isDirectory && it.name.equals("E", ignoreCase = true) }
+      ?.let(::normalizeDashboardPartitionRoot)
+    val rootEntriesForC = if (sourceC == null) entries.filterNot { entry ->
+      entry.isDirectory && (entry.name.equals("C", ignoreCase = true) || entry.name.equals("E", ignoreCase = true))
+    } else {
+      emptyList()
+    }
+
+    sourceC?.let { copyLocalDirectoryContents(it, File(layoutRoot, "C")) }
+    if (rootEntriesForC.isNotEmpty()) {
+      val targetC = File(layoutRoot, "C")
+      for (entry in rootEntriesForC) {
+        copyLocalEntry(entry, File(targetC, entry.name))
+      }
+    }
+
+    sourceE?.let { copyLocalDirectoryContents(it, File(layoutRoot, "E")) }
+
+    return layoutRoot
+  }
+
+  private fun normalizeDashboardPartitionRoot(partitionDir: File): File {
+    if (!partitionDir.isDirectory) {
+      return partitionDir
+    }
+
+    var current = partitionDir
+    while (true) {
+      if (looksLikeDashboardSourceRoot(current)) {
+        return current
+      }
+
+      val children = dashboardSourceEntries(current).filter { it.isDirectory }
+      if (children.size != 1) {
+        break
+      }
+      current = children.first()
+    }
+
+    return findNestedDashboardSourceRoot(current) ?: current
+  }
+
+  private fun copyLocalDirectoryContents(sourceDir: File, targetDir: File) {
+    val children = sourceDir.listFiles().orEmpty()
+    if (!targetDir.exists() && !targetDir.mkdirs()) {
+      throw IOException("Failed to create ${targetDir.name}.")
+    }
+    for (child in children) {
+      if (shouldSkipDashboardSourceEntry(child.name)) {
+        continue
+      }
+      copyLocalEntry(child, File(targetDir, child.name))
+    }
+  }
+
+  private fun copyLocalEntry(source: File, target: File) {
+    if (source.isDirectory) {
+      if (!target.exists() && !target.mkdirs()) {
+        throw IOException("Failed to create ${target.name}.")
+      }
+      for (child in source.listFiles().orEmpty()) {
+        if (shouldSkipDashboardSourceEntry(child.name)) {
+          continue
+        }
+        copyLocalEntry(child, File(target, child.name))
+      }
+      return
+    }
+
+    target.parentFile?.let { parent ->
+      if (!parent.exists() && !parent.mkdirs()) {
+        throw IOException("Failed to create ${parent.name}.")
+      }
+    }
+    source.copyTo(target, overwrite = true)
+  }
+
+  private fun prepareDashboardBootFiles(layoutRoot: File): DashboardBootPreparation {
+    val cDir = File(layoutRoot, "C")
+    if (!cDir.isDirectory || !cDir.exists()) {
+      return DashboardBootPreparation(
+        note = getString(R.string.settings_dashboard_import_boot_missing_note),
+        aliasCreated = false,
+        retailBootReady = false,
+      )
+    }
+
+    val topLevelFiles = cDir.listFiles()
+      ?.filter { it.isFile }
+      .orEmpty()
+    val xboxdash = topLevelFiles.firstOrNull { it.name.equals("xboxdash.xbe", ignoreCase = true) }
+    if (xboxdash != null) {
+      return DashboardBootPreparation(
+        note = null,
+        aliasCreated = false,
+        retailBootReady = true,
+      )
+    }
+
+    val candidate = findDashboardBootCandidate(cDir)
+
+    if (candidate != null) {
+      val aliasFile = File(cDir, "xboxdash.xbe")
+      candidate.copyTo(aliasFile, overwrite = true)
+      val relativePath = candidate.relativeTo(cDir).invariantSeparatorsPath
+      return DashboardBootPreparation(
+        note = getString(R.string.settings_dashboard_import_boot_alias_note, relativePath),
+        aliasCreated = true,
+        retailBootReady = true,
+      )
+    }
+
+    return DashboardBootPreparation(
+      note = getString(R.string.settings_dashboard_import_boot_missing_note),
+      aliasCreated = false,
+      retailBootReady = false,
+    )
+  }
+
+  private fun findDashboardBootCandidate(cDir: File): File? {
+    var bestFile: File? = null
+    var bestScore = Int.MIN_VALUE
+
+    cDir.walkTopDown().forEach { file ->
+      if (!file.isFile || !file.extension.equals("xbe", ignoreCase = true)) {
+        return@forEach
+      }
+
+      val score = scoreDashboardBootCandidate(cDir, file)
+      if (score > bestScore) {
+        bestScore = score
+        bestFile = file
+      }
+    }
+
+    return bestFile
+  }
+
+  private fun scoreDashboardBootCandidate(cDir: File, candidate: File): Int {
+    val relativePath = candidate.relativeTo(cDir).invariantSeparatorsPath.lowercase(Locale.US)
+    val fileName = candidate.name.lowercase(Locale.US)
+    val baseName = candidate.nameWithoutExtension.lowercase(Locale.US)
+    val depth = relativePath.count { it == '/' }
+    var score = 0
+
+    score += when (fileName) {
+      "xboxdash.xbe" -> 12_000
+      "default.xbe" -> 10_000
+      "evoxdash.xbe" -> 9_500
+      "avalaunch.xbe" -> 9_400
+      "unleashx.xbe" -> 9_300
+      "xbmc.xbe" -> 9_200
+      "nexgen.xbe" -> 9_100
+      else -> 0
+    }
+
+    if (baseName.contains("dash")) {
+      score += 800
+    }
+    if (relativePath.contains("/dashboard/") || relativePath.contains("/dash/")) {
+      score += 500
+    }
+    if (relativePath.startsWith("dashboard/") || relativePath.startsWith("dash/")) {
+      score += 400
+    }
+    if (relativePath.contains("/apps/") || relativePath.contains("/games/")) {
+      score -= 1_000
+    }
+    if (baseName.contains("installer") || baseName.contains("uninstall") || baseName.contains("config")) {
+      score -= 2_000
+    }
+
+    score += 300 - (depth * 40)
+    return score
+  }
+
+  private fun looksLikeDashboardSourceRoot(root: File): Boolean {
+    val entries = dashboardSourceEntries(root)
+    if (entries.isEmpty()) {
+      return false
+    }
+
+    val hasPartitionDir = entries.any { entry ->
+      entry.isDirectory &&
+        (entry.name.equals("C", ignoreCase = true) || entry.name.equals("E", ignoreCase = true)) &&
+        dashboardSourceEntries(entry).isNotEmpty()
+    }
+    if (hasPartitionDir) {
+      return true
+    }
+
+    return scoreDashboardSourceRoot(root, root) > 0
+  }
+
+  private fun findNestedDashboardSourceRoot(root: File): File? {
+    var bestDir: File? = null
+    var bestScore = Int.MIN_VALUE
+
+    root.walkTopDown()
+      .maxDepth(8)
+      .forEach { candidate ->
+        if (!candidate.isDirectory || candidate == root) {
+          return@forEach
+        }
+
+        val score = scoreDashboardSourceRoot(root, candidate)
+        if (score > bestScore) {
+          bestScore = score
+          bestDir = candidate
+        }
+      }
+
+    return bestDir?.takeIf { bestScore > 0 }
+  }
+
+  private fun scoreDashboardSourceRoot(searchRoot: File, candidate: File): Int {
+    val entries = dashboardSourceEntries(candidate)
+    if (entries.isEmpty()) {
+      return Int.MIN_VALUE
+    }
+
+    val partitionDirs = entries.filter { entry ->
+      entry.isDirectory &&
+        (entry.name.equals("C", ignoreCase = true) || entry.name.equals("E", ignoreCase = true)) &&
+        dashboardSourceEntries(entry).isNotEmpty()
+    }
+    val directFiles = entries.filter { it.isFile }
+    val directDirs = entries.filter { it.isDirectory }
+
+    var score = 0
+    if (partitionDirs.isNotEmpty()) {
+      score += 10_000
+    }
+    if (directFiles.any { it.name.equals("xboxdash.xbe", ignoreCase = true) }) {
+      score += 9_000
+    }
+    if (directFiles.any { it.name.equals("msdash.xbe", ignoreCase = true) }) {
+      score += 7_000
+    }
+    if (directFiles.any { it.name.equals("xbox.xtf", ignoreCase = true) }) {
+      score += 3_000
+    }
+    if (directDirs.any { it.name.equals("xodash", ignoreCase = true) }) {
+      score += 3_000
+    }
+    if (directDirs.any { it.name.equals("audio", ignoreCase = true) }) {
+      score += 1_500
+    }
+    if (directDirs.any { it.name.equals("fonts", ignoreCase = true) }) {
+      score += 1_500
+    }
+    if (directFiles.any { it.extension.equals("xbe", ignoreCase = true) }) {
+      score += 1_000
+    }
+
+    if (score <= 0) {
+      return score
+    }
+
+    val depth = candidate.relativeTo(searchRoot)
+      .invariantSeparatorsPath
+      .count { it == '/' } + 1
+    return score - (depth * 120)
+  }
+
+  private fun describeDashboardSource(root: File): String {
+    val sourceC = File(root, "C")
+    val sourceE = File(root, "E")
+    val hasC = sourceC.isDirectory && sourceC.walkTopDown().any { it.isFile }
+    val hasE = sourceE.isDirectory && sourceE.walkTopDown().any { it.isFile }
+
+    return when {
+      hasC && hasE -> getString(R.string.settings_dashboard_import_summary_c_e)
+      hasE -> getString(R.string.settings_dashboard_import_summary_e)
+      else -> getString(R.string.settings_dashboard_import_summary_c)
+    }
+  }
+
+  private fun dashboardSourceHasFiles(root: File): Boolean {
+    return looksLikeDashboardSourceRoot(root) || findNestedDashboardSourceRoot(root) != null
+  }
+
+  private fun dashboardSourceEntries(root: File): List<File> {
+    return root.listFiles()
+      ?.filterNot { shouldSkipDashboardSourceEntry(it.name) }
+      .orEmpty()
+  }
+
+  private fun shouldSkipDashboardSourceEntry(name: String): Boolean {
+    return name == ".DS_Store" || name == "__MACOSX"
+  }
+
+  // ── Utility ────────────────────────────────────────────────────────────
+
+  private fun persistUriPermission(uri: Uri) {
+    val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+    try {
+      contentResolver.takePersistableUriPermission(uri, flags)
+    } catch (_: SecurityException) {
+    }
+  }
+
+  private fun hasPersistedReadPermission(uri: Uri): Boolean {
+    return contentResolver.persistedUriPermissions.any { permission ->
+      permission.isReadPermission && permission.uri == uri
+    }
+  }
+
+  private fun getFileName(uri: Uri): String? {
+    return contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+      val col = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+      if (col >= 0 && cursor.moveToFirst()) cursor.getString(col) else null
+    }
+  }
+
+  private fun isZipSelection(uri: Uri): Boolean {
+    val name = getFileName(uri) ?: uri.lastPathSegment ?: return false
+    return isZipSelection(name)
+  }
+
+  private fun isZipSelection(name: String): Boolean {
+    return name.lowercase(Locale.US).endsWith(".zip")
   }
 }
