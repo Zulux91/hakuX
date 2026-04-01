@@ -42,3 +42,5 @@ replay_pid*.log
 *.txt
 .claude/
 CLAUDE.md
+android/gradle.properties
+build_apk.bat
