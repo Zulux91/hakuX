@@ -739,14 +739,16 @@ uint64_t pgraph_read(void *opaque, hwaddr addr, unsigned int size)
     {
         static int pgraph_poll_log = 0;
         CPUState *cpu = first_cpu;
-        if (cpu && pgraph_poll_log < 200) {
+        if (cpu && pgraph_poll_log < 500) {
             CPUX86State *env = &X86_CPU(cpu)->env;
             uint32_t eip = (uint32_t)env->eip;
-            if (eip >= 0x80015000 && eip <= 0x80016000) {
+            bool is_stuck_poll = !(env->eflags & 0x200); /* IF=0 */
+            if (is_stuck_poll || (eip >= 0x80015000 && eip <= 0x80016000)) {
                 extern int __android_log_print(int, const char*, const char*, ...);
                 __android_log_print(3, "hakuX-mmio",
-                    "PGRAPH read: eip=0x%x reg=0x%x val=0x%x",
-                    eip, (uint32_t)addr, (uint32_t)r);
+                    "PGRAPH read: eip=0x%x reg=0x%x val=0x%x IF=%d",
+                    eip, (uint32_t)addr, (uint32_t)r,
+                    !is_stuck_poll);
                 pgraph_poll_log++;
             }
         }
@@ -2992,6 +2994,7 @@ DEF_METHOD_INC(NV097, SET_TRANSFORM_PROGRAM)
     assert(program_load < NV2A_MAX_TRANSFORM_PROGRAM_LENGTH);
     pg->program_data[program_load][slot%4] = parameter;
     pg->program_data_dirty = true;
+    pg->vsh_program_data_gen++;
 
     if (slot % 4 == 3) {
         PG_SET_MASK(NV_PGRAPH_CHEOPS_OFFSET,
@@ -4013,27 +4016,47 @@ DEF_METHOD(NV097, LAUNCH_TRANSFORM_PROGRAM)
 {
     unsigned int program_start = parameter;
     assert(program_start < NV2A_MAX_TRANSFORM_PROGRAM_LENGTH);
-    Nv2aVshProgram program;
-    Nv2aVshParseResult result = nv2a_vsh_parse_program(
-            &program,
-            pg->program_data[program_start],
-            NV2A_MAX_TRANSFORM_PROGRAM_LENGTH - program_start);
-    assert(result == NV2AVPR_SUCCESS);
+
+    /* Invalidate cache when program data has been uploaded */
+    if (pg->vsh_program_cache_gen != pg->vsh_program_data_gen) {
+        for (int i = 0; i < NV2A_MAX_TRANSFORM_PROGRAM_LENGTH; i++) {
+            if (pg->vsh_program_cache_valid[i]) {
+                nv2a_vsh_program_destroy(&pg->vsh_program_cache[i]);
+                pg->vsh_program_cache_valid[i] = false;
+            }
+        }
+        pg->vsh_program_cache_gen = pg->vsh_program_data_gen;
+    }
+
+    /* Use cached parsed program or parse and cache */
+    Nv2aVshProgram *program = &pg->vsh_program_cache[program_start];
+    if (!pg->vsh_program_cache_valid[program_start]) {
+        Nv2aVshParseResult result = nv2a_vsh_parse_program(
+                program,
+                pg->program_data[program_start],
+                NV2A_MAX_TRANSFORM_PROGRAM_LENGTH - program_start);
+        assert(result == NV2AVPR_SUCCESS);
+        pg->vsh_program_cache_valid[program_start] = true;
+        pg->vsh_last_v0_hash[program_start] = 0;
+    }
+
+    /* Skip execution if the input register (v0) hasn't changed since last
+     * run of this same program — the output is deterministic. */
+    const uint32_t *v0 = pg->vertex_state_shader_v0;
+    uint32_t v0_hash = v0[0] ^ v0[1] ^ v0[2] ^ v0[3];
+    if (v0_hash == 0) v0_hash = 1; /* distinguish from initial 0 */
+    if (v0_hash == pg->vsh_last_v0_hash[program_start]) {
+        return;
+    }
+    pg->vsh_last_v0_hash[program_start] = v0_hash;
 
     Nv2aVshCPUXVSSExecutionState state_linkage;
     Nv2aVshExecutionState state = nv2a_vsh_emu_initialize_xss_execution_state(
             &state_linkage, (float*)pg->vsh_constants);
     memcpy(state_linkage.input_regs, pg->vertex_state_shader_v0, sizeof(pg->vertex_state_shader_v0));
 
-    nv2a_vsh_emu_execute_track_context_writes(&state, &program, pg->vsh_constants_dirty);
-    for (int i = 0; i < NV2A_VERTEXSHADER_CONSTANTS; i++) {
-        if (pg->vsh_constants_dirty[i]) {
-            pg->vsh_constants_any_dirty = true;
-            break;
-        }
-    }
-
-    nv2a_vsh_program_destroy(&program);
+    nv2a_vsh_emu_execute(&state, program);
+    pg->vsh_constants_any_dirty = true;
 }
 
 DEF_METHOD(NV097, SET_TRANSFORM_EXECUTION_MODE)
