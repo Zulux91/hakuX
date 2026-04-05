@@ -20,6 +20,7 @@
  */
 
 #include "hw/xbox/nv2a/nv2a_int.h"
+#include "hw/xbox/game-compat.h"
 #include "hw/core/cpu.h"
 #include "target/i386/cpu.h"
 #include "qemu/main-loop.h"

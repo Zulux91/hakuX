@@ -28,6 +28,9 @@
 #include "fpu/softfloat-macros.h"
 #include "helper-tcg.h"
 #include "access.h"
+#ifdef XBOX
+#include "hw/xbox/game-compat.h"
+#endif
 
 /* float macros */
 #if defined(USE_HARD_FPU) && defined(__aarch64__)
@@ -1058,6 +1061,59 @@ void helper_fcomi_ST0_FT0(CPUX86State *env)
     int old_flags = save_exception_flags(env);
     int eflags;
     FloatRelation ret;
+
+#ifdef XBOX
+    /*
+     * Fable: The Lost Chapters — scene graph cycle breaker.
+     *
+     * The game's spatial query linked list can become circular, causing
+     * an infinite matching loop at guest EIP 0xbadc0 (the FCOMIP in the
+     * object equality function). Detect the cycle by tracking ESI (the
+     * current node pointer). If the same node appears 3+ times within
+     * 500 calls, write field_0f = 1 on that node, which triggers the
+     * game's own skip path and breaks the cycle.
+     *
+     * Only active when Fable is detected via XBE title ID.
+     * Cost for non-Fable games: one bool load + predicted-not-taken branch.
+     */
+    if (g_game_quirks.fable_scene_graph_cycle_breaker &&
+        env->eip == 0xbadc0) {
+        static uint32_t seen_esi[64];
+        static int seen_count[64];
+        static int num_seen = 0;
+        static int total_calls = 0;
+        static uint64_t last_reset = 0;
+
+        total_calls++;
+        if (total_calls - last_reset > 500) {
+            num_seen = 0;
+            last_reset = total_calls;
+        }
+
+        uint32_t esi = (uint32_t)env->regs[6];
+
+        int found = -1;
+        for (int i = 0; i < num_seen; i++) {
+            if (seen_esi[i] == esi) {
+                found = i;
+                break;
+            }
+        }
+        if (found >= 0) {
+            seen_count[found]++;
+            if (seen_count[found] >= 3) {
+                cpu_stb_data_ra(env, esi + 0x0f, 1, 0);
+                seen_count[found] = 0;
+                num_seen = 0;
+                last_reset = total_calls;
+            }
+        } else if (num_seen < 64) {
+            seen_esi[num_seen] = esi;
+            seen_count[num_seen] = 1;
+            num_seen++;
+        }
+    }
+#endif
 
     ret = floatx80_compare(ST0, FT0, &env->fp_status);
     eflags = cpu_cc_compute_all(env) & ~(CC_Z | CC_P | CC_C);
