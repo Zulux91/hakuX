@@ -252,6 +252,8 @@ static ssize_t pfifo_run_puller(NV2AState *d, uint32_t method_entry,
         return -1;
     }
 
+    int64_t _puller_t0 = nv2a_clock_ns();
+
     uint32_t *pull0 = &d->pfifo.regs[NV_PFIFO_CACHE1_PULL0];
     uint32_t *pull1 = &d->pfifo.regs[NV_PFIFO_CACHE1_PULL1];
     uint32_t *engine_reg = &d->pfifo.regs[NV_PFIFO_CACHE1_ENGINE];
@@ -337,23 +339,34 @@ static ssize_t pfifo_run_puller(NV2AState *d, uint32_t method_entry,
 #if XEMU_OPT_PFIFO_LOCK_BATCH
 #if XEMU_OPT_LOCKLESS_FAST_DISPATCH
         if (inc && can_fifo_access(d)) {
+            int64_t _meth_t0 = nv2a_clock_ns();
             num_proc = pgraph_method_try_fast(
                 d, subchannel, method, parameter,
                 parameters, num_words_available, max_lookahead_words);
             if (num_proc > 0) {
                 g_nv2a_stats.cpu_working.method_fast_hit += num_proc;
                 g_nv2a_stats.cpu_working.method_count++;
+                g_nv2a_stats.cpu_working.method_exec_ns +=
+                    nv2a_clock_ns() - _meth_t0;
                 goto puller_done;
             }
         }
 #endif
-        qemu_mutex_lock(&d->pgraph.lock);
+        {
+            int64_t _lock_t0 = nv2a_clock_ns();
+            qemu_mutex_lock(&d->pgraph.lock);
+            g_nv2a_stats.cpu_working.puller_lock_ns +=
+                nv2a_clock_ns() - _lock_t0;
+        }
         qemu_mutex_unlock(&d->pfifo.lock);
 
         if (can_fifo_access(d)) {
+            int64_t _meth_t0 = nv2a_clock_ns();
             num_proc =
                 pgraph_method(d, subchannel, method, parameter, parameters,
                               num_words_available, max_lookahead_words, inc);
+            g_nv2a_stats.cpu_working.puller_method_ns +=
+                nv2a_clock_ns() - _meth_t0;
             g_nv2a_stats.cpu_working.method_count++;
             if (!inc && num_proc > 0) {
                 g_nv2a_stats.cpu_working.method_noninc_words += num_proc;
@@ -387,6 +400,8 @@ puller_done:
     if (num_proc > 0) {
         *status |= NV_PFIFO_CACHE1_STATUS_LOW_MARK;
     }
+
+    g_nv2a_stats.cpu_working.puller_total_ns += nv2a_clock_ns() - _puller_t0;
 
     return num_proc;
 }

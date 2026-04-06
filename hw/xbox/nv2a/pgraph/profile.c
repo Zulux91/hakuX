@@ -81,11 +81,17 @@ static void snapshot_phase_timing(void)
     SMOOTH(gpu_total);
     SMOOTH(gpu_render);
     SMOOTH(gpu_nonrender);
+    SMOOTH(gpu_pre_rp);
+    SMOOTH(gpu_post_rp);
+    SMOOTH(gpu_max_gap);
 #undef SMOOTH
 
 #define SMOOTH_CNT(dst, src) \
     (dst) = (dst) * (1.0f - alpha) + (float)(src) * alpha
     SMOOTH_CNT(p->gpu_rp_count, w->gpu_rp_count);
+    SMOOTH_CNT(p->gpu_gap_count_small, w->gpu_gap_count_small);
+    SMOOTH_CNT(p->gpu_gap_count_medium, w->gpu_gap_count_medium);
+    SMOOTH_CNT(p->gpu_gap_count_large, w->gpu_gap_count_large);
 #undef SMOOTH_CNT
 
     p->total_ms = p->surface_update_ms + p->texture_upload_ms +
@@ -275,6 +281,10 @@ void nv2a_profile_flip_stall(void)
                 ph->gpu_nonrender_ms,
                 ph->gpu_rp_count);
         }
+        {
+            extern void pgraph_method_histogram_log_and_reset(void);
+            pgraph_method_histogram_log_and_reset();
+        }
     }
 #endif
 }
@@ -310,7 +320,8 @@ void nv2a_profile_get_phase_timing_str(char *buf, int bufsize)
              "Surf:%.1f Tex:%.1f Shd:%.1f Draw:%.1f "
              "[Vtx:%.1f Syn:%.1f Prw:%.1f Pipe:%.1f(Tx:%.1f Sh:%.1f Lu:%.1f) "
              "Desc:%.1f Setup:%.1f Cmd:%.1f] "
-             "Fin:%.1f(Sub:%.1f Fen:%.1f) Flip:%.1f Idle:%.1f(Fr:%.1f St:%.1f) | Tot:%.1f ms",
+             "Fin:%.1f(Sub:%.1f Fen:%.1f) Flip:%.1f Idle:%.1f(Fr:%.1f St:%.1f) "
+             "| Tot:%.1f GPU:%.1f(R:%.1f X:%.1f RP:%.0f Pre:%.1f Post:%.1f MxG:%.1f g:%.0f/%.0f/%.0f) ms",
              p->surface_update_ms,
              p->texture_upload_ms,
              p->shader_compile_ms,
@@ -332,7 +343,17 @@ void nv2a_profile_get_phase_timing_str(char *buf, int bufsize)
              p->fifo_idle_ms,
              p->fifo_idle_frame_ms,
              p->fifo_idle_starve_ms,
-             p->total_ms);
+             p->total_ms,
+             p->gpu_total_ms,
+             p->gpu_render_ms,
+             p->gpu_nonrender_ms,
+             p->gpu_rp_count,
+             p->gpu_pre_rp_ms,
+             p->gpu_post_rp_ms,
+             p->gpu_max_gap_ms,
+             p->gpu_gap_count_small,
+             p->gpu_gap_count_medium,
+             p->gpu_gap_count_large);
 }
 
 void nv2a_profile_get_cpu_timing_str(char *buf, int bufsize)
@@ -346,17 +367,19 @@ void nv2a_profile_get_cpu_timing_str(char *buf, int bufsize)
                      : 0.0f;
     snprintf(buf, bufsize,
              "CPU: K:%.0f W:%.1fK M:%.0f(Fh:%.0f Ni:%.0f) "
-             "Lock:%.1fms Push:%.1fms "
-             "SpH:%.0f%% IdS:%.0f%% TbH:%.1f%%",
+             "Push:%.1fms [Pull:%.1f(Lk:%.1f Mth:%.1f Fst:%.1f)] "
+             "SpH:%.0f%% TbH:%.1f%%",
              p->kick_count,
              p->pusher_words / 1000.0f,
              p->method_count,
              p->method_fast_hit,
              p->method_noninc_words,
-             p->lock_wait_ms,
              p->pusher_run_ms,
+             p->puller_total_ms,
+             p->puller_lock_ms,
+             p->puller_method_ms,
+             p->method_exec_ms,
              spin_pct,
-             idle_pct,
              p->tb_hit_pct);
 }
 
@@ -438,7 +461,8 @@ void nv2a_profile_get_workload_str(char *buf, int bufsize)
              c[NV2A_PROF_GEOM_BUFFER_UPDATE_4_NOTDIRTY],
              c[NV2A_PROF_FINISH_VERTEX_BUFFER_DIRTY],
              c[NV2A_PROF_FINISH_SURFACE_CREATE],
-             c[NV2A_PROF_FINISH_SURFACE_DOWN],
+             c[NV2A_PROF_FINISH_SURFACE_DOWN] +
+             c[NV2A_PROF_FINISH_SURFACE_DOWN_FLUSH],
              c[NV2A_PROF_FINISH_NEED_BUFFER_SPACE],
              c[NV2A_PROF_FINISH_FRAMEBUFFER_DIRTY],
              c[NV2A_PROF_FINISH_PRESENTING],

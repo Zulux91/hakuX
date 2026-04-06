@@ -103,6 +103,7 @@ class PerGameSettingsActivity : AppCompatActivity() {
         addBoolPicker(container, "fp_safe", getString(R.string.settings_fp_safe), "fp_safe")
         addBoolPicker(container, "fp_jit", getString(R.string.settings_fp_jit), "fp_jit")
         addBoolPicker(container, "fast_fences", getString(R.string.settings_fast_fences), "fast_fences")
+        addBoolPicker(container, "skip_occlusion_queries", getString(R.string.settings_skip_occlusion), "skip_occlusion_queries")
         addBoolPicker(container, "draw_reorder", getString(R.string.settings_draw_reorder), "draw_reorder")
         addBoolPicker(container, "draw_merge", getString(R.string.settings_draw_merge), "draw_merge")
         addBoolPicker(container, "async_compile", getString(R.string.settings_async_compile), "async_compile")

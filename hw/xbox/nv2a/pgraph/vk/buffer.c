@@ -23,6 +23,18 @@
 #include <android/log.h>
 #endif
 
+static int g_texture_cache_size_override = 0; /* 0 = auto */
+
+void xemu_set_texture_cache_size(int size)
+{
+    g_texture_cache_size_override = size;
+}
+
+int xemu_get_texture_cache_size(void)
+{
+    return g_texture_cache_size_override;
+}
+
 typedef struct MemoryBudget {
     size_t total_heap;
     size_t renderer_budget;
@@ -108,18 +120,23 @@ static MemoryBudget compute_memory_budget(PGRAPHVkState *r)
         }
 
         if (budget_mib <= 768) {
-            b.texture_cache_entries = 256;
-            b.image_pool_max = 16;
-            b.surface_image_pool_max = 8;
-        } else if (budget_mib <= 1536) {
             b.texture_cache_entries = 512;
             b.image_pool_max = 32;
             b.surface_image_pool_max = 16;
+        } else if (budget_mib <= 1536) {
+            b.texture_cache_entries = 1024;
+            b.image_pool_max = 64;
+            b.surface_image_pool_max = 32;
         } else {
             b.texture_cache_entries = 1024;
             b.image_pool_max = 64;
             b.surface_image_pool_max = 32;
         }
+    }
+
+    /* Allow user override of texture cache size */
+    if (g_texture_cache_size_override > 0) {
+        b.texture_cache_entries = g_texture_cache_size_override;
     }
 
     return b;

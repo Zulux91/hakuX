@@ -151,7 +151,7 @@ int tier1_consume_request(vaddr pc, uint64_t cs_base, uint32_t flags,
             {
                 extern int __android_log_print(int, const char*, const char*, ...);
                 static int consume_count = 0;
-                if (consume_count < 50 || (consume_count % 1000 == 0)) {
+                if (consume_count < 10 || (consume_count % 10000 == 0)) {
                     __android_log_print(3, "hakuX-tier1",
                         "consume #%d: pc=0x%x exec=%u -> CF_TIER1",
                         consume_count, (uint32_t)pc,
@@ -177,7 +177,7 @@ static void tb_request_tier1_promotion(CPUState *cpu, TranslationBlock *tb)
 {
 #ifdef __ANDROID__
     static int promo_log_count = 0;
-    if (promo_log_count < 50 || (promo_log_count % 1000 == 0)) {
+    if (promo_log_count < 10 || (promo_log_count % 10000 == 0)) {
         extern int __android_log_print(int, const char*, const char*, ...);
         __android_log_print(3 /*DEBUG*/, "hakuX-tier1",
             "promote #%d: pc=0x%x exec=%u tier=%d cflags=0x%x thresh=%d",
@@ -199,9 +199,9 @@ static void tb_request_tier1_promotion(CPUState *cpu, TranslationBlock *tb)
 #ifdef __ANDROID__
         {
             static int drop_log = 0;
-            if (drop_log++ % 100 == 0) {
+            if (drop_log++ % 10000 == 0) {
                 extern int __android_log_print(int, const char*, const char*, ...);
-                __android_log_print(5 /*WARN*/, "hakuX-tier1",
+                __android_log_print(3 /*DEBUG*/, "hakuX-tier1",
                     "requests FULL: dropped pc=0x%x (drop #%d)",
                     (uint32_t)tb->pc, drop_log);
             }

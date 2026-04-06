@@ -19,6 +19,8 @@
 
 #include "hw/xbox/nv2a/nv2a_int.h"
 #include "renderer.h"
+#include "texture_dump.h"
+#include "texture_replace.h"
 #include "qemu/error-report.h"
 #include "qemu/fast-hash.h"
 #include "ui/xemu-settings.h"
@@ -206,6 +208,8 @@ static void pgraph_vk_init(NV2AState *d, Error **errp)
     pgraph_vk_init_pipelines(pg);
     VK_LOG_ERROR("init: textures");
     pgraph_vk_init_textures(pg);
+    pgraph_vk_texture_dump_init();
+    pgraph_vk_texture_replace_init();
     VK_LOG_ERROR("init: reports");
     pgraph_vk_init_reports(pg);
 
@@ -262,6 +266,8 @@ static void pgraph_vk_finalize(NV2AState *d)
     }
 
     pgraph_vk_finalize_reports(pg);
+    pgraph_vk_texture_replace_shutdown();
+    pgraph_vk_texture_dump_shutdown();
     pgraph_vk_finalize_textures(pg);
     pgraph_vk_finalize_pipelines(pg);
     pgraph_vk_finalize_shaders(pg);

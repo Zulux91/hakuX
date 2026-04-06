@@ -32,6 +32,10 @@ extern "C" void xemu_set_fp_safe(bool enable);
 extern "C" bool xemu_get_fp_safe(void);
 extern "C" void xemu_set_fast_fences(bool enable);
 extern "C" bool xemu_get_fast_fences(void);
+extern "C" void xemu_set_skip_occlusion_queries(bool enable);
+extern "C" bool xemu_get_skip_occlusion_queries(void);
+extern "C" void xemu_set_texture_cache_size(int size);
+extern "C" int xemu_get_texture_cache_size(void);
 extern "C" void xemu_set_fp_jit(bool enable);
 extern "C" bool xemu_get_fp_jit(void);
 extern "C" void xemu_set_draw_reorder(bool enable);
@@ -560,6 +564,8 @@ struct DisplaySettings {
   bool use_dsp = false;
   bool network_enabled = false;
   bool skip_boot_anim = true;
+  bool skip_occlusion_queries = false;
+  int texture_cache_size = 0;
 };
 
 static bool WriteConfigToml(const std::string& config_path,
@@ -648,6 +654,8 @@ static bool WriteConfigToml(const std::string& config_path,
   toml::table* perf = EnsureTable(tbl, "perf");
   if (perf) {
     perf->insert_or_assign("unlock_framerate", ds.unlock_framerate);
+    perf->insert_or_assign("skip_occlusion_queries", ds.skip_occlusion_queries);
+    perf->insert_or_assign("texture_cache_size", ds.texture_cache_size);
   }
 
   toml::table* net = EnsureTable(tbl, "net");
@@ -824,6 +832,8 @@ static SetupFiles SyncSetupFiles() {
                       GetRuntimeOverride(env, activity, "surface_scale").c_str());
   ds.vsync = GetPrefBool(env, activity, "vsync", false);
   ds.unlock_framerate = GetPrefBool(env, activity, "unlock_framerate", true);
+  ds.skip_occlusion_queries = GetPrefBool(env, activity, "skip_occlusion_queries", false);
+  ds.texture_cache_size = GetPrefInt(env, activity, "texture_cache_size", 0);
   ds.validation_layers = GetPrefBool(env, activity, "validation_layers", false);
   ds.use_dsp = GetPrefBool(env, activity, "use_dsp", false);
   ds.network_enabled = GetPrefBool(env, activity, "setting_network_enable", false);
@@ -843,6 +853,16 @@ static SetupFiles SyncSetupFiles() {
   xemu_set_fast_fences(fast_fences);
   __android_log_print(ANDROID_LOG_INFO, "hakuX",
                       "fast fences: %s", fast_fences ? "ON" : "OFF");
+
+  bool skip_oq = GetPrefBool(env, activity, "skip_occlusion_queries", false);
+  xemu_set_skip_occlusion_queries(skip_oq);
+  __android_log_print(ANDROID_LOG_INFO, "hakuX",
+                      "skip occlusion queries: %s", skip_oq ? "ON" : "OFF");
+
+  int tex_cache = GetPrefInt(env, activity, "texture_cache_size", 0);
+  xemu_set_texture_cache_size(tex_cache);
+  __android_log_print(ANDROID_LOG_INFO, "hakuX",
+                      "texture cache size: %d (0=auto)", tex_cache);
 
   bool draw_reorder = GetPrefBool(env, activity, "draw_reorder", false);
   xemu_set_draw_reorder(draw_reorder);
@@ -1481,6 +1501,70 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_rfandango_haku_1x_SettingsActivity_nativeSetSimpleVblank(JNIEnv *, jobject, jboolean enable)
 {
     nv2a_set_simple_vblank(enable == JNI_TRUE);
+}
+
+// Texture dump
+extern "C" void pgraph_vk_texture_dump_set_enabled(bool enabled);
+extern "C" bool pgraph_vk_texture_dump_is_enabled(void);
+extern "C" void pgraph_vk_texture_dump_set_path(const char *path);
+extern "C" void pgraph_vk_texture_dump_reset(void);
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_rfandango_haku_1x_SettingsActivity_nativeSetTextureDumpEnabled(JNIEnv *, jobject, jboolean enable)
+{
+    pgraph_vk_texture_dump_set_enabled(enable == JNI_TRUE);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_rfandango_haku_1x_SettingsActivity_nativeGetTextureDumpEnabled(JNIEnv *, jobject)
+{
+    return pgraph_vk_texture_dump_is_enabled() ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_rfandango_haku_1x_SettingsActivity_nativeSetTextureDumpPath(JNIEnv *env, jobject, jstring path)
+{
+    const char *utf = env->GetStringUTFChars(path, nullptr);
+    pgraph_vk_texture_dump_set_path(utf);
+    env->ReleaseStringUTFChars(path, utf);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_rfandango_haku_1x_SettingsActivity_nativeResetTextureDumpCache(JNIEnv *, jobject)
+{
+    pgraph_vk_texture_dump_reset();
+}
+
+// Texture replacement
+extern "C" void pgraph_vk_texture_replace_set_enabled(bool enabled);
+extern "C" bool pgraph_vk_texture_replace_is_enabled(void);
+extern "C" void pgraph_vk_texture_replace_set_path(const char *path);
+extern "C" void pgraph_vk_texture_replace_reload(void);
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_rfandango_haku_1x_SettingsActivity_nativeSetTextureReplaceEnabled(JNIEnv *, jobject, jboolean enable)
+{
+    pgraph_vk_texture_replace_set_enabled(enable == JNI_TRUE);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_rfandango_haku_1x_SettingsActivity_nativeGetTextureReplaceEnabled(JNIEnv *, jobject)
+{
+    return pgraph_vk_texture_replace_is_enabled() ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_rfandango_haku_1x_SettingsActivity_nativeSetTextureReplacePath(JNIEnv *env, jobject, jstring path)
+{
+    const char *utf = env->GetStringUTFChars(path, nullptr);
+    pgraph_vk_texture_replace_set_path(utf);
+    env->ReleaseStringUTFChars(path, utf);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_rfandango_haku_1x_SettingsActivity_nativeReloadTextureReplace(JNIEnv *, jobject)
+{
+    pgraph_vk_texture_replace_reload();
 }
 
 extern "C" JNIEXPORT void JNICALL

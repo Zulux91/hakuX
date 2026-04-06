@@ -155,6 +155,52 @@ static void pgraph_init_reg_category_table(void)
 #define XEMU_OPT_METHOD_FAST_TABLE 1
 #endif
 
+#if NV2A_PERF_LOG
+/*
+ * Per-method call frequency histogram. Tracks slow-path dispatch counts
+ * (methods that go through pgraph_method() rather than the lockless fast
+ * path). Logged every 60 frames as top-10 hottest methods to guide
+ * fast-path table expansion.
+ */
+static uint32_t method_slow_histogram[0x800];
+static uint32_t method_slow_histogram_frames;
+
+void pgraph_method_histogram_log_and_reset(void)
+{
+#ifdef __ANDROID__
+    /* Find top 10 methods by call count */
+    struct { uint32_t idx; uint32_t count; } top[10] = {0};
+    for (int i = 0; i < 0x800; i++) {
+        uint32_t c = method_slow_histogram[i];
+        if (c == 0) continue;
+        for (int t = 0; t < 10; t++) {
+            if (c > top[t].count) {
+                /* Shift down */
+                for (int s = 9; s > t; s--) top[s] = top[s-1];
+                top[t].idx = i;
+                top[t].count = c;
+                break;
+            }
+        }
+    }
+    if (top[0].count > 0) {
+        __android_log_print(ANDROID_LOG_INFO, "hakuX-mhist",
+            "Top10: 0x%04x:%u 0x%04x:%u 0x%04x:%u 0x%04x:%u 0x%04x:%u "
+            "0x%04x:%u 0x%04x:%u 0x%04x:%u 0x%04x:%u 0x%04x:%u",
+            top[0].idx << 2, top[0].count, top[1].idx << 2, top[1].count,
+            top[2].idx << 2, top[2].count, top[3].idx << 2, top[3].count,
+            top[4].idx << 2, top[4].count, top[5].idx << 2, top[5].count,
+            top[6].idx << 2, top[6].count, top[7].idx << 2, top[7].count,
+            top[8].idx << 2, top[8].count, top[9].idx << 2, top[9].count);
+    }
+#endif
+    memset(method_slow_histogram, 0, sizeof(method_slow_histogram));
+    method_slow_histogram_frames = 0;
+}
+#else
+void pgraph_method_histogram_log_and_reset(void) {}
+#endif /* NV2A_PERF_LOG */
+
 #if XEMU_OPT_METHOD_FAST_TABLE
 
 typedef struct {
@@ -177,6 +223,10 @@ enum {
     XLAT_TEX_DIRTY_1,
     XLAT_TEX_DIRTY_2,
     XLAT_TEX_DIRTY_3,
+    /* Vertex data array offset: writes to pg->vertex_attributes[slot].
+     * The 'reg' field encodes the slot index (0-15), not a PGRAPH register. */
+    XLAT_VTX_ARRAY_OFFSET_0,
+    XLAT_VTX_ARRAY_OFFSET_LAST = XLAT_VTX_ARRAY_OFFSET_0 + 15,
 };
 
 static inline uint32_t fast_xlat(unsigned int type, uint32_t p)
@@ -278,12 +328,15 @@ static const uint32_t mask_lut[] = {
     /* 46 */ NV_PGRAPH_SETUPRASTER_BACKFACEMODE,
     /* 47 */ NV_PGRAPH_SETUPRASTER_CULLCTRL,
     /* 48 */ NV_PGRAPH_SETUPRASTER_FRONTFACE,
+    /* 49 */ NV_PGRAPH_CHEOPS_OFFSET_CONST_LD_PTR,
+    /* 50 */ NV_PGRAPH_CONTROL_0_ZWRITEENABLE,
 };
 
 #define MF_DIRECT(r)       { (r), 0, XLAT_NONE }
 #define MF_MASKED(r, m)    { (r), (m), XLAT_NONE }
 #define MF_XLAT(r, m, x)   { (r), (m), (x) }
 #define MF_TEX(r, slot)    { (r), 0, XLAT_TEX_DIRTY_0 + (slot) }
+#define MF_VTX_OFF(slot)   { 0, 0, XLAT_VTX_ARRAY_OFFSET_0 + (slot) }
 
 #define MI(method) ((method) >> 2)
 
@@ -558,12 +611,41 @@ static const MethodFastPath method_fast[0x800] = {
     [MI(0x1B1C + 64)]  = MF_TEX(NV_PGRAPH_TEXIMAGERECT1,  1),
     [MI(0x1B1C + 128)] = MF_TEX(NV_PGRAPH_TEXIMAGERECT2,  2),
     [MI(0x1B1C + 192)] = MF_TEX(NV_PGRAPH_TEXIMAGERECT3,  3),
+
+    /* --- Category E: Vertex data array offsets (custom handler) --- */
+
+    /* SET_VERTEX_DATA_ARRAY_OFFSET  0x1720..0x175C (16 slots, stride=4) */
+    [MI(0x1720)]      = MF_VTX_OFF(0),
+    [MI(0x1720 + 4)]  = MF_VTX_OFF(1),
+    [MI(0x1720 + 8)]  = MF_VTX_OFF(2),
+    [MI(0x1720 + 12)] = MF_VTX_OFF(3),
+    [MI(0x1720 + 16)] = MF_VTX_OFF(4),
+    [MI(0x1720 + 20)] = MF_VTX_OFF(5),
+    [MI(0x1720 + 24)] = MF_VTX_OFF(6),
+    [MI(0x1720 + 28)] = MF_VTX_OFF(7),
+    [MI(0x1720 + 32)] = MF_VTX_OFF(8),
+    [MI(0x1720 + 36)] = MF_VTX_OFF(9),
+    [MI(0x1720 + 40)] = MF_VTX_OFF(10),
+    [MI(0x1720 + 44)] = MF_VTX_OFF(11),
+    [MI(0x1720 + 48)] = MF_VTX_OFF(12),
+    [MI(0x1720 + 52)] = MF_VTX_OFF(13),
+    [MI(0x1720 + 56)] = MF_VTX_OFF(14),
+    [MI(0x1720 + 60)] = MF_VTX_OFF(15),
+
+    /* --- Category F: Additional masked register writes --- */
+
+    /* SET_TRANSFORM_CONSTANT_LOAD  0x1EA4 */
+    [MI(0x1EA4)] = MF_MASKED(NV_PGRAPH_CHEOPS_OFFSET, 49),
+
+    /* SET_DEPTH_WRITE_ENABLE  0x035C */
+    [MI(0x035C)] = MF_MASKED(NV_PGRAPH_CONTROL_0, 50),
 };
 
 #undef MF_DIRECT
 #undef MF_MASKED
 #undef MF_XLAT
 #undef MF_TEX
+#undef MF_VTX_OFF
 #undef MI
 
 static inline bool fast_entry_apply(PGRAPHState *pg,
@@ -574,6 +656,14 @@ static inline bool fast_entry_apply(PGRAPHState *pg,
         bool changed = (p != pgraph_reg_r(pg, f->reg));
         pg->texture_dirty[slot] |= changed;
         pgraph_reg_w(pg, f->reg, p);
+        return true;
+    }
+    if (f->xlat >= XLAT_VTX_ARRAY_OFFSET_0 &&
+        f->xlat <= XLAT_VTX_ARRAY_OFFSET_LAST) {
+        int slot = f->xlat - XLAT_VTX_ARRAY_OFFSET_0;
+        pg->vertex_attributes[slot].dma_select = p & 0x80000000;
+        pg->vertex_attributes[slot].offset = p & 0x7fffffff;
+        pg->vertex_attr_gen++;
         return true;
     }
     if (f->xlat) {
@@ -598,6 +688,14 @@ static inline bool fast_entry_apply_atomic(PGRAPHState *pg,
         bool changed = (p != qatomic_read(&pg->regs_[f->reg]));
         pg->texture_dirty[slot] |= changed;
         pgraph_reg_w_atomic(pg, f->reg, p);
+        return true;
+    }
+    if (f->xlat >= XLAT_VTX_ARRAY_OFFSET_0 &&
+        f->xlat <= XLAT_VTX_ARRAY_OFFSET_LAST) {
+        int slot = f->xlat - XLAT_VTX_ARRAY_OFFSET_0;
+        pg->vertex_attributes[slot].dma_select = p & 0x80000000;
+        pg->vertex_attributes[slot].offset = p & 0x7fffffff;
+        pg->vertex_attr_gen++;
         return true;
     }
     if (f->xlat) {
@@ -643,7 +741,7 @@ int pgraph_method_try_fast(NV2AState *d, unsigned int subchannel,
     if (midx >= 0x800) return 0;
 
     const MethodFastPath *fast = &method_fast[midx];
-    if (!fast->reg) return 0;
+    if (!fast->reg && !fast->xlat) return 0;
 
     if (!fast_entry_apply_atomic(pg, fast, parameter)) return 0;
 
@@ -653,7 +751,7 @@ int pgraph_method_try_fast(NV2AState *d, unsigned int subchannel,
         unsigned int next_midx = midx + 1;
         if (next_midx >= 0x800) break;
         const MethodFastPath *nf = &method_fast[next_midx];
-        if (!nf->reg) break;
+        if (!nf->reg && !nf->xlat) break;
         uint32_t p = ldl_le_p(parameters + consumed);
         if (!fast_entry_apply_atomic(pg, nf, p)) break;
         midx = next_midx;
@@ -673,7 +771,7 @@ int pgraph_method_try_fast(NV2AState *d, unsigned int subchannel,
         if (consumed + 1 + next_count > max_lookahead_words) break;
         bool all_fast = true;
         for (uint32_t i = 0; i < next_count; i++) {
-            if (!method_fast[nm + i].reg) {
+            if (!method_fast[nm + i].reg && !method_fast[nm + i].xlat) {
                 all_fast = false;
                 break;
             }
@@ -1459,14 +1557,14 @@ int pgraph_method(NV2AState *d, unsigned int subchannel,
         pg->cached_graphics_class == NV_KELVIN_PRIMITIVE) {
         unsigned int midx = METHOD_ADDR_TO_INDEX(method);
         const MethodFastPath *fast = &method_fast[midx];
-        if (fast->reg) {
+        if (fast->reg || fast->xlat) {
             if (!fast_entry_apply(pg, fast, parameter)) goto slow_path;
             size_t consumed = 1;
             while (consumed < num_words_available) {
                 unsigned int next_midx = midx + 1;
                 if (next_midx >= 0x800) break;
                 const MethodFastPath *nf = &method_fast[next_midx];
-                if (!nf->reg) break;
+                if (!nf->reg && !nf->xlat) break;
                 uint32_t p = ldl_le_p(parameters + consumed);
                 if (!fast_entry_apply(pg, nf, p)) break;
                 midx = next_midx;
@@ -1489,7 +1587,7 @@ int pgraph_method(NV2AState *d, unsigned int subchannel,
                 if (consumed + 1 + next_count > max_lookahead_words) break;
                 bool all_fast = true;
                 for (uint32_t i = 0; i < next_count; i++) {
-                    if (!method_fast[nm + i].reg) {
+                    if (!method_fast[nm + i].reg && !method_fast[nm + i].xlat) {
                         all_fast = false;
                         break;
                     }
@@ -1681,6 +1779,9 @@ slow_path:
         if (handler == NULL) {
             goto unhandled;
         }
+#if NV2A_PERF_LOG
+        method_slow_histogram[METHOD_ADDR_TO_INDEX(method)]++;
+#endif
         size_t num_words_consumed = 1;
         handler(d, pg, subchannel, method, parameter, parameters,
                 num_words_available, &num_words_consumed, inc);

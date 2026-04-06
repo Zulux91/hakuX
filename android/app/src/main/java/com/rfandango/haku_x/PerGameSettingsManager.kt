@@ -22,6 +22,8 @@ object PerGameSettingsManager {
         "fp_safe",
         "fp_jit",
         "fast_fences",
+        "skip_occlusion_queries",
+        "texture_cache_size",
         "draw_reorder",
         "draw_merge",
         "async_compile",

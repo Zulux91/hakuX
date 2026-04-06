@@ -64,13 +64,15 @@ class SettingsActivity : AppCompatActivity() {
   // Global defaults for boolean settings (must match what native code uses)
   private val boolDefaults = mapOf(
     "fp_safe" to true, "fp_jit" to true, "unlock_framerate" to true,
-    "fast_fences" to false, "draw_reorder" to false, "draw_merge" to false,
+    "fast_fences" to false, "skip_occlusion_queries" to false,
+    "draw_reorder" to false, "draw_merge" to false,
     "async_compile" to false, "frame_skip" to false,
     "use_dsp" to false,
     "skip_boot_anim" to true
   )
   private val intDefaults = mapOf(
-    "surface_scale" to 1, "submit_frames" to 3, "tier1_threshold" to 64
+    "surface_scale" to 1, "submit_frames" to 3, "tier1_threshold" to 64,
+    "texture_cache_size" to 0
   )
   private val strDefaults = mapOf(
     "renderer" to "vulkan", "filtering" to "nearest", "aspect_ratio" to "auto"
@@ -308,6 +310,32 @@ class SettingsActivity : AppCompatActivity() {
       }
     }
 
+  private val pickTextureDumpFolder =
+    registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+      if (uri != null) {
+        try {
+          contentResolver.takePersistableUriPermission(uri,
+            android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
+            android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+        } catch (_: SecurityException) {}
+        prefs.edit().putString("textureDumpFolderUri", uri.toString()).apply()
+        updateTextureDumpPath()
+      }
+    }
+
+  private val pickTextureReplaceFolder =
+    registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+      if (uri != null) {
+        try {
+          contentResolver.takePersistableUriPermission(uri,
+            android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
+            android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+        } catch (_: SecurityException) {}
+        prefs.edit().putString("textureReplaceFolderUri", uri.toString()).apply()
+        updateTextureReplacePath()
+      }
+    }
+
   private val pickDashboardZip =
     registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
       uri ?: return@registerForActivityResult
@@ -473,6 +501,14 @@ class SettingsActivity : AppCompatActivity() {
     }
     highlightIfOverridden("fast_fences", switchFastFences)
 
+    val switchSkipOcclusion = findViewById<MaterialSwitch>(R.id.switch_skip_occlusion)
+    switchSkipOcclusion.isChecked = pgBool("skip_occlusion_queries", false)
+    switchSkipOcclusion.setOnCheckedChangeListener { _, checked ->
+      pgPutBool("skip_occlusion_queries", checked)
+      updateHighlight("skip_occlusion_queries", switchSkipOcclusion)
+    }
+    highlightIfOverridden("skip_occlusion_queries", switchSkipOcclusion)
+
     val switchDrawReorder = findViewById<MaterialSwitch>(R.id.switch_draw_reorder)
     switchDrawReorder.isChecked = pgBool("draw_reorder", false)
     switchDrawReorder.setOnCheckedChangeListener { _, checked ->
@@ -509,6 +545,7 @@ class SettingsActivity : AppCompatActivity() {
     }
     highlightIfOverridden("frame_skip", switchFrameSkip)
 
+    setupTextureCachePicker()
     setupSubmitFramesPicker()
     setupTier1ThresholdPicker()
 
@@ -522,6 +559,49 @@ class SettingsActivity : AppCompatActivity() {
     switchDebugTools.isChecked = prefs.getBoolean("debug_tools", false)
     switchDebugTools.setOnCheckedChangeListener { _, checked ->
       prefs.edit().putBoolean("debug_tools", checked).apply()
+    }
+
+    // Texture Dump
+    val switchTextureDump = findViewById<MaterialSwitch>(R.id.switch_texture_dump)
+    val btnTextureDumpFolder = findViewById<MaterialButton>(R.id.btn_texture_dump_folder)
+    val txtTextureDumpPath = findViewById<TextView>(R.id.txt_texture_dump_path)
+
+    switchTextureDump.isChecked = prefs.getBoolean("texture_dump_enabled", false)
+    btnTextureDumpFolder.isEnabled = switchTextureDump.isChecked
+    updateTextureDumpPath()
+
+    switchTextureDump.setOnCheckedChangeListener { _, checked ->
+      prefs.edit().putBoolean("texture_dump_enabled", checked).apply()
+      btnTextureDumpFolder.isEnabled = checked
+      try { nativeSetTextureDumpEnabled(checked) } catch (_: Throwable) {}
+      if (checked) applyTextureDumpPath()
+    }
+
+    btnTextureDumpFolder.setOnClickListener {
+      val currentUri = prefs.getString("textureDumpFolderUri", null)
+      val launchUri = if (currentUri != null) android.net.Uri.parse(currentUri) else null
+      pickTextureDumpFolder.launch(launchUri)
+    }
+
+    // Custom Textures (Replacement)
+    val switchTextureReplace = findViewById<MaterialSwitch>(R.id.switch_texture_replace)
+    val btnTextureReplaceFolder = findViewById<MaterialButton>(R.id.btn_texture_replace_folder)
+
+    switchTextureReplace.isChecked = prefs.getBoolean("texture_replace_enabled", false)
+    btnTextureReplaceFolder.isEnabled = switchTextureReplace.isChecked
+    updateTextureReplacePath()
+
+    switchTextureReplace.setOnCheckedChangeListener { _, checked ->
+      prefs.edit().putBoolean("texture_replace_enabled", checked).apply()
+      btnTextureReplaceFolder.isEnabled = checked
+      try { nativeSetTextureReplaceEnabled(checked) } catch (_: Throwable) {}
+      if (checked) applyTextureReplacePath()
+    }
+
+    btnTextureReplaceFolder.setOnClickListener {
+      val currentUri = prefs.getString("textureReplaceFolderUri", null)
+      val launchUri = if (currentUri != null) android.net.Uri.parse(currentUri) else null
+      pickTextureReplaceFolder.launch(launchUri)
     }
 
     findViewById<MaterialButton>(R.id.btn_clear_cache).setOnClickListener {
@@ -799,6 +879,29 @@ class SettingsActivity : AppCompatActivity() {
     btnSave.setOnClickListener {
       prefs.edit().putString("env_vars", editText.text.toString()).apply()
       Toast.makeText(this, "Applied on next game launch", Toast.LENGTH_SHORT).show()
+    }
+  }
+
+  private fun setupTextureCachePicker() {
+    val btn = findViewById<MaterialButton>(R.id.btn_texture_cache)
+    val labels = arrayOf("Auto (0)", "512", "1024", "2048")
+    val values = intArrayOf(0, 512, 1024, 2048)
+    val current = pgInt("texture_cache_size", 0)
+    val idx = values.indexOf(current).coerceAtLeast(0)
+    btn.text = labels[idx]
+    highlightIfOverridden("texture_cache_size", btn)
+    btn.setOnClickListener {
+      val sel = values.indexOf(pgInt("texture_cache_size", 0)).coerceAtLeast(0)
+      MaterialAlertDialogBuilder(this)
+        .setTitle(R.string.settings_texture_cache)
+        .setSingleChoiceItems(labels, sel) { dialog, which ->
+          pgPutInt("texture_cache_size", values[which])
+          btn.text = labels[which]
+          updateHighlight("texture_cache_size", btn)
+          dialog.dismiss()
+        }
+        .setNegativeButton(android.R.string.cancel, null)
+        .show()
     }
   }
 
@@ -1177,6 +1280,79 @@ class SettingsActivity : AppCompatActivity() {
     gamesFolderPathText.text = getString(R.string.settings_games_folder_label, label)
   }
 
+  private fun updateTextureDumpPath() {
+    val txtPath = findViewById<TextView>(R.id.txt_texture_dump_path) ?: return
+    val uriStr = prefs.getString("textureDumpFolderUri", null)
+    if (uriStr != null) {
+      val uri = Uri.parse(uriStr)
+      val name = DocumentFile.fromTreeUri(this, uri)?.name ?: uri.lastPathSegment ?: uri.toString()
+      txtPath.text = "Dump folder: $name"
+    } else {
+      txtPath.text = "No folder selected"
+    }
+  }
+
+  private fun resolveTextureDumpRealPath(): String? {
+    val uriStr = prefs.getString("textureDumpFolderUri", null) ?: return null
+    val uri = Uri.parse(uriStr)
+    val docUri = androidx.documentfile.provider.DocumentFile.fromTreeUri(this, uri)
+    if (docUri == null || !docUri.canWrite()) return null
+
+    // Try to extract filesystem path from the URI
+    // SAF tree URIs for primary storage typically encode the path
+    val docId = android.provider.DocumentsContract.getTreeDocumentId(uri)
+    if (docId.startsWith("primary:")) {
+      val relPath = docId.removePrefix("primary:")
+      val realPath = android.os.Environment.getExternalStorageDirectory().absolutePath + "/" + relPath
+      val dir = java.io.File(realPath)
+      if (dir.isDirectory || dir.mkdirs()) return realPath
+    }
+
+    // Fallback: use app-private directory
+    val fallback = java.io.File(getExternalFilesDir(null), "texture_dump")
+    fallback.mkdirs()
+    return fallback.absolutePath
+  }
+
+  private fun applyTextureDumpPath() {
+    val path = resolveTextureDumpRealPath()
+    if (path != null) {
+      try { nativeSetTextureDumpPath(path) } catch (_: Throwable) {}
+    }
+  }
+
+  private fun updateTextureReplacePath() {
+    val txtPath = findViewById<TextView>(R.id.txt_texture_replace_path) ?: return
+    val uriStr = prefs.getString("textureReplaceFolderUri", null)
+    if (uriStr != null) {
+      val uri = Uri.parse(uriStr)
+      val name = DocumentFile.fromTreeUri(this, uri)?.name ?: uri.lastPathSegment ?: uri.toString()
+      txtPath.text = "Texture pack folder: $name"
+    } else {
+      txtPath.text = "No folder selected"
+    }
+  }
+
+  private fun resolveTextureReplaceRealPath(): String? {
+    val uriStr = prefs.getString("textureReplaceFolderUri", null) ?: return null
+    val uri = Uri.parse(uriStr)
+    val docId = android.provider.DocumentsContract.getTreeDocumentId(uri)
+    if (docId.startsWith("primary:")) {
+      val relPath = docId.removePrefix("primary:")
+      val realPath = android.os.Environment.getExternalStorageDirectory().absolutePath + "/" + relPath
+      val dir = java.io.File(realPath)
+      if (dir.isDirectory) return realPath
+    }
+    return null
+  }
+
+  private fun applyTextureReplacePath() {
+    val path = resolveTextureReplaceRealPath()
+    if (path != null) {
+      try { nativeSetTextureReplacePath(path) } catch (_: Throwable) {}
+    }
+  }
+
   private fun copySystemFile(uri: Uri, destName: String, pathKey: String, uriKey: String, onDone: () -> Unit) {
     try {
       contentResolver.takePersistableUriPermission(uri,
@@ -1392,6 +1568,14 @@ class SettingsActivity : AppCompatActivity() {
   private external fun nativeSetSubmitFrames(count: Int)
   private external fun nativeGetTier1Threshold(): Int
   private external fun nativeSetTier1Threshold(value: Int)
+  private external fun nativeSetTextureDumpEnabled(enable: Boolean)
+  private external fun nativeGetTextureDumpEnabled(): Boolean
+  private external fun nativeSetTextureDumpPath(path: String)
+  private external fun nativeResetTextureDumpCache()
+  private external fun nativeSetTextureReplaceEnabled(enable: Boolean)
+  private external fun nativeGetTextureReplaceEnabled(): Boolean
+  private external fun nativeSetTextureReplacePath(path: String)
+  private external fun nativeReloadTextureReplace()
 
   companion object {
     private const val FATX_SUPERBLOCK_SIZE = 4096

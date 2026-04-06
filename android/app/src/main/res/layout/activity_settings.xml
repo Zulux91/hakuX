@@ -449,6 +449,23 @@
             android:textAppearance="@style/TextAppearance.Material3.BodySmall"
             android:textColor="@color/xemu_text_muted" />
 
+          <!-- Skip Occlusion Queries -->
+          <com.google.android.material.materialswitch.MaterialSwitch
+            android:id="@+id/switch_skip_occlusion"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:text="@string/settings_skip_occlusion"
+            android:textColor="@color/xemu_text_muted" />
+          <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
+            android:layout_marginTop="2dp"
+            android:text="@string/settings_skip_occlusion_desc"
+            android:textAppearance="@style/TextAppearance.Material3.BodySmall"
+            android:textColor="@color/xemu_text_muted" />
+
           <!-- Draw Reordering -->
           <com.google.android.material.materialswitch.MaterialSwitch
             android:id="@+id/switch_draw_reorder"
@@ -517,6 +534,37 @@
             android:text="@string/settings_frame_skip_desc"
             android:textAppearance="@style/TextAppearance.Material3.BodySmall"
             android:textColor="@color/xemu_text_muted" />
+
+          <!-- Texture Cache Size -->
+          <LinearLayout
+            android:id="@+id/group_texture_cache"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+            <TextView
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:layout_marginTop="20dp"
+              android:text="@string/settings_texture_cache"
+              android:textAppearance="@style/TextAppearance.Material3.BodyMedium"
+              android:textColor="@color/xemu_text_muted" />
+            <com.google.android.material.button.MaterialButton
+              android:id="@+id/btn_texture_cache"
+              style="?attr/materialButtonOutlinedStyle"
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:layout_marginTop="8dp"
+              android:text="Auto"
+              android:textColor="@color/xemu_text_muted" />
+            <TextView
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:layout_marginStart="4dp"
+              android:layout_marginTop="2dp"
+              android:text="@string/settings_texture_cache_desc"
+              android:textAppearance="@style/TextAppearance.Material3.BodySmall"
+              android:textColor="@color/xemu_text_muted" />
+          </LinearLayout>
 
           <!-- Submit Frames (Buffering) -->
           <LinearLayout
@@ -824,6 +872,72 @@
             android:layout_marginStart="4dp"
             android:layout_marginTop="2dp"
             android:text="Show diagnostic frame capture in pause menu"
+            android:textAppearance="@style/TextAppearance.Material3.BodySmall"
+            android:textColor="@color/xemu_text_muted" />
+
+          <!-- Texture Dump -->
+          <com.google.android.material.materialswitch.MaterialSwitch
+            android:id="@+id/switch_texture_dump"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:text="Dump Textures"
+            android:textColor="@color/xemu_text_muted" />
+          <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
+            android:layout_marginTop="2dp"
+            android:text="Save game textures as PNG files for creating texture packs"
+            android:textAppearance="@style/TextAppearance.Material3.BodySmall"
+            android:textColor="@color/xemu_text_muted" />
+          <com.google.android.material.button.MaterialButton
+            android:id="@+id/btn_texture_dump_folder"
+            style="?attr/materialButtonOutlinedStyle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Select Dump Folder" />
+          <TextView
+            android:id="@+id/txt_texture_dump_path"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
+            android:layout_marginTop="2dp"
+            android:text="No folder selected"
+            android:textAppearance="@style/TextAppearance.Material3.BodySmall"
+            android:textColor="@color/xemu_text_muted" />
+
+          <!-- Custom Textures -->
+          <com.google.android.material.materialswitch.MaterialSwitch
+            android:id="@+id/switch_texture_replace"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:text="Custom Textures"
+            android:textColor="@color/xemu_text_muted" />
+          <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
+            android:layout_marginTop="2dp"
+            android:text="Load replacement textures from a texture pack folder"
+            android:textAppearance="@style/TextAppearance.Material3.BodySmall"
+            android:textColor="@color/xemu_text_muted" />
+          <com.google.android.material.button.MaterialButton
+            android:id="@+id/btn_texture_replace_folder"
+            style="?attr/materialButtonOutlinedStyle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Select Texture Pack Folder" />
+          <TextView
+            android:id="@+id/txt_texture_replace_path"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
+            android:layout_marginTop="2dp"
+            android:text="No folder selected"
             android:textAppearance="@style/TextAppearance.Material3.BodySmall"
             android:textColor="@color/xemu_text_muted" />
 
