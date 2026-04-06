@@ -283,6 +283,50 @@ static void *render_thread_func(void *opaque)
             break;
         }
 
+        case RCMD_PROCESS_PENDING: {
+            NV2AState *d = r->nv2a;
+            PGRAPHState *pg = &d->pgraph;
+            r->is_render_thread_context = true;
+            if (cmd->pending.downloads) {
+                pgraph_vk_process_pending_downloads(d);
+            }
+            if (cmd->pending.dirty_downloads) {
+                pgraph_vk_download_dirty_surfaces(d);
+            }
+            if (cmd->pending.sync_display) {
+#if HAVE_EXTERNAL_MEMORY
+                if (r->display.use_external_memory) {
+                    pgraph_vk_render_display(pg);
+                }
+#else
+                pgraph_vk_render_display(pg);
+#endif
+                qatomic_set(&pg->sync_pending, false);
+                qemu_event_set(&pg->sync_complete);
+            }
+            if (cmd->pending.flush) {
+                pgraph_vk_flush_reorder_window(d);
+                pgraph_vk_flush_draw_queue(d);
+                pgraph_vk_finish(pg, VK_FINISH_REASON_FLUSH);
+                pgraph_vk_surface_flush(d);
+                pgraph_vk_mark_textures_possibly_dirty(
+                    d, 0, memory_region_size(d->vram));
+                pgraph_vk_update_vertex_ram_buffer(
+                    pg, 0, d->vram_ptr, memory_region_size(d->vram));
+                r->texture_vram_gen++;
+                for (int i = 0; i < 4; i++) {
+                    pg->texture_dirty[i] = true;
+                }
+                qatomic_set(&pg->flush_pending, false);
+                qemu_event_set(&pg->flush_complete);
+            }
+            r->is_render_thread_context = false;
+            if (cmd->pending.completion) {
+                qemu_event_set(cmd->pending.completion);
+            }
+            break;
+        }
+
         case RCMD_SHUTDOWN:
             g_free(cmd);
             goto out;

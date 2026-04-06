@@ -1137,12 +1137,12 @@ Java_com_rfandango_haku_1x_XboxDashboardImporter_00024NativeBridge_nativeImportD
             error_setg(&err, "Failed to flush dashboard import writes");
             goto cleanup;
         }
-    }
 
-cleanup:
-    if (blk) {
-        blk_drain(blk);
-        blk_unref(blk);
+    cleanup:
+        if (blk) {
+            blk_drain(blk);
+            blk_unref(blk);
+        }
     }
 
     (*env)->ReleaseStringUTFChars(env, jhdd_path, hdd_path);

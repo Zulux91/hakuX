@@ -27,6 +27,10 @@
 #include "hw/xbox/nv2a/debug.h"
 #include "renderer.h"
 
+#if defined(__aarch64__)
+#include <arm_neon.h>
+#endif
+
 static void perform_blit(int operation, uint8_t *source, uint8_t *dest,
                          size_t width, size_t height, size_t width_bytes,
                          size_t source_pitch, size_t dest_pitch,
@@ -46,7 +50,69 @@ static void perform_blit(int operation, uint8_t *source, uint8_t *dest,
         for (unsigned int y = 0; y < height; y++) {
             uint8_t *s = source;
             uint8_t *d = dest;
-            for (unsigned int x = 0; x < width; x++) {
+            unsigned int x = 0;
+
+#if defined(__aarch64__)
+            /* NEON: process 4 pixels (16 bytes) at a time.
+             * Use 16-bit intermediate to avoid overflow:
+             * max value = 255 * 0x7f80 = 0x7f_7f80 fits in u32,
+             * but we use vmull for u8×u16 → u32 lane-wise. */
+            uint16x8_t v_beta = vdupq_n_u16((uint16_t)beta_mult);
+            uint16x8_t v_inv  = vdupq_n_u16((uint16_t)inv_beta_mult);
+            /* Reciprocal approximation: 1/0x7f80 ≈ 0x0101/0x7f80
+             * Use shift: 0x7f80 = 32640, close to 32768 = 1<<15.
+             * We can use (a + b + (1<<14)) >> 15 as a close approximation
+             * since max_beta_mult ≈ 2^15. Error is < 1 LSB for typical values.
+             * Exact: val / 0x7f80. Approx: (val + 0x3FC0) >> 15. */
+            for (; x + 4 <= width; x += 4) {
+                uint8x16_t src_px = vld1q_u8(s + x * 4);
+                uint8x16_t dst_px = vld1q_u8(d + x * 4);
+
+                /* Low 8 pixels (first 2 RGBA pixels) */
+                uint16x8_t s_lo = vmovl_u8(vget_low_u8(src_px));
+                uint16x8_t d_lo = vmovl_u8(vget_low_u8(dst_px));
+                uint32x4_t prod_s_lo0 = vmull_u16(vget_low_u16(s_lo), vget_low_u16(v_beta));
+                uint32x4_t prod_d_lo0 = vmull_u16(vget_low_u16(d_lo), vget_low_u16(v_inv));
+                uint32x4_t sum_lo0 = vaddq_u32(prod_s_lo0, prod_d_lo0);
+                sum_lo0 = vaddq_u32(sum_lo0, vdupq_n_u32(0x3FC0));
+                uint16x4_t res_lo0 = vshrn_n_u32(sum_lo0, 15);
+
+                uint32x4_t prod_s_lo1 = vmull_u16(vget_high_u16(s_lo), vget_high_u16(v_beta));
+                uint32x4_t prod_d_lo1 = vmull_u16(vget_high_u16(d_lo), vget_high_u16(v_inv));
+                uint32x4_t sum_lo1 = vaddq_u32(prod_s_lo1, prod_d_lo1);
+                sum_lo1 = vaddq_u32(sum_lo1, vdupq_n_u32(0x3FC0));
+                uint16x4_t res_lo1 = vshrn_n_u32(sum_lo1, 15);
+
+                uint8x8_t out_lo = vmovn_u16(vcombine_u16(res_lo0, res_lo1));
+
+                /* High 8 pixels (next 2 RGBA pixels) */
+                uint16x8_t s_hi = vmovl_u8(vget_high_u8(src_px));
+                uint16x8_t d_hi = vmovl_u8(vget_high_u8(dst_px));
+                uint32x4_t prod_s_hi0 = vmull_u16(vget_low_u16(s_hi), vget_low_u16(v_beta));
+                uint32x4_t prod_d_hi0 = vmull_u16(vget_low_u16(d_hi), vget_low_u16(v_inv));
+                uint32x4_t sum_hi0 = vaddq_u32(prod_s_hi0, prod_d_hi0);
+                sum_hi0 = vaddq_u32(sum_hi0, vdupq_n_u32(0x3FC0));
+                uint16x4_t res_hi0 = vshrn_n_u32(sum_hi0, 15);
+
+                uint32x4_t prod_s_hi1 = vmull_u16(vget_high_u16(s_hi), vget_high_u16(v_beta));
+                uint32x4_t prod_d_hi1 = vmull_u16(vget_high_u16(d_hi), vget_high_u16(v_inv));
+                uint32x4_t sum_hi1 = vaddq_u32(prod_s_hi1, prod_d_hi1);
+                sum_hi1 = vaddq_u32(sum_hi1, vdupq_n_u32(0x3FC0));
+                uint16x4_t res_hi1 = vshrn_n_u32(sum_hi1, 15);
+
+                uint8x8_t out_hi = vmovn_u16(vcombine_u16(res_hi0, res_hi1));
+
+                /* Preserve alpha from destination (blend only RGB) */
+                uint8x16_t result = vcombine_u8(out_lo, out_hi);
+                /* Restore original alpha bytes at positions 3,7,11,15 */
+                result = vbslq_u8(
+                    (uint8x16_t){0,0,0,0xFF, 0,0,0,0xFF, 0,0,0,0xFF, 0,0,0,0xFF},
+                    dst_px, result);
+                vst1q_u8(d + x * 4, result);
+            }
+#endif
+            /* Scalar fallback for remaining pixels */
+            for (; x < width; x++) {
                 for (unsigned int ch = 0; ch < 3; ch++) {
                     uint32_t a = s[x * 4 + ch] * beta_mult;
                     uint32_t b = d[x * 4 + ch] * inv_beta_mult;
@@ -67,7 +133,19 @@ static void patch_alpha(uint8_t *dest, size_t width_pixels, size_t height,
 {
     for (unsigned int y = 0; y < height; y++) {
         uint8_t *d = dest;
-        for (unsigned int x = 0; x < width_pixels; x++) {
+        unsigned int x = 0;
+#if defined(__aarch64__)
+        uint8x16_t v_alpha = vdupq_n_u8(alpha_val);
+        for (; x + 4 <= width_pixels; x += 4) {
+            uint8x16_t px = vld1q_u8(d + x * 4);
+            /* Set alpha bytes at positions 3,7,11,15 */
+            px = vbslq_u8(
+                (uint8x16_t){0,0,0,0xFF, 0,0,0,0xFF, 0,0,0,0xFF, 0,0,0,0xFF},
+                v_alpha, px);
+            vst1q_u8(d + x * 4, px);
+        }
+#endif
+        for (; x < width_pixels; x++) {
             d[x * 4 + 3] = alpha_val;
         }
         dest += dest_pitch;

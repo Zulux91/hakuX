@@ -77,4 +77,29 @@ extern int nv2a_vk_dgroup_indent;
 
 void pgraph_vk_debug_frame_terminator(void);
 
+/* Texture compression logging.
+ * Uses Android logcat tag "hakuX-bc" on Android, stderr on desktop.
+ * BC_LOG: always-on for compression events (candidate, compress, stats).
+ * BC_LOG_TRACK: verbose per-texture tracking, compile-time toggle.
+ */
+#define BC_LOG_TRACKING_VERBOSE 0
+
+#ifdef __ANDROID__
+#define BC_LOG(fmt, ...) \
+    __android_log_print(ANDROID_LOG_INFO, "hakuX-bc", fmt, ##__VA_ARGS__)
+#if BC_LOG_TRACKING_VERBOSE
+#define BC_LOG_TRACK(fmt, ...) \
+    __android_log_print(ANDROID_LOG_DEBUG, "hakuX-bc", fmt, ##__VA_ARGS__)
+#else
+#define BC_LOG_TRACK(fmt, ...) do { } while (0)
+#endif
+#else
+#define BC_LOG(fmt, ...) fprintf(stderr, "xemu-bc: " fmt "\n", ##__VA_ARGS__)
+#if BC_LOG_TRACKING_VERBOSE
+#define BC_LOG_TRACK(fmt, ...) fprintf(stderr, "xemu-bc-track: " fmt "\n", ##__VA_ARGS__)
+#else
+#define BC_LOG_TRACK(fmt, ...) do { } while (0)
+#endif
+#endif
+
 #endif

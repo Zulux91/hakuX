@@ -641,6 +641,21 @@ void *pfifo_thread(void *arg)
 
         pgraph_process_pending_reports(d);
 
+        /* When a diag capture is pending or active and the PFIFO has no
+         * more commands to process, force a flip_stall so the capture
+         * progresses even for idle games.  This is intentionally placed
+         * AFTER command processing so the game's own FLIP_STALL gets
+         * first chance to handle the capture with proper draw data. */
+        if ((nv2a_dbg_diag_frame_pending() || nv2a_dbg_diag_frame_active())
+            && !d->pfifo.fifo_kick) {
+            qemu_mutex_unlock(&d->pfifo.lock);
+            qemu_mutex_lock(&d->pgraph.lock);
+            d->pgraph.renderer->ops.surface_update(d, false, true, true);
+            d->pgraph.renderer->ops.flip_stall(d);
+            qemu_mutex_unlock(&d->pgraph.lock);
+            qemu_mutex_lock(&d->pfifo.lock);
+        }
+
         if (!d->pfifo.fifo_kick) {
             int64_t idle_t0 = nv2a_clock_ns();
 

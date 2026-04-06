@@ -742,6 +742,14 @@
             android:text="@string/settings_show_fps"
             android:textColor="@color/xemu_text_muted" />
 
+          <com.google.android.material.materialswitch.MaterialSwitch
+            android:id="@+id/switch_skip_boot_anim"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:text="@string/settings_skip_boot_anim"
+            android:textColor="@color/xemu_text_muted" />
+
           <!-- Native Floats (Safe) -->
           <com.google.android.material.materialswitch.MaterialSwitch
             android:id="@+id/switch_fp_safe"
@@ -793,14 +801,6 @@
             android:textAppearance="@style/TextAppearance.Material3.BodySmall"
             android:textColor="@color/xemu_text_muted" />
 
-          <!-- Simple VBLANK -->
-          <com.google.android.material.materialswitch.MaterialSwitch
-            android:id="@+id/switch_simple_vblank"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:text="Simple VBLANK (x1_box style)"
-            android:textColor="@color/xemu_text_muted" />
           <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

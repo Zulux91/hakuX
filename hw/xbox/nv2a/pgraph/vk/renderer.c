@@ -297,49 +297,21 @@ static void pgraph_vk_process_pending(NV2AState *d)
 
     qemu_mutex_unlock(&d->pfifo.lock);
 
-    if (need_downloads) {
-        QemuEvent dl_event;
-        qemu_event_init(&dl_event, false);
-        RenderCommand *cmd = g_new0(RenderCommand, 1);
-        cmd->type = RCMD_PROCESS_DOWNLOADS;
-        cmd->download.dirty_surfaces = false;
-        cmd->download.completion = &dl_event;
-        pgraph_vk_render_thread_enqueue(r, cmd);
-        qemu_event_wait(&dl_event);
-        qemu_event_destroy(&dl_event);
-    }
-    if (need_dirty_dl) {
-        QemuEvent dl_event;
-        qemu_event_init(&dl_event, false);
-        RenderCommand *cmd = g_new0(RenderCommand, 1);
-        cmd->type = RCMD_PROCESS_DOWNLOADS;
-        cmd->download.dirty_surfaces = true;
-        cmd->download.completion = &dl_event;
-        pgraph_vk_render_thread_enqueue(r, cmd);
-        qemu_event_wait(&dl_event);
-        qemu_event_destroy(&dl_event);
-    }
-
-    if (need_sync) {
-        QemuEvent sync_event;
-        qemu_event_init(&sync_event, false);
-        RenderCommand *cmd = g_new0(RenderCommand, 1);
-        cmd->type = RCMD_SYNC_DISPLAY;
-        cmd->sync.completion = &sync_event;
-        pgraph_vk_render_thread_enqueue(r, cmd);
-        qemu_event_wait(&sync_event);
-        qemu_event_destroy(&sync_event);
-    }
-    if (need_flush) {
-        QemuEvent flush_event;
-        qemu_event_init(&flush_event, false);
-        RenderCommand *cmd = g_new0(RenderCommand, 1);
-        cmd->type = RCMD_FLUSH;
-        cmd->flush_op.completion = &flush_event;
-        pgraph_vk_render_thread_enqueue(r, cmd);
-        qemu_event_wait(&flush_event);
-        qemu_event_destroy(&flush_event);
-    }
+    /* Batch all pending operations into a single render thread dispatch
+     * with one completion event.  This eliminates 3 extra event
+     * init/wait/destroy cycles and 3 extra render thread wake-ups. */
+    QemuEvent pending_event;
+    qemu_event_init(&pending_event, false);
+    RenderCommand *cmd = g_new0(RenderCommand, 1);
+    cmd->type = RCMD_PROCESS_PENDING;
+    cmd->pending.downloads = need_downloads;
+    cmd->pending.dirty_downloads = need_dirty_dl;
+    cmd->pending.sync_display = need_sync;
+    cmd->pending.flush = need_flush;
+    cmd->pending.completion = &pending_event;
+    pgraph_vk_render_thread_enqueue(r, cmd);
+    qemu_event_wait(&pending_event);
+    qemu_event_destroy(&pending_event);
 
     qemu_mutex_lock(&d->pfifo.lock);
 }

@@ -75,12 +75,12 @@ static void mcpx_apu_write(void *opaque, hwaddr addr, uint64_t val,
         /* the bits of the interrupts to clear are written */
         qatomic_and(&d->regs[NV_PAPU_ISTS], ~val);
         update_irq(d);
-        qemu_cond_signal(&d->cond);
+        qemu_cond_broadcast(&d->cond);
         break;
     case NV_PAPU_FECTL:
     case NV_PAPU_SECTL:
         qatomic_set(&d->regs[addr], val);
-        qemu_cond_signal(&d->cond);
+        qemu_cond_broadcast(&d->cond);
         break;
     case NV_PAPU_FEMEMDATA:
         /* 'magic write'
@@ -134,13 +134,24 @@ static void throttle(MCPXAPUState *d)
         queued_bytes = monitor_num_used_bytes(d);
     }
 
+#ifdef __ANDROID__
+    /* Android scheduler granularity is often too coarse for the extra
+     * low-watermark pacing below and can make speech sound dragged out.
+     * Keep FIFO backpressure, but let the output callback set the pace.
+     */
+    d->next_frame_time_us = 0;
+    d->sleep_acc_us += qemu_clock_get_us(QEMU_CLOCK_REALTIME) - start_us;
+    return;
+#endif
+
     if (queued_bytes > d->monitor.queued_bytes_low) {
+        int64_t now_us = qemu_clock_get_us(QEMU_CLOCK_REALTIME);
         if (d->next_frame_time_us == 0 ||
-            start_us - d->next_frame_time_us > EP_FRAME_US) {
-            d->next_frame_time_us = start_us;
+            now_us - d->next_frame_time_us > EP_FRAME_US) {
+            d->next_frame_time_us = now_us;
         }
         while (!qatomic_read(&d->exiting)) {
-            int64_t now_us = qemu_clock_get_us(QEMU_CLOCK_REALTIME);
+            now_us = qemu_clock_get_us(QEMU_CLOCK_REALTIME);
             int64_t remaining_ms = (d->next_frame_time_us - now_us) / 1000;
             if (remaining_ms > 0) {
                 int sleep_ms = remaining_ms > INT_MAX ? INT_MAX : (int)remaining_ms;
@@ -271,28 +282,36 @@ static void monitor_sink_cb(void *opaque, uint8_t *stream, int free_b)
     }
 
     int avail = 0;
-    for (int i = 0; i < 4; i++) {
+    int wait_attempts = 10;
+    for (int i = 0; i < wait_attempts; i++) {
         qemu_spin_lock(&s->monitor.fifo_lock);
         avail = fifo8_num_used(&s->monitor.fifo);
         qemu_spin_unlock(&s->monitor.fifo_lock);
         if (avail >= free_b) {
             break;
         }
+        sleep_ns(500000);
         qemu_cond_broadcast(&s->cond);
-        sleep_ns(1000000);
+        if (!runstate_is_running()) {
+            memset(stream, 0, free_b);
+            return;
+        }
     }
 
-    int to_copy = MIN(free_b, avail);
     int copied = 0;
+    int to_copy = MIN(free_b, avail);
     while (copied < to_copy) {
-        uint32_t chunk_len;
+        uint32_t chunk_len = 0;
         qemu_spin_lock(&s->monitor.fifo_lock);
         chunk_len = fifo8_pop_buf(&s->monitor.fifo, stream + copied,
                                   to_copy - copied);
         qemu_spin_unlock(&s->monitor.fifo_lock);
-        if (!chunk_len) break;
+        if (!chunk_len) {
+            break;
+        }
         copied += chunk_len;
     }
+
     if (copied < free_b) {
         memset(stream + copied, 0, free_b - copied);
     }
@@ -303,6 +322,8 @@ static void monitor_sink_cb(void *opaque, uint8_t *stream, int free_b)
 static void monitor_init(MCPXAPUState *d)
 {
     qemu_spin_init(&d->monitor.fifo_lock);
+    d->monitor.queued_bytes_low = 0;
+    d->monitor.queued_bytes_high = 0;
 
     int fifo_frames = 3;
     int audio_samples = 512;
@@ -316,7 +337,6 @@ static void monitor_init(MCPXAPUState *d)
 #endif
     int fifo_capacity_bytes = fifo_frames * sizeof(d->monitor.frame_buf);
     fifo8_create(&d->monitor.fifo, fifo_capacity_bytes);
-    d->monitor.fifo_capacity_bytes = fifo_capacity_bytes;
 
     struct SDL_AudioSpec sdl_audio_spec = {
         .freq = 48000,
@@ -328,7 +348,8 @@ static void monitor_init(MCPXAPUState *d)
     };
 
     if (SDL_Init(SDL_INIT_AUDIO) < 0)  {
-        fprintf(stderr, "Failed to initialize SDL audio subsystem: %s\n", SDL_GetError());
+        fprintf(stderr, "Failed to initialize SDL audio subsystem: %s\n",
+                SDL_GetError());
         exit(1);
     }
 
@@ -338,7 +359,8 @@ static void monitor_init(MCPXAPUState *d)
                                         &obtained_audio_spec,
                                         SDL_AUDIO_ALLOW_FORMAT_CHANGE);
     if (sdl_audio_dev == 0) {
-        fprintf(stderr, "SDL_OpenAudioDevice failed: %s\n", SDL_GetError());
+        fprintf(stderr, "SDL_OpenAudioDevice failed: %s\n",
+                SDL_GetError());
         assert(!"SDL_OpenAudioDevice failed");
         exit(1);
     }
@@ -349,6 +371,7 @@ static void monitor_init(MCPXAPUState *d)
         drain_bytes = audio_samples * 2 * sizeof(int16_t);
     }
     drain_bytes = MAX(drain_bytes, fifo_frame_bytes);
+    d->monitor.fifo_capacity_bytes = fifo_capacity_bytes;
     int max_high = MAX(d->monitor.fifo_capacity_bytes - fifo_frame_bytes,
                        fifo_frame_bytes);
     d->monitor.device_buffer_bytes = drain_bytes;

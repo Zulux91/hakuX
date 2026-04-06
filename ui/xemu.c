@@ -1765,6 +1765,14 @@ void sdl2_gl_refresh(DisplayChangeListener *dcl)
     }
 #endif
 
+#ifdef XBOX
+    /* Detect game and apply compatibility quirks based on XBE title ID */
+    {
+        extern void game_compat_check(void);
+        game_compat_check();
+    }
+#endif
+
     /* Frame limiter: cap the render/swap path at ~60 Hz. */
     {
         static int64_t next_render_ns;

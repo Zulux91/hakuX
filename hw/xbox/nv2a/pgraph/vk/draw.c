@@ -2968,6 +2968,10 @@ static void begin_draw(PGRAPHState *pg)
     }
 
     if (must_bind_pipeline) {
+        if (!r->pipeline_binding ||
+            r->pipeline_binding->pipeline == VK_NULL_HANDLE) {
+            return; /* Pipeline not ready or creation failed */
+        }
         nv2a_profile_inc_counter(NV2A_PROF_PIPELINE_BIND);
         vkCmdBindPipeline(r->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                           r->pipeline_binding->pipeline);
@@ -4342,6 +4346,9 @@ static void emit_reorder_entry(PGRAPHState *pg, ReorderWindowEntry *e,
     }
 
     if (pipeline_changed) {
+        if (!e->pipeline_binding || e->pipeline_binding->pipeline == VK_NULL_HANDLE) {
+            return; /* Skip draw with uncompiled pipeline */
+        }
         nv2a_profile_inc_counter(NV2A_PROF_PIPELINE_BIND);
         vkCmdBindPipeline(r->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                           e->pipeline_binding->pipeline);

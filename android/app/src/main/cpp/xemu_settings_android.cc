@@ -226,6 +226,7 @@ bool xemu_settings_load(void)
         auto display_window = display["window"];
         auto audio = tbl["audio"];
         auto audio_vp = audio["vp"];
+        auto net_cfg = tbl["net"];
         auto perf = tbl["perf"];
         auto android_cfg = tbl["android"];
         auto sys = tbl["sys"];
@@ -234,6 +235,9 @@ bool xemu_settings_load(void)
         // General settings
         if (auto show_welcome = general["show_welcome"].value<bool>()) {
             g_config.general.show_welcome = *show_welcome;
+        }
+        if (auto skip_boot = general["skip_boot_anim"].value<bool>()) {
+            g_config.general.skip_boot_anim = *skip_boot;
         }
 
         // Display settings - default to Vulkan, allow OpenGL via config
@@ -290,6 +294,16 @@ bool xemu_settings_load(void)
                 g_config.display.ui.fit = CONFIG_DISPLAY_UI_FIT_SCALE;
             } else if (*ar == "fit") {
                 g_config.display.ui.fit = CONFIG_DISPLAY_UI_FIT_STRETCH;
+            }
+        }
+
+        // Network settings
+        if (auto net_enable = net_cfg["enable"].value<bool>()) {
+            g_config.net.enable = *net_enable;
+        }
+        if (auto net_backend = net_cfg["backend"].value<std::string>()) {
+            if (*net_backend == "nat") {
+                g_config.net.backend = CONFIG_NET_BACKEND_NAT;
             }
         }
 

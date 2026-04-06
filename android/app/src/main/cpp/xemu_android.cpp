@@ -559,6 +559,7 @@ struct DisplaySettings {
   std::string aspect_ratio = "auto";
   bool use_dsp = false;
   bool network_enabled = false;
+  bool skip_boot_anim = true;
 };
 
 static bool WriteConfigToml(const std::string& config_path,
@@ -605,6 +606,7 @@ static bool WriteConfigToml(const std::string& config_path,
   }
 
   general->insert_or_assign("show_welcome", false);
+  general->insert_or_assign("skip_boot_anim", ds.skip_boot_anim);
   display->insert_or_assign("renderer", "vulkan");
   display->insert_or_assign("filtering", ds.filtering);
   display_window->insert_or_assign("vsync", ds.vsync);
@@ -825,6 +827,7 @@ static SetupFiles SyncSetupFiles() {
   ds.validation_layers = GetPrefBool(env, activity, "validation_layers", false);
   ds.use_dsp = GetPrefBool(env, activity, "use_dsp", false);
   ds.network_enabled = GetPrefBool(env, activity, "setting_network_enable", false);
+  ds.skip_boot_anim = GetPrefBool(env, activity, "skip_boot_anim", true);
 
   bool fp_safe = GetPrefBool(env, activity, "fp_safe", true);
   xemu_set_fp_safe(fp_safe);
