@@ -922,6 +922,217 @@ void pgraph_vk_compute_bc3_decompress(PGRAPHState *pg, VkCommandBuffer cmd,
     pgraph_vk_end_debug_marker(r, cmd);
 }
 
+/*
+ * BC1/BC3 texture compression compute shaders.
+ *
+ * Each invocation compresses one 4x4 block of RGBA8 pixels into either
+ * a BC1 block (8 bytes, opaque RGB) or a BC3 block (16 bytes, with
+ * separate alpha).  Input is an SSBO of uint32 (one per pixel, RGBA8),
+ * output is an SSBO of uint32 (2 per BC1 block, 4 per BC3 block).
+ *
+ * Push constants: width, height, blocks_wide, has_alpha.
+ */
+static const char *bc_compress_glsl =
+    "layout(push_constant) uniform PushConstants {\n"
+    "    uint width;\n"
+    "    uint height;\n"
+    "    uint blocks_wide;\n"
+    "    uint has_alpha;\n"
+    "};\n"
+    "layout(set = 0, binding = 0) buffer DstBuf { uint dst_data[]; };\n"
+    "layout(set = 0, binding = 1) buffer Unused { uint unused_data[]; };\n"
+    "layout(set = 0, binding = 2) buffer SrcBuf { uint src_data[]; };\n"
+    "\n"
+    "uvec4 load_pixel(uint px, uint py) {\n"
+    "    px = min(px, width - 1u);\n"
+    "    py = min(py, height - 1u);\n"
+    "    uint rgba = src_data[py * width + px];\n"
+    "    return uvec4(rgba & 0xFFu, (rgba >> 8) & 0xFFu,\n"
+    "                 (rgba >> 16) & 0xFFu, (rgba >> 24) & 0xFFu);\n"
+    "}\n"
+    "\n"
+    "uint pack_rgb565(uvec3 c) {\n"
+    "    return ((c.r >> 3) << 11) | ((c.g >> 2) << 5) | (c.b >> 3);\n"
+    "}\n"
+    "\n"
+    "void main() {\n"
+    "    uint block_idx = gl_GlobalInvocationID.x;\n"
+    "    uint bx = block_idx % blocks_wide;\n"
+    "    uint by = block_idx / blocks_wide;\n"
+    "    uint px0 = bx * 4u;\n"
+    "    uint py0 = by * 4u;\n"
+    "\n"
+    "    uvec4 pixels[16];\n"
+    "    for (uint j = 0u; j < 4u; j++)\n"
+    "        for (uint i = 0u; i < 4u; i++)\n"
+    "            pixels[j * 4u + i] = load_pixel(px0 + i, py0 + j);\n"
+    "\n"
+    "    uvec3 cmin = uvec3(255);\n"
+    "    uvec3 cmax = uvec3(0);\n"
+    "    for (uint k = 0u; k < 16u; k++) {\n"
+    "        cmin = min(cmin, pixels[k].rgb);\n"
+    "        cmax = max(cmax, pixels[k].rgb);\n"
+    "    }\n"
+    "\n"
+    "    uvec3 inset = (cmax - cmin) / 16u;\n"
+    "    cmin = min(cmin + inset, uvec3(255));\n"
+    "    cmax = max(uvec3(inset), cmax) - inset;\n"
+    "\n"
+    "    uint c0 = pack_rgb565(cmax);\n"
+    "    uint c1 = pack_rgb565(cmin);\n"
+    "\n"
+    "    if (c0 < c1) {\n"
+    "        uint tmp = c0; c0 = c1; c1 = tmp;\n"
+    "        uvec3 tv = cmax; cmax = cmin; cmin = tv;\n"
+    "    } else if (c0 == c1) {\n"
+    "        uint color_word = c0 | (c1 << 16);\n"
+    "        if (has_alpha != 0u) {\n"
+    "            uint a = pixels[0].a;\n"
+    "            uint alpha_endpoints = a | (a << 8);\n"
+    "            dst_data[block_idx * 4u + 0u] = alpha_endpoints;\n"
+    "            dst_data[block_idx * 4u + 1u] = 0u;\n"
+    "            dst_data[block_idx * 4u + 2u] = color_word;\n"
+    "            dst_data[block_idx * 4u + 3u] = 0u;\n"
+    "        } else {\n"
+    "            dst_data[block_idx * 2u + 0u] = color_word;\n"
+    "            dst_data[block_idx * 2u + 1u] = 0u;\n"
+    "        }\n"
+    "        return;\n"
+    "    }\n"
+    "\n"
+    "    ivec3 palette[4];\n"
+    "    palette[0] = ivec3(cmax);\n"
+    "    palette[1] = ivec3(cmin);\n"
+    "    palette[2] = (2 * palette[0] + palette[1] + ivec3(1)) / 3;\n"
+    "    palette[3] = (palette[0] + 2 * palette[1] + ivec3(1)) / 3;\n"
+    "\n"
+    "    uint indices = 0u;\n"
+    "    for (uint k = 0u; k < 16u; k++) {\n"
+    "        ivec3 p = ivec3(pixels[k].rgb);\n"
+    "        uint best = 0u;\n"
+    "        int best_dist = 0x7FFFFFFF;\n"
+    "        for (uint c = 0u; c < 4u; c++) {\n"
+    "            ivec3 d = p - palette[c];\n"
+    "            int dist = d.r * d.r + d.g * d.g + d.b * d.b;\n"
+    "            if (dist < best_dist) {\n"
+    "                best_dist = dist;\n"
+    "                best = c;\n"
+    "            }\n"
+    "        }\n"
+    "        indices |= best << (k * 2u);\n"
+    "    }\n"
+    "\n"
+    "    uint color_word = c0 | (c1 << 16);\n"
+    "\n"
+    "    if (has_alpha != 0u) {\n"
+    "        uint amin = 255u;\n"
+    "        uint amax = 0u;\n"
+    "        for (uint k = 0u; k < 16u; k++) {\n"
+    "            amin = min(amin, pixels[k].a);\n"
+    "            amax = max(amax, pixels[k].a);\n"
+    "        }\n"
+    "        uint a0 = amax;\n"
+    "        uint a1 = amin;\n"
+    "        if (a0 == a1) a0 = min(a0 + 1u, 255u);\n"
+    "\n"
+    "        int alp[8];\n"
+    "        alp[0] = int(a0);\n"
+    "        alp[1] = int(a1);\n"
+    "        alp[2] = (6 * alp[0] + 1 * alp[1] + 3) / 7;\n"
+    "        alp[3] = (5 * alp[0] + 2 * alp[1] + 3) / 7;\n"
+    "        alp[4] = (4 * alp[0] + 3 * alp[1] + 3) / 7;\n"
+    "        alp[5] = (3 * alp[0] + 4 * alp[1] + 3) / 7;\n"
+    "        alp[6] = (2 * alp[0] + 5 * alp[1] + 3) / 7;\n"
+    "        alp[7] = (1 * alp[0] + 6 * alp[1] + 3) / 7;\n"
+    "\n"
+    "        uint alpha_indices_lo = 0u;\n"
+    "        uint alpha_indices_hi = 0u;\n"
+    "        for (uint k = 0u; k < 16u; k++) {\n"
+    "            int a = int(pixels[k].a);\n"
+    "            uint best_ai = 0u;\n"
+    "            int best_ad = 0x7FFFFFFF;\n"
+    "            for (uint ai = 0u; ai < 8u; ai++) {\n"
+    "                int ad = abs(a - alp[ai]);\n"
+    "                if (ad < best_ad) { best_ad = ad; best_ai = ai; }\n"
+    "            }\n"
+    "            uint bit_pos = k * 3u;\n"
+    "            if (bit_pos < 32u) {\n"
+    "                alpha_indices_lo |= best_ai << bit_pos;\n"
+    "                if (bit_pos + 3u > 32u)\n"
+    "                    alpha_indices_hi |= best_ai >> (32u - bit_pos);\n"
+    "            } else {\n"
+    "                alpha_indices_hi |= best_ai << (bit_pos - 32u);\n"
+    "            }\n"
+    "        }\n"
+    "\n"
+    "        uint alpha_endpoints = a0 | (a1 << 8);\n"
+    "        dst_data[block_idx * 4u + 0u] = alpha_endpoints | (alpha_indices_lo << 16);\n"
+    "        dst_data[block_idx * 4u + 1u] = (alpha_indices_lo >> 16) | (alpha_indices_hi << 16);\n"
+    "        dst_data[block_idx * 4u + 2u] = color_word;\n"
+    "        dst_data[block_idx * 4u + 3u] = indices;\n"
+    "    } else {\n"
+    "        dst_data[block_idx * 2u + 0u] = color_word;\n"
+    "        dst_data[block_idx * 2u + 1u] = indices;\n"
+    "    }\n"
+    "}\n";
+
+static gchar *get_bc_compress_shader_glsl(int workgroup_size)
+{
+    return g_strdup_printf(
+        "#version 450\n"
+        "layout(local_size_x = %d, local_size_y = 1, local_size_z = 1) in;\n"
+        "%s", workgroup_size, bc_compress_glsl);
+}
+
+void pgraph_vk_compress_texture_to_bc(PGRAPHState *pg, VkCommandBuffer cmd,
+                                       VkBuffer src, size_t src_size,
+                                       VkBuffer dst, size_t dst_size,
+                                       unsigned int width, unsigned int height,
+                                       bool has_alpha)
+{
+    PGRAPHVkState *r = pg->vk_renderer_state;
+
+    unsigned int blocks_wide = (width + 3) / 4;
+    unsigned int blocks_high = (height + 3) / 4;
+    size_t num_blocks = (size_t)blocks_wide * blocks_high;
+
+    VkDescriptorBufferInfo buffers[] = {
+        { .buffer = dst, .offset = 0, .range = dst_size },
+        { .buffer = dst, .offset = 0, .range = dst_size },
+        { .buffer = src, .offset = 0, .range = src_size },
+    };
+    update_descriptor_sets(pg, buffers, ARRAY_SIZE(buffers));
+
+    ComputePipelineKey key;
+    memset(&key, 0, sizeof(key));
+    key.compute_type = COMPUTE_TYPE_BC_COMPRESS;
+    key.pack = has_alpha;
+    key.workgroup_size = get_workgroup_size_for_output_units(r, num_blocks);
+
+    LruNode *node = lru_lookup(&r->compute.pipeline_cache,
+                      fast_hash((void *)&key, sizeof(key)), &key);
+    ComputePipeline *pipeline = container_of(node, ComputePipeline, node);
+    assert(pipeline);
+
+    size_t group_count = num_blocks / pipeline->key.workgroup_size;
+    if (group_count == 0) group_count = 1;
+
+    pgraph_vk_begin_debug_marker(r, cmd, RGBA_PINK, __func__);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline->pipeline);
+    vkCmdBindDescriptorSets(
+        cmd, VK_PIPELINE_BIND_POINT_COMPUTE, r->compute.pipeline_layout, 0, 1,
+        &r->compute.descriptor_sets[r->compute.descriptor_set_index - 1], 0,
+        NULL);
+
+    uint32_t push_constants[4] = { width, height, blocks_wide, has_alpha ? 1 : 0 };
+    vkCmdPushConstants(cmd, r->compute.pipeline_layout,
+                       VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push_constants),
+                       push_constants);
+
+    vkCmdDispatch(cmd, group_count, 1, 1);
+    pgraph_vk_end_debug_marker(r, cmd);
+}
+
 static void pipeline_cache_entry_init(Lru *lru, LruNode *node,
                                       const void *state)
 {
@@ -953,6 +1164,10 @@ static void pipeline_cache_entry_init(Lru *lru, LruNode *node,
         break;
     case COMPUTE_TYPE_BC3_DECOMPRESS:
         glsl = get_bc3_decompress_shader_glsl(snode->key.workgroup_size);
+        layout = r->compute.pipeline_layout;
+        break;
+    case COMPUTE_TYPE_BC_COMPRESS:
+        glsl = get_bc_compress_shader_glsl(snode->key.workgroup_size);
         layout = r->compute.pipeline_layout;
         break;
     default:

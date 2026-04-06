@@ -708,6 +708,12 @@ typedef struct TextureBinding {
     uint32_t submit_time;
     unsigned int dirty_check_frame;
     bool dirty_check_result;
+
+    /* Adaptive BCn compression fields */
+    uint32_t sample_count;
+    uint32_t upload_count;
+    bool     bc_compressed;
+    uint32_t last_sample_frame;
 } TextureBinding;
 
 typedef struct QueryReport {
@@ -811,6 +817,7 @@ typedef enum {
     COMPUTE_TYPE_UNSWIZZLE = 2,
     COMPUTE_TYPE_DEPTH_STENCIL_DIRECT = 3,
     COMPUTE_TYPE_BC3_DECOMPRESS = 4,
+    COMPUTE_TYPE_BC_COMPRESS = 5,
 } ComputeType;
 
 typedef struct ComputePipelineKey {
@@ -977,6 +984,15 @@ typedef struct PGRAPHVkState {
 #endif
     bool push_descriptors_supported;
     bool texture_compression_bc_supported;
+
+    /* Adaptive BCn compression for uncompressed textures */
+    struct {
+        uint32_t sample_threshold;
+        uint32_t total_compressed;
+        uint64_t vram_saved_bytes;
+        bool     enabled;
+    } tex_compress;
+
     VkDescriptorSetLayout push_tex_set_layout;
     VkDescriptorSetLayout push_ubo_set_layout;
     VkDescriptorPool push_ubo_pool;
@@ -1471,6 +1487,11 @@ void pgraph_vk_compute_bc3_decompress(PGRAPHState *pg, VkCommandBuffer cmd,
                                        size_t dst_size,
                                        unsigned int width,
                                        unsigned int height);
+void pgraph_vk_compress_texture_to_bc(PGRAPHState *pg, VkCommandBuffer cmd,
+                                       VkBuffer src, size_t src_size,
+                                       VkBuffer dst, size_t dst_size,
+                                       unsigned int width, unsigned int height,
+                                       bool has_alpha);
 
 // display.c
 void pgraph_vk_init_display(PGRAPHState *pg);
