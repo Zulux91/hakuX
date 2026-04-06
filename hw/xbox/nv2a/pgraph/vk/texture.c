@@ -106,6 +106,15 @@ static VkFormat kelvin_format_to_native_bc(int color_format)
     }
 }
 
+/* BC3/DXT5: native format is broken on Adreno 730+, but we can decompress
+ * via compute shader on the GPU instead of falling back to CPU. Only for 2D
+ * textures (including cubemap faces); 3D keeps the CPU fallback. */
+static bool use_bc3_compute_decompress(int color_format, int dimensionality)
+{
+    return color_format == NV097_SET_TEXTURE_FORMAT_COLOR_L_DXT45_A8R8G8B8
+        && dimensionality == 2;
+}
+
 // FIXME: Move to common
 static void memcpy_image(void *dst, void *src, int min_stride, int dst_stride, int src_stride, int height)
 {
@@ -272,11 +281,13 @@ static TextureLayout *get_texture_layout(PGRAPHState *pg, int texture_idx)
                     size_t compressed_size =
                         (size_t)(physical_width / 4) * (physical_height / 4) * block_size;
 
-                    if (r->texture_compression_bc_supported &&
-                        kelvin_format_to_native_bc(s.color_format)) {
-                        /* Native BC path: upload compressed blocks directly.
-                         * DXT blocks are already in linear order (L_ prefix).
-                         * No decompression needed. */
+                    if ((r->texture_compression_bc_supported &&
+                         kelvin_format_to_native_bc(s.color_format)) ||
+                        use_bc3_compute_decompress(s.color_format,
+                                                   s.dimensionality)) {
+                        /* Native BC or GPU compute decompress path: copy
+                         * compressed blocks directly. DXT blocks are already
+                         * in linear order (L_ prefix). */
                         uint8_t *raw_copy = g_malloc(compressed_size);
                         memcpy(raw_copy, texture_data_ptr, compressed_size);
 
@@ -514,6 +525,203 @@ static void resolve_possibly_dirty_textures(NV2AState *d)
     }
 }
 
+static void upload_texture_image_bc3_compute(PGRAPHState *pg,
+                                              TextureBinding *binding,
+                                              TextureLayout *layout,
+                                              int num_layers,
+                                              VkColorFormatInfo vkf)
+{
+    PGRAPHVkState *r = pg->vk_renderer_state;
+    TextureShape *state = &binding->key.state;
+    VkDeviceSize alignment = r->device_props.limits.minStorageBufferOffsetAlignment;
+
+    /* Calculate total compressed and decompressed sizes with alignment */
+    size_t total_compressed = 0;
+    size_t total_decompressed = 0;
+    for (int layer = 0; layer < num_layers; layer++) {
+        for (int level = 0; level < state->levels; level++) {
+            TextureLevel *lev = &layout->layers[layer].levels[level];
+            total_compressed += ROUND_UP(lev->decoded_size, alignment);
+            total_decompressed += ROUND_UP((size_t)lev->width * lev->height * 4,
+                                           alignment);
+        }
+    }
+
+    StorageBuffer *compute_dst = &r->storage_buffers[BUFFER_COMPUTE_DST];
+    StorageBuffer *compute_src = &r->storage_buffers[BUFFER_COMPUTE_SRC];
+
+    if (total_compressed > compute_dst->buffer_size ||
+        total_decompressed > compute_src->buffer_size) {
+        /* Texture too large for compute buffers — should not happen for Xbox
+         * textures but fall back gracefully. The caller will need to handle
+         * this by using the CPU decompression path instead. For now, assert. */
+        assert(!"BC3 texture exceeds compute buffer capacity");
+        return;
+    }
+
+    /* Upload compressed blocks to staging buffer */
+    VkDeviceSize staging_base = pgraph_vk_staging_alloc(pg, total_compressed);
+    if (staging_base == VK_WHOLE_SIZE) {
+        OPT_STAT_INC(buf_stg_full);
+        pgraph_vk_finish(pg, VK_FINISH_REASON_NEED_BUFFER_SPACE);
+        staging_base = pgraph_vk_staging_alloc(pg, total_compressed);
+        if (staging_base == VK_WHOLE_SIZE) {
+            if (pgraph_vk_staging_reclaim_any(pg)) {
+                pgraph_vk_staging_reset(pg);
+                staging_base = pgraph_vk_staging_alloc(pg, total_compressed);
+            }
+            if (staging_base == VK_WHOLE_SIZE) {
+                pgraph_vk_flush_all_frames(pg);
+                pgraph_vk_staging_reset(pg);
+                staging_base = pgraph_vk_staging_alloc(pg, total_compressed);
+                assert(staging_base != VK_WHOLE_SIZE);
+            }
+        }
+    }
+
+    StorageBuffer *staging = get_staging_buffer(r, BUFFER_STAGING_SRC);
+    uint8_t *mapped = (uint8_t *)staging->mapped;
+
+    VkDeviceSize staging_offset = staging_base;
+    for (int layer = 0; layer < num_layers; layer++) {
+        for (int level = 0; level < state->levels; level++) {
+            TextureLevel *lev = &layout->layers[layer].levels[level];
+            memcpy(mapped + staging_offset, lev->decoded_data, lev->decoded_size);
+            staging_offset += ROUND_UP(lev->decoded_size, alignment);
+        }
+    }
+
+    vmaFlushAllocation(r->allocator, staging->allocation,
+                       staging_base, staging_offset - staging_base);
+
+    VkCommandBuffer cmd = pgraph_vk_begin_nondraw_commands(pg);
+    pgraph_vk_begin_debug_marker(r, cmd, RGBA_GREEN, "bc3_compute_upload");
+
+    /* Barrier: host write → transfer read (staging) */
+    VkBufferMemoryBarrier host_barrier = {
+        .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+        .srcAccessMask = VK_ACCESS_HOST_WRITE_BIT,
+        .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .buffer = staging->buffer,
+        .offset = staging_base,
+        .size = staging_offset - staging_base,
+    };
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_HOST_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 1,
+                         &host_barrier, 0, NULL);
+
+    /* Copy staging → COMPUTE_DST (all compressed data) */
+    VkBufferCopy copy_region = {
+        .srcOffset = staging_base,
+        .dstOffset = 0,
+        .size = staging_offset - staging_base,
+    };
+    vkCmdCopyBuffer(cmd, staging->buffer, compute_dst->buffer, 1, &copy_region);
+
+    /* Barrier: COMPUTE_DST transfer_write → shader_read,
+     *          COMPUTE_SRC → shader_write */
+    VkBufferMemoryBarrier pre_compute_barriers[] = {
+        {
+            .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+            .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+            .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .buffer = compute_dst->buffer,
+            .offset = 0,
+            .size = total_compressed,
+        },
+        {
+            .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+            .srcAccessMask = 0,
+            .dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .buffer = compute_src->buffer,
+            .offset = 0,
+            .size = total_decompressed,
+        },
+    };
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, NULL,
+                         ARRAY_SIZE(pre_compute_barriers),
+                         pre_compute_barriers, 0, NULL);
+
+    /* Dispatch BC3 decompress per layer/level */
+    int num_regions = num_layers * state->levels;
+    g_autofree VkBufferImageCopy *regions =
+        g_malloc0_n(num_regions, sizeof(VkBufferImageCopy));
+
+    VkDeviceSize src_offset = 0;
+    VkDeviceSize dst_offset = 0;
+    int region_idx = 0;
+
+    for (int layer = 0; layer < num_layers; layer++) {
+        for (int level = 0; level < state->levels; level++) {
+            TextureLevel *lev = &layout->layers[layer].levels[level];
+            size_t decompressed_size = (size_t)lev->width * lev->height * 4;
+
+            pgraph_vk_compute_bc3_decompress(
+                pg, cmd,
+                compute_dst->buffer, src_offset, lev->decoded_size,
+                compute_src->buffer, dst_offset, decompressed_size,
+                lev->width, lev->height);
+
+            regions[region_idx] = (VkBufferImageCopy){
+                .bufferOffset = dst_offset,
+                .bufferRowLength = 0,
+                .bufferImageHeight = 0,
+                .imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .imageSubresource.mipLevel = level,
+                .imageSubresource.baseArrayLayer = layer,
+                .imageSubresource.layerCount = 1,
+                .imageOffset = (VkOffset3D){ 0, 0, 0 },
+                .imageExtent = (VkExtent3D){ lev->width, lev->height, 1 },
+            };
+
+            src_offset += ROUND_UP(lev->decoded_size, alignment);
+            dst_offset += ROUND_UP(decompressed_size, alignment);
+            region_idx++;
+        }
+    }
+
+    /* Barrier: COMPUTE_SRC shader_write → transfer_read */
+    VkBufferMemoryBarrier post_compute_barrier = {
+        .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+        .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
+        .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .buffer = compute_src->buffer,
+        .offset = 0,
+        .size = total_decompressed,
+    };
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 1,
+                         &post_compute_barrier, 0, NULL);
+
+    /* Transition image and copy decompressed data */
+    pgraph_vk_transition_image_layout(pg, cmd, binding->image, vkf.vk_format,
+                                      binding->current_layout,
+                                      VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    binding->current_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+
+    vkCmdCopyBufferToImage(cmd, compute_src->buffer,
+                           binding->image, binding->current_layout,
+                           num_regions, regions);
+
+    pgraph_vk_transition_image_layout(pg, cmd, binding->image, vkf.vk_format,
+                                      binding->current_layout,
+                                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    binding->current_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    nv2a_profile_inc_counter(NV2A_PROF_QUEUE_SUBMIT_4);
+    pgraph_vk_end_debug_marker(r, cmd);
+    pgraph_vk_end_nondraw_commands(pg, cmd);
+}
+
 // FIXME: Make sure we update sampler when data matches. Should we add filtering
 // options to the textureshape?
 static void upload_texture_image(PGRAPHState *pg, int texture_idx,
@@ -540,6 +748,20 @@ static void upload_texture_image(PGRAPHState *pg, int texture_idx,
 
     g_autofree TextureLayout *layout = get_texture_layout(pg, texture_idx);
     const int num_layers = state->cubemap ? 6 : 1;
+
+    /* BC3/DXT5: use GPU compute shader decompression instead of CPU */
+    if (use_bc3_compute_decompress(state->color_format, state->dimensionality)) {
+        upload_texture_image_bc3_compute(pg, binding, layout, num_layers, vkf);
+
+        for (int layer_idx = 0; layer_idx < num_layers; layer_idx++) {
+            TextureLayer *layer = &layout->layers[layer_idx];
+            for (int level_idx = 0; level_idx < state->levels; level_idx++) {
+                g_free(layer->levels[level_idx].decoded_data);
+            }
+        }
+        NV2A_PHASE_TIMER_END(texture_upload);
+        return;
+    }
 
     // Calculate decoded texture data size
     size_t texture_data_size = 0;
