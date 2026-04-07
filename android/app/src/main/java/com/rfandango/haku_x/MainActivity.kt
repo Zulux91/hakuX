@@ -86,6 +86,31 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
       ?: prefs.getString("renderer", "vulkan") ?: "vulkan"
     SDLActivity.nativeSetenv("XEMU_RENDERER", rendererPref)
     SDLActivity.nativeSetenv("SDL_ANDROID_TRAP_BACK_BUTTON", "1")
+
+    // Texture settings: per-game override takes precedence over global
+    val texDumpEnabled = prefs.getString(PerGameSettingsManager.runtimeKey("texture_dump_enabled"), null)
+      ?.let { it == "true" }
+      ?: prefs.getBoolean("texture_dump_enabled", false)
+    val texReplaceEnabled = false // feature hidden for now
+
+    // Texture dump: pass settings via env vars for native init
+    if (texDumpEnabled) {
+      SDLActivity.nativeSetenv("XEMU_TEXTURE_DUMP", "1")
+      val dumpPath = resolveTextureDumpRealPath(prefs)
+      if (dumpPath != null) {
+        SDLActivity.nativeSetenv("XEMU_TEXTURE_DUMP_PATH", dumpPath)
+      }
+    }
+
+    // Texture replacement: use cache dir prepared by GameLibraryActivity
+    if (texReplaceEnabled) {
+      flushShaderCaches()
+      val cacheDir = prefs.getString("textureReplaceCachePath", null)
+      if (cacheDir != null && java.io.File(cacheDir).isDirectory) {
+        SDLActivity.nativeSetenv("XEMU_TEXTURE_REPLACE", "1")
+        SDLActivity.nativeSetenv("XEMU_TEXTURE_REPLACE_PATH", cacheDir)
+      }
+    }
     setupOnScreenController()
     setupFpsOverlay()
     setupPauseMenu()
@@ -99,6 +124,88 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
     if (hasFocus) {
       hideSystemUI()
     }
+  }
+
+  private fun resolveTextureDumpRealPath(prefs: android.content.SharedPreferences): String? {
+    val uriStr = prefs.getString("textureDumpFolderUri", null) ?: return null
+    val uri = android.net.Uri.parse(uriStr)
+    val docId = android.provider.DocumentsContract.getTreeDocumentId(uri)
+    if (docId.startsWith("primary:")) {
+      val relPath = docId.removePrefix("primary:")
+      val realPath = android.os.Environment.getExternalStorageDirectory().absolutePath + "/" + relPath
+      val dir = java.io.File(realPath)
+      if (dir.isDirectory || dir.mkdirs()) return realPath
+    }
+    val fallback = java.io.File(getExternalFilesDir(null), "texture_dump")
+    fallback.mkdirs()
+    return fallback.absolutePath
+  }
+
+  // Texture decode progress dialog - called from native loader thread via JNI
+  private var decodeDialog: android.app.AlertDialog? = null
+  private var decodeProgressBar: android.widget.ProgressBar? = null
+  private var decodeMessageView: android.widget.TextView? = null
+  private val uiHandler = Handler(Looper.getMainLooper())
+
+  @Suppress("unused") // Called from native code via JNI
+  fun onTextureDecodeProgress(current: Int, total: Int) {
+    uiHandler.post {
+      if (current == 0 && total > 0) {
+        // First call: show dialog
+        val pad = (24 * resources.displayMetrics.density).toInt()
+        val layout = android.widget.LinearLayout(this).apply {
+          orientation = android.widget.LinearLayout.VERTICAL
+          setPadding(pad, pad, pad, pad)
+        }
+        val msg = android.widget.TextView(this).apply {
+          text = "Decoding texture 0 / $total..."
+          setTextColor(android.graphics.Color.WHITE)
+        }
+        val bar = android.widget.ProgressBar(this, null,
+          android.R.attr.progressBarStyleHorizontal).apply {
+          max = total
+          progress = 0
+          val lp = android.widget.LinearLayout.LayoutParams(
+            android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+            android.widget.LinearLayout.LayoutParams.WRAP_CONTENT)
+          lp.topMargin = pad / 2
+          layoutParams = lp
+        }
+        layout.addView(msg)
+        layout.addView(bar)
+        decodeProgressBar = bar
+        decodeMessageView = msg
+
+        decodeDialog = android.app.AlertDialog.Builder(this)
+          .setTitle("Processing Textures")
+          .setView(layout)
+          .setCancelable(false)
+          .create()
+        decodeDialog?.show()
+      } else if (current >= total) {
+        // Done: dismiss
+        decodeDialog?.dismiss()
+        decodeDialog = null
+        decodeProgressBar = null
+        decodeMessageView = null
+      } else {
+        // Update progress
+        decodeProgressBar?.progress = current
+        decodeMessageView?.text = "Decoding texture $current / $total..."
+      }
+    }
+  }
+
+  private fun flushShaderCaches() {
+    val baseDir = filesDir
+    val spvDir = java.io.File(baseDir, "spv_cache")
+    if (spvDir.isDirectory) {
+      spvDir.listFiles()?.forEach { it.delete() }
+      spvDir.delete()
+    }
+    java.io.File(baseDir, "vk_pipeline_cache.bin").delete()
+    java.io.File(baseDir, "shader_module_keys.bin").delete()
+    android.util.Log.i("hakuX-texreplace", "Flushed shader caches for texture replacement")
   }
 
   private fun hideSystemUI() {

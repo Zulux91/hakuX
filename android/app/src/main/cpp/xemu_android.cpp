@@ -1567,6 +1567,29 @@ Java_com_rfandango_haku_1x_SettingsActivity_nativeReloadTextureReplace(JNIEnv *,
     pgraph_vk_texture_replace_reload();
 }
 
+// Texture replacement decode progress callback via SDL JNI
+extern "C" void pgraph_vk_texture_replace_set_progress_cb(void (*cb)(int, int));
+
+static void texture_decode_progress_jni(int current, int total) {
+    JNIEnv *env = (JNIEnv *)SDL_AndroidGetJNIEnv();
+    if (!env) return;
+
+    jobject activity = (jobject)SDL_AndroidGetActivity();
+    if (!activity) return;
+
+    jclass cls = env->GetObjectClass(activity);
+    jmethodID mid = env->GetMethodID(cls, "onTextureDecodeProgress", "(II)V");
+    if (mid) {
+        env->CallVoidMethod(activity, mid, (jint)current, (jint)total);
+    }
+    env->DeleteLocalRef(cls);
+    env->DeleteLocalRef(activity);
+}
+
+extern "C" void install_texture_decode_progress_callback() {
+    pgraph_vk_texture_replace_set_progress_cb(texture_decode_progress_jni);
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_rfandango_haku_1x_MainActivity_nativePauseEmulation(JNIEnv *, jobject)
 {

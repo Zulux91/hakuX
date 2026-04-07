@@ -19,6 +19,8 @@ specific_ss.add([sdl, volk, libglslang, vma, vulkan, spirv_reflect, gloffscreen,
 		'surface-compute.c',
 		'surface.c',
 		'texture.c',
+		'texture_dump.c',
+		'texture_replace.c',
 		'vertex.c',
 		)
 	])

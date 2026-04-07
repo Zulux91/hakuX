@@ -752,16 +752,21 @@ static void upload_texture_image(PGRAPHState *pg, int texture_idx,
     g_autofree TextureLayout *layout = get_texture_layout(pg, texture_idx);
     const int num_layers = state->cubemap ? 6 : 1;
 
-    /* Texture replacement: check for custom texture */
+    /* Texture replacement: check for custom texture.
+     * Only replace if the VkImage format is uncompressed (RGBA8/BGRA8).
+     * BC-format VkImages can't receive uncompressed data — they'll be
+     * replaced when next recreated as a cache miss. */
     bool replaced = false;
-    if (pgraph_vk_texture_replace_is_enabled()) {
+    if (pgraph_vk_texture_replace_is_enabled() && !native_bc) {
         uint32_t repl_w, repl_h;
         size_t repl_size;
         const void *repl_data = pgraph_vk_texture_replace_lookup(
             binding->hash, &repl_w, &repl_h, &repl_size);
         if (repl_data) {
             TextureLevel *base = &layout->layers[0].levels[0];
-            if (repl_w == base->width && repl_h == base->height) {
+            if (repl_w == base->width && repl_h == base->height &&
+                (vkf.vk_format == VK_FORMAT_B8G8R8A8_UNORM ||
+                 vkf.vk_format == VK_FORMAT_R8G8B8A8_UNORM)) {
                 /* Convert RGBA8 replacement to target VkFormat */
                 uint32_t num_pixels = repl_w * repl_h;
                 size_t dst_size = num_pixels * 4;
@@ -777,7 +782,6 @@ static void upload_texture_image(PGRAPHState *pg, int texture_idx,
                         converted[i * 4 + 3] = src[i * 4 + 3];
                     }
                 } else {
-                    /* R8G8B8A8 or other 4-bpp: direct copy */
                     memcpy(converted, src, dst_size);
                 }
 
@@ -785,6 +789,7 @@ static void upload_texture_image(PGRAPHState *pg, int texture_idx,
                 base->decoded_data = converted;
                 base->decoded_size = dst_size;
                 replaced = true;
+                pgraph_vk_texture_replace_mark_applied(binding->hash);
             }
         }
     }
@@ -1794,13 +1799,21 @@ static void create_texture(PGRAPHState *pg, int texture_idx)
                     surface->image_view;
             }
         } else {
-            if (possibly_dirty && content_hash != snode->hash) {
+            bool vram_changed = possibly_dirty && content_hash != snode->hash;
+            bool needs_replace =
+                pgraph_vk_texture_replace_needs_upload(snode->hash);
+
+            if (vram_changed || needs_replace) {
                 OPT_STAT_INC(tex_cache_hash_misses);
                 if (snode->submit_time + r->num_active_frames > r->submit_count) {
                     pgraph_vk_flush_all_frames(pg);
                 }
                 upload_texture_image(pg, texture_idx, snode);
-                snode->hash = content_hash;
+                /* Only update hash when VRAM actually changed,
+                 * not when replacement triggered the re-upload */
+                if (vram_changed) {
+                    snode->hash = content_hash;
+                }
                 did_upload = true;
             }
             snode->possibly_dirty = false;
@@ -1819,10 +1832,13 @@ static void create_texture(PGRAPHState *pg, int texture_idx)
 
     VkColorFormatInfo vkf = kelvin_color_format_vk_map[state.color_format];
 
-    /* Use native BC format when hardware supports it */
     /* Use native BC format when hardware supports it, but NOT when the
-     * texture will be filled from an uncompressed render surface. */
-    VkFormat native_bc = (!surface_to_texture && r->texture_compression_bc_supported)
+     * texture will be filled from an uncompressed render surface, and
+     * NOT when a texture replacement exists (replacements are uncompressed). */
+    bool has_replacement = pgraph_vk_texture_replace_is_enabled() &&
+        pgraph_vk_texture_replace_lookup(content_hash, NULL, NULL, NULL) != NULL;
+    VkFormat native_bc = (!surface_to_texture && !has_replacement &&
+                          r->texture_compression_bc_supported)
                          ? kelvin_format_to_native_bc(state.color_format)
                          : (VkFormat)0;
     if (native_bc) {
