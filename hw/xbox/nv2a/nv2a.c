@@ -331,20 +331,14 @@ static void nv2a_vblank_timer_cb(void *opaque)
     bool in_deferral_window = effective_frame_ns > 0 &&
                               time_in_frame < defer_window;
 
-#ifdef __ANDROID__
-    /* On Android, only defer when the game is above 30fps.  Below 30fps,
-     * each frame spans 2+ VBLANK periods.  Deferral prevents the
-     * intermediate VBLANK from firing, but without deferral the guest
-     * handler increments READ_3D twice per frame, causing every other
-     * flip to stall — locking the game at 30fps.  Above 30fps, deferral
-     * prevents this double-increment by skipping the second VBLANK. */
-    bool android_allow_defer = effective_frame_ns > 0 &&
-                               effective_frame_ns < period * 2;
-#endif
+    /*
+     * The graduated deferral cap (period * 2 - period / 4 = ~29ms) already
+     * prevents genuine 30fps games from getting deferral. No additional
+     * android_allow_defer guard is needed — it was causing games to get
+     * trapped at 30fps by killing deferral in the recovery zone (30-36fps)
+     * where the game could speed back up if given modest deferral headroom.
+     */
     if (in_deferral_window &&
-#ifdef __ANDROID__
-        android_allow_defer &&
-#endif
         d->flip_active &&
         !qatomic_read(&d->pgraph.waiting_for_flip) &&
         !d->vblank_deferred) {
