@@ -49,11 +49,6 @@ class PerGameSettingsActivity : AppCompatActivity() {
 
         buildSettingsUI()
 
-        findViewById<MaterialButton>(R.id.btn_per_game_settings_clear).setOnClickListener {
-            PerGameSettingsManager.clearOverrides(this, relativePath)
-            Toast.makeText(this, R.string.per_game_settings_cleared, Toast.LENGTH_SHORT).show()
-            finish()
-        }
         findViewById<MaterialButton>(R.id.btn_per_game_settings_save).setOnClickListener {
             PerGameSettingsManager.saveOverrides(this, relativePath, overrides)
             Toast.makeText(this, R.string.per_game_settings_saved, Toast.LENGTH_SHORT).show()

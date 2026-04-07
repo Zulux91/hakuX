@@ -795,14 +795,10 @@ class GameLibraryActivity : AppCompatActivity() {
   }
 
   private fun showGameContextMenu(game: GameEntry) {
-    val hasOverrides = PerGameSettingsManager.hasOverrides(this, game.relativePath)
-    val options = mutableListOf(getString(R.string.library_per_game_settings_option))
-    if (hasOverrides) {
-      options.add(getString(R.string.per_game_settings_revert))
-    }
+    val options = arrayOf(getString(R.string.library_per_game_settings_option))
     com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
       .setTitle(game.title)
-      .setItems(options.toTypedArray()) { _, which ->
+      .setItems(options) { _, which ->
         when (which) {
           0 -> startActivity(
             android.content.Intent(this, SettingsIndexActivity::class.java)
@@ -810,12 +806,6 @@ class GameLibraryActivity : AppCompatActivity() {
               .putExtra(SettingsIndexActivity.EXTRA_GAME_TITLE, game.title)
               .putExtra(SettingsIndexActivity.EXTRA_GAME_RELATIVE_PATH, game.relativePath)
           )
-          1 -> {
-            PerGameSettingsManager.clearOverrides(this, game.relativePath)
-            android.widget.Toast.makeText(this,
-              R.string.per_game_settings_cleared,
-              android.widget.Toast.LENGTH_SHORT).show()
-          }
         }
       }
       .show()
