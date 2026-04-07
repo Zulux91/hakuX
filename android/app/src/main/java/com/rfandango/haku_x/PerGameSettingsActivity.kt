@@ -107,6 +107,8 @@ class PerGameSettingsActivity : AppCompatActivity() {
         addBoolPicker(container, "draw_reorder", getString(R.string.settings_draw_reorder), "draw_reorder")
         addBoolPicker(container, "draw_merge", getString(R.string.settings_draw_merge), "draw_merge")
         addBoolPicker(container, "async_compile", getString(R.string.settings_async_compile), "async_compile")
+        addBoolPicker(container, "texture_dump_enabled", "Dump Textures", "texture_dump_enabled")
+        // addBoolPicker(container, "texture_replace_enabled", "Custom Textures", "texture_replace_enabled")  // hidden for now
     }
 
     private fun styleOverride(titleView: TextView, button: MaterialButton, isOverridden: Boolean) {

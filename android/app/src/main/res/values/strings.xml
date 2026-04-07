@@ -206,6 +206,18 @@
   <string name="settings_validation_layers">Vulkan validation layers</string>
   <string name="settings_validation_layers_desc">Enable Vulkan validation for graphics debugging. Significant performance impact. Applied on next game launch.</string>
 
+  <string name="settings_show_fps_desc">Display a frames-per-second counter during gameplay.</string>
+  <string name="settings_skip_boot_anim_desc">Jump straight to the game, skipping the Xbox boot animation.</string>
+  <string name="settings_debug_tools">Debug Tools</string>
+  <string name="settings_debug_tools_desc">Show diagnostic frame capture in pause menu.</string>
+  <string name="settings_texture_dump">Dump Textures</string>
+  <string name="settings_texture_dump_desc">Save game textures as PNG files for creating texture packs.</string>
+  <string name="settings_texture_dump_folder">Select Dump Folder</string>
+  <string name="settings_no_folder_selected">No folder selected</string>
+  <string name="settings_texture_replace">Custom Textures</string>
+  <string name="settings_texture_replace_desc">Load replacement textures from a texture pack folder.</string>
+  <string name="settings_texture_replace_folder">Select Texture Pack Folder</string>
+
   <string name="settings_env_vars_title">Environment Variables</string>
   <string name="settings_env_vars_desc">Set custom environment variables applied at startup. One per line: KEY=VALUE. Applied on next game launch.</string>
   <string name="settings_env_vars_hint">e.g. MESA_VK_WSI_DEBUG=sw</string>

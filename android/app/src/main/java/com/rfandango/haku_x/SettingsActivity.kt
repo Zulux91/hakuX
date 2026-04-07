@@ -68,7 +68,9 @@ class SettingsActivity : AppCompatActivity() {
     "draw_reorder" to false, "draw_merge" to false,
     "async_compile" to false, "frame_skip" to false,
     "use_dsp" to false,
-    "skip_boot_anim" to true
+    "skip_boot_anim" to true,
+    "texture_dump_enabled" to false,
+    "texture_replace_enabled" to false
   )
   private val intDefaults = mapOf(
     "surface_scale" to 1, "submit_frames" to 3, "tier1_threshold" to 64,
@@ -146,6 +148,71 @@ class SettingsActivity : AppCompatActivity() {
 
   /** Convenience alias for initial setup */
   private fun highlightIfOverridden(key: String, vararg views: View) = updateHighlight(key, *views)
+
+  /** Generic setup for a per-game-overridable boolean switch. */
+  private fun setupSwitch(switchId: Int, key: String, default: Boolean,
+                          nativeCallback: ((Boolean) -> Unit)? = null) {
+    val sw = findViewById<MaterialSwitch>(switchId)
+    sw.isChecked = pgBool(key, default)
+    sw.setOnCheckedChangeListener { _, checked ->
+      pgPutBool(key, checked)
+      if (nativeCallback != null && !isPerGameMode) {
+        try { nativeCallback(checked) } catch (_: Throwable) {}
+      }
+      updateHighlight(key, sw)
+    }
+    highlightIfOverridden(key, sw)
+  }
+
+  /** Generic setup for a per-game-overridable int picker button. */
+  private fun setupIntPicker(buttonId: Int, key: String, default: Int, titleRes: Int,
+                             labels: Array<String>, values: IntArray,
+                             nativeCallback: ((Int) -> Unit)? = null) {
+    val btn = findViewById<MaterialButton>(buttonId)
+    val idx = values.indexOf(pgInt(key, default)).coerceAtLeast(0)
+    btn.text = labels[idx]
+    highlightIfOverridden(key, btn)
+    btn.setOnClickListener {
+      val sel = values.indexOf(pgInt(key, default)).coerceAtLeast(0)
+      MaterialAlertDialogBuilder(this)
+        .setTitle(titleRes)
+        .setSingleChoiceItems(labels, sel) { dialog, which ->
+          pgPutInt(key, values[which])
+          if (nativeCallback != null && !isPerGameMode) {
+            try { nativeCallback(values[which]) } catch (_: Throwable) {}
+          }
+          btn.text = labels[which]
+          updateHighlight(key, btn)
+          dialog.dismiss()
+        }
+        .setNegativeButton(android.R.string.cancel, null)
+        .show()
+    }
+  }
+
+  /** Generic setup for a per-game-overridable string picker button. */
+  private fun setupStringPicker(buttonId: Int, key: String, default: String, titleRes: Int,
+                                labels: Array<String>, values: Array<String>,
+                                postAction: (() -> Unit)? = null) {
+    val btn = findViewById<MaterialButton>(buttonId)
+    val idx = values.indexOf(pgStr(key, default)).coerceAtLeast(0)
+    btn.text = labels[idx]
+    highlightIfOverridden(key, btn)
+    btn.setOnClickListener {
+      val sel = values.indexOf(pgStr(key, default)).coerceAtLeast(0)
+      MaterialAlertDialogBuilder(this)
+        .setTitle(titleRes)
+        .setSingleChoiceItems(labels, sel) { dialog, which ->
+          pgPutStr(key, values[which])
+          btn.text = labels[which]
+          updateHighlight(key, btn)
+          dialog.dismiss()
+          postAction?.invoke()
+        }
+        .setNegativeButton(android.R.string.cancel, null)
+        .show()
+    }
+  }
 
   private data class EepromLanguageOption(val value: XboxEepromEditor.Language, val labelRes: Int)
   private data class EepromVideoOption(val value: XboxEepromEditor.VideoStandard, val labelRes: Int)
@@ -458,96 +525,23 @@ class SettingsActivity : AppCompatActivity() {
       prefs.edit().putBoolean("show_fps", checked).apply()
     }
 
-    val switchSkipBootAnim = findViewById<MaterialSwitch>(R.id.switch_skip_boot_anim)
-    switchSkipBootAnim.isChecked = pgBool("skip_boot_anim", true)
-    switchSkipBootAnim.setOnCheckedChangeListener { _, checked ->
-      pgPutBool("skip_boot_anim", checked)
-      updateHighlight("skip_boot_anim", switchSkipBootAnim)
-    }
-    highlightIfOverridden("skip_boot_anim", switchSkipBootAnim)
+    setupSwitch(R.id.switch_skip_boot_anim, "skip_boot_anim", true)
+    setupSwitch(R.id.switch_unlock_framerate, "unlock_framerate", true)
+    setupSwitch(R.id.switch_fp_safe, "fp_safe", true) { nativeSetFpSafe(it) }
+    setupSwitch(R.id.switch_fp_jit, "fp_jit", true) { nativeSetFpJit(it) }
+    setupSwitch(R.id.switch_fast_fences, "fast_fences", false) { nativeSetFastFences(it) }
+    setupSwitch(R.id.switch_skip_occlusion, "skip_occlusion_queries", false)
+    setupSwitch(R.id.switch_draw_reorder, "draw_reorder", false) { nativeSetDrawReorder(it) }
+    setupSwitch(R.id.switch_draw_merge, "draw_merge", false) { nativeSetDrawMerge(it) }
+    setupSwitch(R.id.switch_async_compile, "async_compile", false) { nativeSetAsyncCompile(it) }
+    setupSwitch(R.id.switch_frame_skip, "frame_skip", false) { nativeSetFrameSkip(it) }
 
-    val switchUnlockFps = findViewById<MaterialSwitch>(R.id.switch_unlock_framerate)
-    switchUnlockFps.isChecked = pgBool("unlock_framerate", true)
-    switchUnlockFps.setOnCheckedChangeListener { _, checked ->
-      pgPutBool("unlock_framerate", checked)
-      updateHighlight("unlock_framerate", switchUnlockFps)
-    }
-    highlightIfOverridden("unlock_framerate", switchUnlockFps)
-
-    val switchFpSafe = findViewById<MaterialSwitch>(R.id.switch_fp_safe)
-    switchFpSafe.isChecked = pgBool("fp_safe", true)
-    switchFpSafe.setOnCheckedChangeListener { _, checked ->
-      pgPutBool("fp_safe", checked)
-      if (!isPerGameMode) { try { nativeSetFpSafe(checked) } catch (_: Throwable) {} }
-      updateHighlight("fp_safe", switchFpSafe)
-    }
-    highlightIfOverridden("fp_safe", switchFpSafe)
-
-    val switchFpJit = findViewById<MaterialSwitch>(R.id.switch_fp_jit)
-    switchFpJit.isChecked = pgBool("fp_jit", true)
-    switchFpJit.setOnCheckedChangeListener { _, checked ->
-      pgPutBool("fp_jit", checked)
-      if (!isPerGameMode) { try { nativeSetFpJit(checked) } catch (_: Throwable) {} }
-      updateHighlight("fp_jit", switchFpJit)
-    }
-    highlightIfOverridden("fp_jit", switchFpJit)
-
-    val switchFastFences = findViewById<MaterialSwitch>(R.id.switch_fast_fences)
-    switchFastFences.isChecked = pgBool("fast_fences", false)
-    switchFastFences.setOnCheckedChangeListener { _, checked ->
-      pgPutBool("fast_fences", checked)
-      if (!isPerGameMode) { try { nativeSetFastFences(checked) } catch (_: Throwable) {} }
-      updateHighlight("fast_fences", switchFastFences)
-    }
-    highlightIfOverridden("fast_fences", switchFastFences)
-
-    val switchSkipOcclusion = findViewById<MaterialSwitch>(R.id.switch_skip_occlusion)
-    switchSkipOcclusion.isChecked = pgBool("skip_occlusion_queries", false)
-    switchSkipOcclusion.setOnCheckedChangeListener { _, checked ->
-      pgPutBool("skip_occlusion_queries", checked)
-      updateHighlight("skip_occlusion_queries", switchSkipOcclusion)
-    }
-    highlightIfOverridden("skip_occlusion_queries", switchSkipOcclusion)
-
-    val switchDrawReorder = findViewById<MaterialSwitch>(R.id.switch_draw_reorder)
-    switchDrawReorder.isChecked = pgBool("draw_reorder", false)
-    switchDrawReorder.setOnCheckedChangeListener { _, checked ->
-      pgPutBool("draw_reorder", checked)
-      if (!isPerGameMode) { try { nativeSetDrawReorder(checked) } catch (_: Throwable) {} }
-      updateHighlight("draw_reorder", switchDrawReorder)
-    }
-    highlightIfOverridden("draw_reorder", switchDrawReorder)
-
-    val switchDrawMerge = findViewById<MaterialSwitch>(R.id.switch_draw_merge)
-    switchDrawMerge.isChecked = pgBool("draw_merge", false)
-    switchDrawMerge.setOnCheckedChangeListener { _, checked ->
-      pgPutBool("draw_merge", checked)
-      if (!isPerGameMode) { try { nativeSetDrawMerge(checked) } catch (_: Throwable) {} }
-      updateHighlight("draw_merge", switchDrawMerge)
-    }
-    highlightIfOverridden("draw_merge", switchDrawMerge)
-
-    val switchAsyncCompile = findViewById<MaterialSwitch>(R.id.switch_async_compile)
-    switchAsyncCompile.isChecked = pgBool("async_compile", false)
-    switchAsyncCompile.setOnCheckedChangeListener { _, checked ->
-      pgPutBool("async_compile", checked)
-      if (!isPerGameMode) { try { nativeSetAsyncCompile(checked) } catch (_: Throwable) {} }
-      updateHighlight("async_compile", switchAsyncCompile)
-    }
-    highlightIfOverridden("async_compile", switchAsyncCompile)
-
-    val switchFrameSkip = findViewById<MaterialSwitch>(R.id.switch_frame_skip)
-    switchFrameSkip.isChecked = pgBool("frame_skip", false)
-    switchFrameSkip.setOnCheckedChangeListener { _, checked ->
-      pgPutBool("frame_skip", checked)
-      if (!isPerGameMode) { try { nativeSetFrameSkip(checked) } catch (_: Throwable) {} }
-      updateHighlight("frame_skip", switchFrameSkip)
-    }
-    highlightIfOverridden("frame_skip", switchFrameSkip)
-
-    setupTextureCachePicker()
-    setupSubmitFramesPicker()
-    setupTier1ThresholdPicker()
+    setupIntPicker(R.id.btn_texture_cache, "texture_cache_size", 0,
+      R.string.settings_texture_cache, arrayOf("Auto (0)", "512", "1024", "2048"), intArrayOf(0, 512, 1024, 2048))
+    setupIntPicker(R.id.btn_submit_frames, "submit_frames", 3,
+      R.string.settings_submit_frames, arrayOf("Single (1)", "Double (2)", "Triple (3)"), intArrayOf(1, 2, 3)) { nativeSetSubmitFrames(it) }
+    setupIntPicker(R.id.btn_tier1_threshold, "tier1_threshold", 64,
+      R.string.settings_tier1_threshold, arrayOf("Disabled", "Aggressive (16)", "Early (32)", "Default (64)", "Conservative (128)", "Lazy (256)"), intArrayOf(0, 16, 32, 64, 128, 256)) { nativeSetTier1Threshold(it) }
 
     val switchValidation = findViewById<MaterialSwitch>(R.id.switch_validation_layers)
     switchValidation.isChecked = prefs.getBoolean("validation_layers", false)
@@ -566,15 +560,25 @@ class SettingsActivity : AppCompatActivity() {
     val btnTextureDumpFolder = findViewById<MaterialButton>(R.id.btn_texture_dump_folder)
     val txtTextureDumpPath = findViewById<TextView>(R.id.txt_texture_dump_path)
 
-    switchTextureDump.isChecked = prefs.getBoolean("texture_dump_enabled", false)
-    btnTextureDumpFolder.isEnabled = switchTextureDump.isChecked
+    switchTextureDump.isChecked = pgBool("texture_dump_enabled", false)
+    btnTextureDumpFolder.isEnabled = switchTextureDump.isChecked && !isPerGameMode
     updateTextureDumpPath()
 
     switchTextureDump.setOnCheckedChangeListener { _, checked ->
-      prefs.edit().putBoolean("texture_dump_enabled", checked).apply()
-      btnTextureDumpFolder.isEnabled = checked
-      try { nativeSetTextureDumpEnabled(checked) } catch (_: Throwable) {}
-      if (checked) applyTextureDumpPath()
+      pgPutBool("texture_dump_enabled", checked)
+      btnTextureDumpFolder.isEnabled = checked && !isPerGameMode
+      if (!isPerGameMode) {
+        try { nativeSetTextureDumpEnabled(checked) } catch (_: Throwable) {}
+        if (checked) applyTextureDumpPath()
+      }
+      updateHighlight("texture_dump_enabled", switchTextureDump)
+    }
+    highlightIfOverridden("texture_dump_enabled", switchTextureDump)
+
+    // Hide folder picker in per-game mode (path is global)
+    if (isPerGameMode) {
+      btnTextureDumpFolder.visibility = android.view.View.GONE
+      txtTextureDumpPath.visibility = android.view.View.GONE
     }
 
     btnTextureDumpFolder.setOnClickListener {
@@ -586,16 +590,27 @@ class SettingsActivity : AppCompatActivity() {
     // Custom Textures (Replacement)
     val switchTextureReplace = findViewById<MaterialSwitch>(R.id.switch_texture_replace)
     val btnTextureReplaceFolder = findViewById<MaterialButton>(R.id.btn_texture_replace_folder)
+    val txtTextureReplacePath = findViewById<TextView>(R.id.txt_texture_replace_path)
 
-    switchTextureReplace.isChecked = prefs.getBoolean("texture_replace_enabled", false)
-    btnTextureReplaceFolder.isEnabled = switchTextureReplace.isChecked
+    switchTextureReplace.isChecked = pgBool("texture_replace_enabled", false)
+    btnTextureReplaceFolder.isEnabled = switchTextureReplace.isChecked && !isPerGameMode
     updateTextureReplacePath()
 
     switchTextureReplace.setOnCheckedChangeListener { _, checked ->
-      prefs.edit().putBoolean("texture_replace_enabled", checked).apply()
-      btnTextureReplaceFolder.isEnabled = checked
-      try { nativeSetTextureReplaceEnabled(checked) } catch (_: Throwable) {}
-      if (checked) applyTextureReplacePath()
+      pgPutBool("texture_replace_enabled", checked)
+      btnTextureReplaceFolder.isEnabled = checked && !isPerGameMode
+      if (!isPerGameMode) {
+        try { nativeSetTextureReplaceEnabled(checked) } catch (_: Throwable) {}
+        if (checked) applyTextureReplacePath()
+      }
+      updateHighlight("texture_replace_enabled", switchTextureReplace)
+    }
+    highlightIfOverridden("texture_replace_enabled", switchTextureReplace)
+
+    // Hide folder picker in per-game mode (path is global)
+    if (isPerGameMode) {
+      btnTextureReplaceFolder.visibility = android.view.View.GONE
+      txtTextureReplacePath.visibility = android.view.View.GONE
     }
 
     btnTextureReplaceFolder.setOnClickListener {
@@ -634,18 +649,18 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     // Audio - DSP
-    val switchUseDsp = findViewById<MaterialSwitch>(R.id.switch_use_dsp)
-    switchUseDsp.isChecked = pgBool("use_dsp", false)
-    switchUseDsp.setOnCheckedChangeListener { _, checked ->
-      pgPutBool("use_dsp", checked)
-      updateHighlight("use_dsp", switchUseDsp)
-    }
-    highlightIfOverridden("use_dsp", switchUseDsp)
+    setupSwitch(R.id.switch_use_dsp, "use_dsp", false)
 
-    setupRendererPicker()
-    setupResolutionScale()
-    setupFilteringPicker()
-    setupAspectRatioPicker()
+    setupStringPicker(R.id.btn_renderer, "renderer", "vulkan",
+      R.string.settings_renderer, arrayOf("Vulkan", "OpenGL ES"), arrayOf("vulkan", "opengl")) {
+      if (!isPerGameMode) clearAllShaderCaches()
+    }
+    setupIntPicker(R.id.btn_resolution_scale, "surface_scale", 1,
+      R.string.settings_resolution_scale, arrayOf("1x (Native)", "2x", "3x", "4x"), intArrayOf(1, 2, 3, 4))
+    setupStringPicker(R.id.btn_filtering, "filtering", "nearest",
+      R.string.settings_filtering, arrayOf("Nearest", "Linear"), arrayOf("nearest", "linear"))
+    setupStringPicker(R.id.btn_aspect_ratio, "aspect_ratio", "auto",
+      R.string.settings_aspect_ratio, arrayOf("Auto", "Native (4:3)", "16:9", "Fit"), arrayOf("auto", "native", "16:9", "fit"))
     setupEnvVars()
     setupEepromEditor()
 
@@ -731,11 +746,12 @@ class SettingsActivity : AppCompatActivity() {
     // In per-game mode, hide non-overridable widgets within visible sections
     if (isPerGameMode) {
       val hideInPerGame = listOf(
-        R.id.switch_show_fps,
-        R.id.switch_validation_layers,
-        R.id.switch_debug_tools,
+        R.id.group_show_fps,
+        R.id.group_validation_layers,
+        R.id.group_debug_tools,
         R.id.group_clear_shader_cache,
         R.id.group_clear_code_cache,
+        R.id.group_export_logs,
         R.id.section_env_vars
       )
       for (id in hideInPerGame) {
@@ -779,99 +795,6 @@ class SettingsActivity : AppCompatActivity() {
     }
   }
 
-  private fun setupRendererPicker() {
-    val btn = findViewById<MaterialButton>(R.id.btn_renderer)
-    val labels = arrayOf("Vulkan", "OpenGL ES")
-    val keys = arrayOf("vulkan", "opengl")
-    val current = pgStr("renderer", "vulkan")
-    val idx = keys.indexOf(current).coerceAtLeast(0)
-    btn.text = labels[idx]
-    highlightIfOverridden("renderer", btn)
-    btn.setOnClickListener {
-      val sel = keys.indexOf(pgStr("renderer", "vulkan")).coerceAtLeast(0)
-      MaterialAlertDialogBuilder(this)
-        .setTitle(R.string.settings_renderer)
-        .setSingleChoiceItems(labels, sel) { dialog, which ->
-          pgPutStr("renderer", keys[which])
-          btn.text = labels[which]
-          updateHighlight("renderer", btn)
-          dialog.dismiss()
-          if (!isPerGameMode) clearAllShaderCaches()
-        }
-        .setNegativeButton(android.R.string.cancel, null)
-        .show()
-    }
-  }
-
-  private fun setupResolutionScale() {
-    val btn = findViewById<MaterialButton>(R.id.btn_resolution_scale)
-    val labels = arrayOf("1x (Native)", "2x", "3x", "4x")
-    val values = intArrayOf(1, 2, 3, 4)
-    val current = pgInt("surface_scale", 1)
-    val idx = values.indexOf(current).coerceAtLeast(0)
-    btn.text = labels[idx]
-    highlightIfOverridden("surface_scale", btn)
-    btn.setOnClickListener {
-      val sel = values.indexOf(pgInt("surface_scale", 1)).coerceAtLeast(0)
-      MaterialAlertDialogBuilder(this)
-        .setTitle(R.string.settings_resolution_scale)
-        .setSingleChoiceItems(labels, sel) { dialog, which ->
-          pgPutInt("surface_scale", values[which])
-          btn.text = labels[which]
-          updateHighlight("surface_scale", btn)
-          dialog.dismiss()
-        }
-        .setNegativeButton(android.R.string.cancel, null)
-        .show()
-    }
-  }
-
-  private fun setupFilteringPicker() {
-    val btn = findViewById<MaterialButton>(R.id.btn_filtering)
-    val labels = arrayOf("Nearest", "Linear")
-    val keys = arrayOf("nearest", "linear")
-    val current = pgStr("filtering", "nearest")
-    val idx = keys.indexOf(current).coerceAtLeast(0)
-    btn.text = labels[idx]
-    highlightIfOverridden("filtering", btn)
-    btn.setOnClickListener {
-      val sel = keys.indexOf(pgStr("filtering", "nearest")).coerceAtLeast(0)
-      MaterialAlertDialogBuilder(this)
-        .setTitle(R.string.settings_filtering)
-        .setSingleChoiceItems(labels, sel) { dialog, which ->
-          pgPutStr("filtering", keys[which])
-          btn.text = labels[which]
-          updateHighlight("filtering", btn)
-          dialog.dismiss()
-        }
-        .setNegativeButton(android.R.string.cancel, null)
-        .show()
-    }
-  }
-
-  private fun setupAspectRatioPicker() {
-    val btn = findViewById<MaterialButton>(R.id.btn_aspect_ratio)
-    val labels = arrayOf("Auto", "Native (4:3)", "16:9", "Fit")
-    val keys = arrayOf("auto", "native", "16:9", "fit")
-    val current = pgStr("aspect_ratio", "auto")
-    val idx = keys.indexOf(current).coerceAtLeast(0)
-    btn.text = labels[idx]
-    highlightIfOverridden("aspect_ratio", btn)
-    btn.setOnClickListener {
-      val sel = keys.indexOf(pgStr("aspect_ratio", "auto")).coerceAtLeast(0)
-      MaterialAlertDialogBuilder(this)
-        .setTitle(R.string.settings_aspect_ratio)
-        .setSingleChoiceItems(labels, sel) { dialog, which ->
-          pgPutStr("aspect_ratio", keys[which])
-          btn.text = labels[which]
-          updateHighlight("aspect_ratio", btn)
-          dialog.dismiss()
-        }
-        .setNegativeButton(android.R.string.cancel, null)
-        .show()
-    }
-  }
-
   private fun setupEnvVars() {
     val editText = findViewById<android.widget.EditText>(R.id.edit_env_vars)
     val btnSave = findViewById<MaterialButton>(R.id.btn_save_env_vars)
@@ -879,78 +802,6 @@ class SettingsActivity : AppCompatActivity() {
     btnSave.setOnClickListener {
       prefs.edit().putString("env_vars", editText.text.toString()).apply()
       Toast.makeText(this, "Applied on next game launch", Toast.LENGTH_SHORT).show()
-    }
-  }
-
-  private fun setupTextureCachePicker() {
-    val btn = findViewById<MaterialButton>(R.id.btn_texture_cache)
-    val labels = arrayOf("Auto (0)", "512", "1024", "2048")
-    val values = intArrayOf(0, 512, 1024, 2048)
-    val current = pgInt("texture_cache_size", 0)
-    val idx = values.indexOf(current).coerceAtLeast(0)
-    btn.text = labels[idx]
-    highlightIfOverridden("texture_cache_size", btn)
-    btn.setOnClickListener {
-      val sel = values.indexOf(pgInt("texture_cache_size", 0)).coerceAtLeast(0)
-      MaterialAlertDialogBuilder(this)
-        .setTitle(R.string.settings_texture_cache)
-        .setSingleChoiceItems(labels, sel) { dialog, which ->
-          pgPutInt("texture_cache_size", values[which])
-          btn.text = labels[which]
-          updateHighlight("texture_cache_size", btn)
-          dialog.dismiss()
-        }
-        .setNegativeButton(android.R.string.cancel, null)
-        .show()
-    }
-  }
-
-  private fun setupSubmitFramesPicker() {
-    val btn = findViewById<MaterialButton>(R.id.btn_submit_frames)
-    val labels = arrayOf("Single (1)", "Double (2)", "Triple (3)")
-    val values = intArrayOf(1, 2, 3)
-    val current = pgInt("submit_frames", 3)
-    val idx = values.indexOf(current).coerceAtLeast(0)
-    btn.text = labels[idx]
-    highlightIfOverridden("submit_frames", btn)
-    btn.setOnClickListener {
-      val sel = values.indexOf(pgInt("submit_frames", 3)).coerceAtLeast(0)
-      MaterialAlertDialogBuilder(this)
-        .setTitle(R.string.settings_submit_frames)
-        .setSingleChoiceItems(labels, sel) { dialog, which ->
-          pgPutInt("submit_frames", values[which])
-          if (!isPerGameMode) { try { nativeSetSubmitFrames(values[which]) } catch (_: Throwable) {} }
-          btn.text = labels[which]
-          updateHighlight("submit_frames", btn)
-          dialog.dismiss()
-        }
-        .setNegativeButton(android.R.string.cancel, null)
-        .show()
-    }
-  }
-
-  private fun setupTier1ThresholdPicker() {
-    val btn = findViewById<MaterialButton>(R.id.btn_tier1_threshold)
-    val labels = arrayOf("Disabled", "Aggressive (16)", "Early (32)", "Default (64)", "Conservative (128)", "Lazy (256)")
-    val values = intArrayOf(0, 16, 32, 64, 128, 256)
-    val saved = pgInt("tier1_threshold", 64)
-    val idx = values.indexOf(saved).let { if (it < 0) 3 else it }
-    btn.text = labels[idx]
-    highlightIfOverridden("tier1_threshold", btn)
-    btn.setOnClickListener {
-      val cur = pgInt("tier1_threshold", 64)
-      val sel = values.indexOf(cur).let { if (it < 0) 3 else it }
-      MaterialAlertDialogBuilder(this)
-        .setTitle(R.string.settings_tier1_threshold)
-        .setSingleChoiceItems(labels, sel) { dialog, which ->
-          pgPutInt("tier1_threshold", values[which])
-          if (!isPerGameMode) { try { nativeSetTier1Threshold(values[which]) } catch (_: Throwable) {} }
-          btn.text = labels[which]
-          updateHighlight("tier1_threshold", btn)
-          dialog.dismiss()
-        }
-        .setNegativeButton(android.R.string.cancel, null)
-        .show()
     }
   }
 
