@@ -831,7 +831,6 @@ typedef enum {
     COMPUTE_TYPE_SWIZZLE = 1,
     COMPUTE_TYPE_UNSWIZZLE = 2,
     COMPUTE_TYPE_DEPTH_STENCIL_DIRECT = 3,
-    COMPUTE_TYPE_BC3_DECOMPRESS = 4,
 } ComputeType;
 
 typedef struct ComputePipelineKey {
@@ -1498,13 +1497,6 @@ void pgraph_vk_compute_swizzle(PGRAPHState *pg, VkCommandBuffer cmd,
                                 VkBuffer dst, size_t dst_size,
                                 unsigned int width, unsigned int height,
                                 bool unswizzle);
-void pgraph_vk_compute_bc3_decompress(PGRAPHState *pg, VkCommandBuffer cmd,
-                                       VkBuffer src, VkDeviceSize src_offset,
-                                       size_t src_size,
-                                       VkBuffer dst, VkDeviceSize dst_offset,
-                                       size_t dst_size,
-                                       unsigned int width,
-                                       unsigned int height);
 
 // display.c
 void pgraph_vk_init_display(PGRAPHState *pg);
