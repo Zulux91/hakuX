@@ -135,7 +135,8 @@ class SettingsIndexActivity : AppCompatActivity() {
     val overrides = PerGameSettingsManager.loadOverrides(this, path)
     val sectionKeys = when (sectionKey) {
       "graphics" -> setOf("gpu_driver", "renderer", "surface_scale", "filtering",
-        "aspect_ratio", "fast_fences", "draw_reorder", "draw_merge",
+        "aspect_ratio", "fast_fences", "skip_occlusion_queries",
+        "texture_cache_size", "draw_reorder", "draw_merge",
         "async_compile", "frame_skip", "unlock_framerate",
         "submit_frames")
       "audio" -> setOf("use_dsp")

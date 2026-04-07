@@ -72,6 +72,7 @@
     _X(NV2A_PROF_FINISH_VERTEX_BUFFER_DIRTY) \
     _X(NV2A_PROF_FINISH_SURFACE_CREATE) \
     _X(NV2A_PROF_FINISH_SURFACE_DOWN) \
+    _X(NV2A_PROF_FINISH_SURFACE_DOWN_FLUSH) \
     _X(NV2A_PROF_FINISH_NEED_BUFFER_SPACE) \
     _X(NV2A_PROF_FINISH_FRAMEBUFFER_DIRTY) \
     _X(NV2A_PROF_FINISH_PRESENTING) \
@@ -184,6 +185,13 @@ typedef struct FramePhaseTimingWork {
     int64_t gpu_render_ns;
     int64_t gpu_nonrender_ns;
     int gpu_rp_count;
+    /* GPU gap analysis: overhead between render passes */
+    int64_t gpu_pre_rp_ns;      /* CB start → first RP start */
+    int64_t gpu_post_rp_ns;     /* last RP end → CB end */
+    int64_t gpu_max_gap_ns;     /* largest single inter-RP gap */
+    int gpu_gap_count_small;    /* gaps < 0.1ms */
+    int gpu_gap_count_medium;   /* gaps 0.1-0.5ms */
+    int gpu_gap_count_large;    /* gaps > 0.5ms */
 } FramePhaseTimingWork;
 
 typedef struct FramePhaseTimingStats {
@@ -217,6 +225,13 @@ typedef struct FramePhaseTimingStats {
     float gpu_render_ms;
     float gpu_nonrender_ms;
     float gpu_rp_count;
+    /* GPU gap analysis */
+    float gpu_pre_rp_ms;
+    float gpu_post_rp_ms;
+    float gpu_max_gap_ms;
+    float gpu_gap_count_small;
+    float gpu_gap_count_medium;
+    float gpu_gap_count_large;
 } FramePhaseTimingStats;
 
 typedef struct CpuTimingWork {
@@ -373,11 +388,13 @@ static inline int64_t nv2a_clock_ns(void)
 {
     static uint64_t ns_mult;
     static unsigned int ns_shift;
-    if (__builtin_expect(!ns_mult, 0)) {
+    if (__builtin_expect(!__atomic_load_n(&ns_mult, __ATOMIC_RELAXED), 0)) {
         uint64_t freq;
         asm volatile("mrs %0, cntfrq_el0" : "=r"(freq));
-        ns_shift = 32;
-        ns_mult = ((uint64_t)1000000000ULL << ns_shift) / freq;
+        unsigned int shift = 32;
+        uint64_t mult = ((uint64_t)1000000000ULL << shift) / freq;
+        ns_shift = shift;
+        __atomic_store_n(&ns_mult, mult, __ATOMIC_RELEASE);
     }
     uint64_t cnt;
     asm volatile("mrs %0, cntvct_el0" : "=r"(cnt));
@@ -405,6 +422,23 @@ static inline void nv2a_profile_inc_counter(enum NV2A_PROF_COUNTERS_ENUM cnt)
         nv2a_clock_ns() - _phase_t0_##phase; \
 } while (0)
 
+/*
+ * Exclusive phase timer: like NV2A_PHASE_TIMER but subtracts any
+ * pgraph_vk_finish() time that occurs while the parent phase is active.
+ * Use for top-level phases (surface_update, draw_dispatch, texture_upload)
+ * that can call finish internally, so Tot doesn't double-count.
+ */
+#define NV2A_PHASE_TIMER_BEGIN_EXCL(phase) \
+    int64_t _phase_t0_##phase = nv2a_clock_ns(); \
+    int64_t _phase_fsnap_##phase = g_nv2a_stats.phase_working.finish_ns
+
+#define NV2A_PHASE_TIMER_END_EXCL(phase) do { \
+    int64_t _nested = g_nv2a_stats.phase_working.finish_ns \
+                      - _phase_fsnap_##phase; \
+    g_nv2a_stats.phase_working.phase##_ns += \
+        nv2a_clock_ns() - _phase_t0_##phase - _nested; \
+} while (0)
+
 #else /* !NV2A_PERF_LOG */
 
 static inline void nv2a_profile_inc_counter(enum NV2A_PROF_COUNTERS_ENUM cnt)
@@ -414,6 +448,8 @@ static inline void nv2a_profile_inc_counter(enum NV2A_PROF_COUNTERS_ENUM cnt)
 
 #define NV2A_PHASE_TIMER_BEGIN(phase) do { } while (0)
 #define NV2A_PHASE_TIMER_END(phase)  do { } while (0)
+#define NV2A_PHASE_TIMER_BEGIN_EXCL(phase) do { } while (0)
+#define NV2A_PHASE_TIMER_END_EXCL(phase)  do { } while (0)
 
 #endif /* NV2A_PERF_LOG */
 

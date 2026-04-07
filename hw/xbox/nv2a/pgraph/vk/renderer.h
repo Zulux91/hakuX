@@ -105,6 +105,9 @@ struct OptBisectStats {
     int draws_skipped_frameskip;
     int tex_pool_hits;
     int tex_pool_misses;
+    int tex_cache_evictions;
+    int tex_cache_uploads;
+    int tex_cache_hash_misses;
     int sync_range_skip;
     int sync_early_exit;
     int draw_merge_enqueued;
@@ -114,6 +117,14 @@ struct OptBisectStats {
     int inline_clear_hits;
     int inline_clear_misses;
     int render_pass_breaks;
+    int rp_break_finish;
+    int rp_break_fb_dirty;
+    int rp_break_query;
+    int rp_break_clear;
+    int rp_break_nondraw;
+    int rp_break_surface;
+    int barrier_count;
+    int transition_count;
     int finish_calls;
     int finish_vtx_dirty;
     int finish_surf_create;
@@ -552,6 +563,15 @@ typedef enum FinishReason {
     VK_FINISH_REASON_VERTEX_BUFFER_DIRTY,
     VK_FINISH_REASON_SURFACE_CREATE,
     VK_FINISH_REASON_SURFACE_DOWN,
+    /*
+     * SURFACE_DOWN_FLUSH: Flush the current command buffer so that in-flight
+     * draws complete before a subsequent surface download records copy
+     * commands into a new command buffer. Unlike SURFACE_DOWN, the caller
+     * does NOT need GPU completion immediately — the download's own finish
+     * call will wait for both submissions via semaphore chaining. This
+     * allows the submission to be deferred, avoiding a blocking fence wait.
+     */
+    VK_FINISH_REASON_SURFACE_DOWN_FLUSH,
     VK_FINISH_REASON_NEED_BUFFER_SPACE,
     VK_FINISH_REASON_FRAMEBUFFER_DIRTY,
     VK_FINISH_REASON_PRESENTING,
@@ -704,16 +724,11 @@ typedef struct TextureBinding {
     VkSampler sampler;
     bool possibly_dirty;
     uint64_t hash;
+    uint64_t last_hash_vram_gen; /* VRAM gen when content hash was last computed */
     unsigned int draw_time;
     uint32_t submit_time;
     unsigned int dirty_check_frame;
     bool dirty_check_result;
-
-    /* Adaptive BCn compression fields */
-    uint32_t sample_count;
-    uint32_t upload_count;
-    bool     bc_compressed;
-    uint32_t last_sample_frame;
 } TextureBinding;
 
 typedef struct QueryReport {
@@ -817,7 +832,6 @@ typedef enum {
     COMPUTE_TYPE_UNSWIZZLE = 2,
     COMPUTE_TYPE_DEPTH_STENCIL_DIRECT = 3,
     COMPUTE_TYPE_BC3_DECOMPRESS = 4,
-    COMPUTE_TYPE_BC_COMPRESS = 5,
 } ComputeType;
 
 typedef struct ComputePipelineKey {
@@ -984,15 +998,6 @@ typedef struct PGRAPHVkState {
 #endif
     bool push_descriptors_supported;
     bool texture_compression_bc_supported;
-
-    /* Adaptive BCn compression for uncompressed textures */
-    struct {
-        uint32_t sample_threshold;
-        uint32_t total_compressed;
-        uint64_t vram_saved_bytes;
-        bool     enabled;
-    } tex_compress;
-
     VkDescriptorSetLayout push_tex_set_layout;
     VkDescriptorSetLayout push_ubo_set_layout;
     VkDescriptorPool push_ubo_pool;
@@ -1203,6 +1208,19 @@ typedef struct PGRAPHVkState {
     uint32_t last_texture_state_gen;
     uint32_t texture_vram_gen;
     uint32_t last_texture_vram_gen;
+
+    /* Sampler cache: avoids redundant vkCreateSampler calls. Keyed on the
+     * VkSamplerCreateInfo fields (minus pNext). Small fixed-size array with
+     * linear probe — games use few unique sampler configurations. */
+#define SAMPLER_CACHE_SIZE 64
+    struct {
+        VkSamplerCreateInfo info;
+        VkBorderColor border_color;
+        uint32_t border_pack32; /* custom border color as ARGB pack32 */
+        VkSampler sampler;
+        bool valid;
+    } sampler_cache[SAMPLER_CACHE_SIZE];
+    int sampler_cache_count;
 
     struct {
         uint32_t surface_list_gen;
@@ -1487,11 +1505,6 @@ void pgraph_vk_compute_bc3_decompress(PGRAPHState *pg, VkCommandBuffer cmd,
                                        size_t dst_size,
                                        unsigned int width,
                                        unsigned int height);
-void pgraph_vk_compress_texture_to_bc(PGRAPHState *pg, VkCommandBuffer cmd,
-                                       VkBuffer src, size_t src_size,
-                                       VkBuffer dst, size_t dst_size,
-                                       unsigned int width, unsigned int height,
-                                       bool has_alpha);
 
 // display.c
 void pgraph_vk_init_display(PGRAPHState *pg);

@@ -230,10 +230,46 @@ static bool download_surface_record_deferred(NV2AState *d,
     pgraph_vk_begin_debug_marker(r, cmd, RGBA_RED,
                                  "download_surface_deferred");
 
-    pgraph_vk_transition_image_layout(
-        pg, cmd, surface->image, surface->host_fmt.vk_format,
-        surface->image_layout,
-        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    /*
+     * For color surfaces already in GENERAL, skip the layout transition
+     * to TRANSFER_SRC_OPTIMAL and use GENERAL directly for the copy. This
+     * eliminates two image layout transitions per download. A memory-only
+     * barrier synchronizes color attachment writes → transfer reads.
+     * Depth surfaces still need the real transition (DEPTH_STENCIL_ATTACHMENT
+     * → TRANSFER_SRC) for correct operation.
+     */
+    VkImageLayout saved_layout = surface->image_layout;
+    bool use_general_for_transfer = surface->color &&
+        surface->image_layout == VK_IMAGE_LAYOUT_GENERAL;
+    VkImageLayout copy_src_layout;
+
+    if (use_general_for_transfer) {
+        VkImageMemoryBarrier mem_barrier = {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
+            .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = surface->image,
+            .subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0,
+                                  VK_REMAINING_MIP_LEVELS, 0,
+                                  VK_REMAINING_ARRAY_LAYERS },
+            .srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+            .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
+        };
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            0, 0, NULL, 0, NULL, 1, &mem_barrier);
+        copy_src_layout = VK_IMAGE_LAYOUT_GENERAL;
+    } else {
+        pgraph_vk_transition_image_layout(
+            pg, cmd, surface->image, surface->host_fmt.vk_format,
+            surface->image_layout,
+            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        surface->image_layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        copy_src_layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    }
 
     VkBuffer staging_buffer = r->storage_buffers[BUFFER_STAGING_DST].buffer;
 
@@ -400,7 +436,7 @@ static bool download_surface_record_deferred(NV2AState *d,
 
             vkCmdBlitImage(
                 cmd, surface->image,
-                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                copy_src_layout,
                 surface->image_scratch,
                 surface->image_scratch_current_layout, 1, &blit_region,
                 VK_FILTER_LINEAR);
@@ -435,7 +471,7 @@ static bool download_surface_record_deferred(NV2AState *d,
                              &pre_copy_barrier, 0, NULL);
 
         vkCmdCopyImageToBuffer(cmd, surface_image_loc,
-                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               copy_src_layout,
                                staging_buffer,
                                num_copy_regions, copy_regions);
 
@@ -454,10 +490,12 @@ static bool download_surface_record_deferred(NV2AState *d,
                              &post_copy_barrier, 0, NULL);
     }
 
-    pgraph_vk_transition_image_layout(
-        pg, cmd, surface->image, surface->host_fmt.vk_format,
-        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-        surface->image_layout);
+    if (!use_general_for_transfer) {
+        pgraph_vk_transition_image_layout(
+            pg, cmd, surface->image, surface->host_fmt.vk_format,
+            surface->image_layout, saved_layout);
+        surface->image_layout = saved_layout;
+    }
 
     pgraph_vk_end_debug_marker(r, cmd);
     pgraph_vk_end_nondraw_commands(pg, cmd);
@@ -698,10 +736,38 @@ static void download_surface_to_buffer(NV2AState *d, SurfaceBinding *surface,
 #endif
     pgraph_vk_begin_debug_marker(r, cmd, RGBA_RED, __func__);
 
-    pgraph_vk_transition_image_layout(
-        pg, cmd, surface->image, surface->host_fmt.vk_format,
-        surface->image_layout,
-        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    /* Color surfaces in GENERAL: skip layout transition, use memory barrier */
+    bool use_general_for_transfer = surface->color &&
+        surface->image_layout == VK_IMAGE_LAYOUT_GENERAL;
+    VkImageLayout copy_src_layout;
+
+    if (use_general_for_transfer) {
+        VkImageMemoryBarrier mem_barrier = {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
+            .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = surface->image,
+            .subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0,
+                                  VK_REMAINING_MIP_LEVELS, 0,
+                                  VK_REMAINING_ARRAY_LAYERS },
+            .srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+            .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
+        };
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            0, 0, NULL, 0, NULL, 1, &mem_barrier);
+        copy_src_layout = VK_IMAGE_LAYOUT_GENERAL;
+    } else {
+        pgraph_vk_transition_image_layout(
+            pg, cmd, surface->image, surface->host_fmt.vk_format,
+            surface->image_layout,
+            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        surface->image_layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        copy_src_layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    }
 
     int num_copy_regions = 1;
     VkBufferImageCopy copy_regions[2];
@@ -744,7 +810,7 @@ static void download_surface_to_buffer(NV2AState *d, SurfaceBinding *surface,
         };
 
         vkCmdBlitImage(cmd, surface->image,
-                       VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                       copy_src_layout,
                        surface->image_scratch,
                        surface->image_scratch_current_layout, 1, &blit_region,
                        surface->color ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);
@@ -806,17 +872,25 @@ static void download_surface_to_buffer(NV2AState *d, SurfaceBinding *surface,
                              VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 1,
                              &pre_copy_dst_barrier, 0, NULL);
     }
+    /* If copying from scratch image (downscale), it's always TRANSFER_SRC.
+     * If copying from the surface directly, use copy_src_layout. */
+    VkImageLayout actual_copy_layout = (surface_image_loc == surface->image)
+        ? copy_src_layout : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
     vkCmdCopyImageToBuffer(cmd, surface_image_loc,
-                           VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, copy_buffer,
+                           actual_copy_layout, copy_buffer,
                            num_copy_regions, copy_regions);
 
-    pgraph_vk_transition_image_layout(
-        pg, cmd, surface->image, surface->host_fmt.vk_format,
-        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-        surface->image_layout);
+    if (!use_general_for_transfer) {
+        VkImageLayout restore_layout = surface->color ?
+            VK_IMAGE_LAYOUT_GENERAL :
+            VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        pgraph_vk_transition_image_layout(
+            pg, cmd, surface->image, surface->host_fmt.vk_format,
+            surface->image_layout, restore_layout);
+        surface->image_layout = restore_layout;
+    }
 
     // FIXME: Verify output of depth stencil conversion
-    // FIXME: Track current layout and only transition when required
 
     if (use_compute_to_convert_depth_stencil_format) {
         size_t bytes_per_pixel = 4;
@@ -1587,6 +1661,13 @@ static void invalidate_overlapping_surfaces(NV2AState *d,
 {
     PGRAPHVkState *r = d->pgraph.vk_renderer_state;
 
+    /*
+     * Batch downloads for overlapping active surfaces. Deferred recording
+     * avoids a separate GPU finish per surface; all pending downloads are
+     * completed later in pgraph_vk_surface_update() (or earlier if staging
+     * fills up). invalidate_surface() preserves the VkImage in the invalid
+     * list, so the GPU copy commands remain valid until completion.
+     */
     SurfaceBinding *other_surface, *next_surface;
     QTAILQ_FOREACH_SAFE (other_surface, &r->surfaces, entry, next_surface) {
         if (check_surfaces_overlap(surface, other_surface)) {
@@ -1594,11 +1675,18 @@ static void invalidate_overlapping_surfaces(NV2AState *d,
                 other_surface->vram_addr, other_surface->width,
                 other_surface->height, other_surface->pitch);
             OPT_STAT_INC(dif_overlap);
-            pgraph_vk_surface_download_if_dirty(d, other_surface);
+            if (other_surface->draw_dirty) {
+                if (!download_surface_record_deferred(
+                        d, other_surface,
+                        d->vram_ptr + other_surface->vram_addr)) {
+                    pgraph_vk_surface_download_if_dirty(d, other_surface);
+                }
+            }
             invalidate_surface(d, other_surface);
         }
     }
 
+    /* Shelved surfaces: use inline path since images are destroyed here. */
     QTAILQ_FOREACH_SAFE (other_surface, &r->shelved_surfaces, entry,
                           next_surface) {
         if (other_surface->vram_addr == surface->vram_addr) {
@@ -1975,17 +2063,31 @@ static void expire_old_surfaces(NV2AState *d)
 {
     PGRAPHVkState *r = d->pgraph.vk_renderer_state;
 
+    /*
+     * Batch downloads for expiring active surfaces. invalidate_surface()
+     * preserves the VkImage, so deferred GPU copies remain valid.
+     */
     SurfaceBinding *s, *next;
     QTAILQ_FOREACH_SAFE(s, &r->surfaces, entry, next) {
         int last_used = d->pgraph.frame_time - s->frame_time;
         if (last_used >= max_surface_frame_time_delta) {
             trace_nv2a_pgraph_surface_evict_reason("old", s->vram_addr);
             OPT_STAT_INC(dif_expire);
-            pgraph_vk_surface_download_if_dirty(d, s);
+            if (s->draw_dirty) {
+                if (!download_surface_record_deferred(
+                        d, s, d->vram_ptr + s->vram_addr)) {
+                    pgraph_vk_surface_download_if_dirty(d, s);
+                }
+            }
             invalidate_surface(d, s);
         }
     }
 
+    /* Complete batched active-surface downloads before processing shelved
+     * surfaces, which destroy their VkImages on free. */
+    pgraph_vk_download_surface_complete_deferred(d);
+
+    /* Shelved surfaces: use inline path since images are destroyed here. */
     int shelved_count = 0;
     QTAILQ_FOREACH_SAFE(s, &r->shelved_surfaces, entry, next) {
         int last_used = d->pgraph.frame_time - s->frame_time;
@@ -2388,10 +2490,39 @@ void pgraph_vk_upload_surface_data(NV2AState *d, SurfaceBinding *surface,
     surface->image_scratch_current_layout =
         VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
 
-    pgraph_vk_transition_image_layout(
-        pg, cmd, surface->image, surface->host_fmt.vk_format,
-        surface->image_layout,
-        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    /* Color surfaces in GENERAL: skip layout transition, use memory barrier.
+     * The surface stays in GENERAL for the copy — valid per Vulkan spec. */
+    bool upload_use_general = surface->color &&
+        surface->image_layout == VK_IMAGE_LAYOUT_GENERAL;
+    VkImageLayout copy_dst_layout;
+
+    if (upload_use_general) {
+        VkImageMemoryBarrier mem_barrier = {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
+            .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = surface->image,
+            .subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0,
+                                  VK_REMAINING_MIP_LEVELS, 0,
+                                  VK_REMAINING_ARRAY_LAYERS },
+            .srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                             VK_ACCESS_COLOR_ATTACHMENT_READ_BIT,
+            .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+        };
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            0, 0, NULL, 0, NULL, 1, &mem_barrier);
+        copy_dst_layout = VK_IMAGE_LAYOUT_GENERAL;
+    } else {
+        pgraph_vk_transition_image_layout(
+            pg, cmd, surface->image, surface->host_fmt.vk_format,
+            surface->image_layout,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        copy_dst_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    }
 
     bool upscale = pg->surface_scale_factor > 1 &&
                    !use_compute_to_convert_depth_stencil_format;
@@ -2415,14 +2546,9 @@ void pgraph_vk_upload_surface_data(NV2AState *d, SurfaceBinding *surface,
 
         vkCmdBlitImage(cmd, surface->image_scratch,
                        surface->image_scratch_current_layout, surface->image,
-                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blitRegion,
+                       copy_dst_layout, 1, &blitRegion,
                        surface->color ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);
     } else {
-        // Note: We should be able to vkCmdCopyBufferToImage directly into
-        // surface->image, but there is an apparent AMD Windows driver
-        // synchronization bug we'll hit when doing this. For this reason,
-        // always use a staging image.
-
         for (int i = 0; i < num_regions; i++) {
             VkImageAspectFlags aspect = regions[i].imageSubresource.aspectMask;
             VkImageCopy copy_region = {
@@ -2434,18 +2560,20 @@ void pgraph_vk_upload_surface_data(NV2AState *d, SurfaceBinding *surface,
             };
             vkCmdCopyImage(cmd, surface->image_scratch,
                            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, surface->image,
-                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+                           copy_dst_layout, 1,
                            &copy_region);
         }
     }
 
-    VkImageLayout default_layout = surface->color ?
-        VK_IMAGE_LAYOUT_GENERAL :
-        VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-    pgraph_vk_transition_image_layout(
-        pg, cmd, surface->image, surface->host_fmt.vk_format,
-        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, default_layout);
-    surface->image_layout = default_layout;
+    if (!upload_use_general) {
+        VkImageLayout default_layout = surface->color ?
+            VK_IMAGE_LAYOUT_GENERAL :
+            VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        pgraph_vk_transition_image_layout(
+            pg, cmd, surface->image, surface->host_fmt.vk_format,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, default_layout);
+        surface->image_layout = default_layout;
+    }
 
     nv2a_profile_inc_counter(NV2A_PROF_QUEUE_SUBMIT_2);
     pgraph_vk_end_debug_marker(r, cmd);
@@ -2626,6 +2754,7 @@ static void update_surface_part(NV2AState *d, bool upload, bool color)
         int64_t _gt0 = nv2a_clock_ns();
         // FIXME: We don't need to be so aggressive flushing the command list
         // pgraph_vk_finish(pg, VK_FINISH_REASON_SURFACE_CREATE);
+        if (r->in_render_pass) { OPT_STAT_INC(rp_break_surface); }
         pgraph_vk_ensure_not_in_render_pass(pg);
 
         unbind_surface(d, color);
@@ -2724,20 +2853,32 @@ static void update_surface_part(NV2AState *d, bool upload, bool color)
                 if (surface->draw_dirty) {
                     if (r->in_command_buffer) {
                         OPT_STAT_INC(sd_eviction);
-                        pgraph_vk_finish(pg, VK_FINISH_REASON_SURFACE_DOWN);
+                        /*
+                         * Flush draws so the GPU has correct surface data.
+                         * Deferred: the fence wait is skipped here and
+                         * ordering is preserved via semaphore chaining.
+                         */
+                        pgraph_vk_finish(pg, VK_FINISH_REASON_SURFACE_DOWN_FLUSH);
                     } else {
                         OPT_STAT_INC(sd_eviction_nocb);
                     }
 
                     /*
-                     * Download the GPU-rendered content to VRAM before
-                     * shelving. This ensures VRAM has the correct pixel
-                     * data for any subsequent texture or surface upload
-                     * at this address. Matches the GL renderer behavior
-                     * (pgraph_gl_surface_download_if_dirty before
-                     * invalidation).
+                     * Record deferred download of GPU-rendered content to
+                     * VRAM. The download is batched with other pending
+                     * downloads and completed in a single GPU finish at
+                     * pgraph_vk_download_surface_complete_deferred() later
+                     * in pgraph_vk_surface_update(), before any upload reads
+                     * VRAM. shelve_surface() preserves the VkImage, so the
+                     * GPU copy commands remain valid until completion.
+                     *
+                     * Falls back to inline download if staging is full.
                      */
-                    pgraph_vk_surface_download_if_dirty(d, surface);
+                    if (!download_surface_record_deferred(
+                            d, surface,
+                            d->vram_ptr + surface->vram_addr)) {
+                        pgraph_vk_surface_download_if_dirty(d, surface);
+                    }
                 }
                 shelve_surface(d, surface);
                 g_nv2a_stats.surf_working.lk_evict_ns += nv2a_clock_ns() - _gt1;
@@ -2846,7 +2987,7 @@ static void update_surface_part(NV2AState *d, bool upload, bool color)
 void pgraph_vk_surface_update(NV2AState *d, bool upload, bool color_write,
                               bool zeta_write)
 {
-    NV2A_PHASE_TIMER_BEGIN(surface_update);
+    NV2A_PHASE_TIMER_BEGIN_EXCL(surface_update);
     PGRAPHState *pg = &d->pgraph;
     PGRAPHVkState *r = pg->vk_renderer_state;
 
@@ -2943,7 +3084,7 @@ void pgraph_vk_surface_update(NV2AState *d, bool upload, bool color_write,
         g_nv2a_stats.surf_working.expire_ns += nv2a_clock_ns() - _se0;
     }
 
-    NV2A_PHASE_TIMER_END(surface_update);
+    NV2A_PHASE_TIMER_END_EXCL(surface_update);
 }
 
 static bool check_format_and_usage_supported(PGRAPHVkState *r, VkFormat format,

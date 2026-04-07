@@ -178,6 +178,12 @@
   <string name="settings_fast_fences">Fast fences (reduce GPU stalls)</string>
   <string name="settings_fast_fences_desc">Defer GPU fence waits for buffer-space and vertex-dirty flushes. Significantly reduces frame time but may cause geometry popping or flickering.</string>
 
+  <string name="settings_skip_occlusion">Skip occlusion queries (reduce render passes)</string>
+  <string name="settings_skip_occlusion_desc">Skip GPU visibility testing queries. Dramatically reduces render pass count on tiled GPUs. Games may render extra geometry but visuals are not corrupted.</string>
+
+  <string name="settings_texture_cache">Texture cache size</string>
+  <string name="settings_texture_cache_desc">Number of texture cache entries. 0 = auto (based on GPU memory). Increase for open-world games with texture pop-in (1024–2048 recommended). Requires game restart.</string>
+
   <string name="settings_draw_reorder">Draw reordering (reduce pipeline switches)</string>
   <string name="settings_draw_reorder_desc">Reorder safe draw calls within small windows to reduce GPU pipeline switches. Improves performance on tiled GPUs (Adreno). May cause minor visual artifacts in some titles.</string>
 
@@ -199,6 +205,18 @@
 
   <string name="settings_validation_layers">Vulkan validation layers</string>
   <string name="settings_validation_layers_desc">Enable Vulkan validation for graphics debugging. Significant performance impact. Applied on next game launch.</string>
+
+  <string name="settings_show_fps_desc">Display a frames-per-second counter during gameplay.</string>
+  <string name="settings_skip_boot_anim_desc">Jump straight to the game, skipping the Xbox boot animation.</string>
+  <string name="settings_debug_tools">Debug Tools</string>
+  <string name="settings_debug_tools_desc">Show diagnostic frame capture in pause menu.</string>
+  <string name="settings_texture_dump">Dump Textures</string>
+  <string name="settings_texture_dump_desc">Save game textures as PNG files for creating texture packs.</string>
+  <string name="settings_texture_dump_folder">Select Dump Folder</string>
+  <string name="settings_no_folder_selected">No folder selected</string>
+  <string name="settings_texture_replace">Custom Textures</string>
+  <string name="settings_texture_replace_desc">Load replacement textures from a texture pack folder.</string>
+  <string name="settings_texture_replace_folder">Select Texture Pack Folder</string>
 
   <string name="settings_env_vars_title">Environment Variables</string>
   <string name="settings_env_vars_desc">Set custom environment variables applied at startup. One per line: KEY=VALUE. Applied on next game launch.</string>

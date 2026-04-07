@@ -49,11 +49,6 @@ class PerGameSettingsActivity : AppCompatActivity() {
 
         buildSettingsUI()
 
-        findViewById<MaterialButton>(R.id.btn_per_game_settings_clear).setOnClickListener {
-            PerGameSettingsManager.clearOverrides(this, relativePath)
-            Toast.makeText(this, R.string.per_game_settings_cleared, Toast.LENGTH_SHORT).show()
-            finish()
-        }
         findViewById<MaterialButton>(R.id.btn_per_game_settings_save).setOnClickListener {
             PerGameSettingsManager.saveOverrides(this, relativePath, overrides)
             Toast.makeText(this, R.string.per_game_settings_saved, Toast.LENGTH_SHORT).show()
@@ -103,9 +98,12 @@ class PerGameSettingsActivity : AppCompatActivity() {
         addBoolPicker(container, "fp_safe", getString(R.string.settings_fp_safe), "fp_safe")
         addBoolPicker(container, "fp_jit", getString(R.string.settings_fp_jit), "fp_jit")
         addBoolPicker(container, "fast_fences", getString(R.string.settings_fast_fences), "fast_fences")
+        addBoolPicker(container, "skip_occlusion_queries", getString(R.string.settings_skip_occlusion), "skip_occlusion_queries")
         addBoolPicker(container, "draw_reorder", getString(R.string.settings_draw_reorder), "draw_reorder")
         addBoolPicker(container, "draw_merge", getString(R.string.settings_draw_merge), "draw_merge")
         addBoolPicker(container, "async_compile", getString(R.string.settings_async_compile), "async_compile")
+        addBoolPicker(container, "texture_dump_enabled", "Dump Textures", "texture_dump_enabled")
+        // addBoolPicker(container, "texture_replace_enabled", "Custom Textures", "texture_replace_enabled")  // hidden for now
     }
 
     private fun styleOverride(titleView: TextView, button: MaterialButton, isOverridden: Boolean) {

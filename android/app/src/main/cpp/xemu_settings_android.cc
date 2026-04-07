@@ -102,6 +102,8 @@ static void xemu_settings_apply_defaults(void)
     g_config.perf.fp_jit = true;
     g_config.perf.cache_shaders = true;
     g_config.perf.unlock_framerate = true;
+    g_config.perf.skip_occlusion_queries = false;
+    g_config.perf.texture_cache_size = 0; /* 0 = auto (use memory tier default) */
 }
 
 // Optimized parsers - avoid string allocations
@@ -316,6 +318,12 @@ bool xemu_settings_load(void)
         }
         if (auto unlock_framerate = perf["unlock_framerate"].value<bool>()) {
             g_config.perf.unlock_framerate = *unlock_framerate;
+        }
+        if (auto skip_oq = perf["skip_occlusion_queries"].value<bool>()) {
+            g_config.perf.skip_occlusion_queries = *skip_oq;
+        }
+        if (auto tex_cache = perf["texture_cache_size"].value<int64_t>()) {
+            g_config.perf.texture_cache_size = (int)*tex_cache;
         }
 
         // Audio settings

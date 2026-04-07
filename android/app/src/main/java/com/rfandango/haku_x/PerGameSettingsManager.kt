@@ -22,6 +22,8 @@ object PerGameSettingsManager {
         "fp_safe",
         "fp_jit",
         "fast_fences",
+        "skip_occlusion_queries",
+        "texture_cache_size",
         "draw_reorder",
         "draw_merge",
         "async_compile",
@@ -29,6 +31,8 @@ object PerGameSettingsManager {
         "tier1_threshold",
         "simple_vblank",
         "use_dsp",
+        "texture_dump_enabled",
+        "texture_replace_enabled",
     )
 
     fun hasOverrides(context: Context, relativePath: String): Boolean {

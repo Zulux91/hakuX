@@ -795,14 +795,10 @@ class GameLibraryActivity : AppCompatActivity() {
   }
 
   private fun showGameContextMenu(game: GameEntry) {
-    val hasOverrides = PerGameSettingsManager.hasOverrides(this, game.relativePath)
-    val options = mutableListOf(getString(R.string.library_per_game_settings_option))
-    if (hasOverrides) {
-      options.add(getString(R.string.per_game_settings_revert))
-    }
+    val options = arrayOf(getString(R.string.library_per_game_settings_option))
     com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
       .setTitle(game.title)
-      .setItems(options.toTypedArray()) { _, which ->
+      .setItems(options) { _, which ->
         when (which) {
           0 -> startActivity(
             android.content.Intent(this, SettingsIndexActivity::class.java)
@@ -810,12 +806,6 @@ class GameLibraryActivity : AppCompatActivity() {
               .putExtra(SettingsIndexActivity.EXTRA_GAME_TITLE, game.title)
               .putExtra(SettingsIndexActivity.EXTRA_GAME_RELATIVE_PATH, game.relativePath)
           )
-          1 -> {
-            PerGameSettingsManager.clearOverrides(this, game.relativePath)
-            android.widget.Toast.makeText(this,
-              R.string.per_game_settings_cleared,
-              android.widget.Toast.LENGTH_SHORT).show()
-          }
         }
       }
       .show()
@@ -906,8 +896,106 @@ class GameLibraryActivity : AppCompatActivity() {
       .putBoolean("skip_game_picker", false)
       .commit()
 
-    startActivity(Intent(this, MainActivity::class.java))
-    finish()
+    // Check if texture replacement needs syncing before launch
+    val texReplaceEnabled = prefs.getString(
+      PerGameSettingsManager.runtimeKey("texture_replace_enabled"), null
+    )?.let { it == "true" } ?: prefs.getBoolean("texture_replace_enabled", false)
+
+    val replaceUri = prefs.getString("textureReplaceFolderUri", null)
+
+    if (texReplaceEnabled && replaceUri != null) {
+      syncTexturesAndLaunch(uri, replaceUri)
+    } else {
+      startActivity(Intent(this, MainActivity::class.java))
+      finish()
+    }
+  }
+
+  private fun syncTexturesAndLaunch(gameUri: Uri, replaceFolderUri: String) {
+    val pad = (24 * resources.displayMetrics.density).toInt()
+    val layout = android.widget.LinearLayout(this).apply {
+      orientation = android.widget.LinearLayout.VERTICAL
+      setPadding(pad, pad, pad, pad)
+    }
+    val msgView = android.widget.TextView(this).apply {
+      text = "Syncing texture pack..."
+      setTextColor(android.graphics.Color.WHITE)
+    }
+    val progressBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+      isIndeterminate = false
+      max = 100
+      progress = 0
+      val lp = android.widget.LinearLayout.LayoutParams(
+        android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+        android.widget.LinearLayout.LayoutParams.WRAP_CONTENT)
+      lp.topMargin = pad / 2
+      layoutParams = lp
+    }
+    layout.addView(msgView)
+    layout.addView(progressBar)
+
+    val dialog = android.app.AlertDialog.Builder(this)
+      .setTitle("Custom Textures")
+      .setView(layout)
+      .setCancelable(false)
+      .create()
+    dialog.show()
+
+    Thread {
+      val rootDoc = DocumentFile.fromTreeUri(this, Uri.parse(replaceFolderUri))
+      val cacheBase = File(filesDir, "texture_replace")
+      cacheBase.mkdirs()
+
+      var totalSynced = 0
+
+      if (rootDoc != null) {
+        for (subDir in rootDoc.listFiles()) {
+          if (!subDir.isDirectory) continue
+          val titleId = subDir.name ?: continue
+          val destDir = File(cacheBase, titleId)
+          destDir.mkdirs()
+
+          // Clean old cached files and rebuild
+          destDir.listFiles()?.forEach { it.delete() }
+
+          val pngs = subDir.listFiles().filter {
+            it.name?.endsWith(".png", ignoreCase = true) == true
+          }
+          val total = pngs.size
+
+          pngs.forEachIndexed { idx, file ->
+            val name = file.name ?: return@forEachIndexed
+            val destFile = File(destDir, name.lowercase())
+            try {
+              contentResolver.openInputStream(file.uri)?.use { input ->
+                destFile.outputStream().use { output -> input.copyTo(output) }
+              }
+              totalSynced++
+            } catch (_: Exception) {}
+
+            if (total > 0) {
+              val pct = ((idx + 1) * 100) / total
+              runOnUiThread {
+                progressBar.progress = pct
+                msgView.text = "Syncing textures: ${idx + 1} / $total"
+              }
+            }
+          }
+
+          Log.i("hakuX-texreplace", "Synced $total PNGs for title $titleId")
+        }
+      }
+
+      // Store the cache path for MainActivity to read
+      prefs.edit().putString("textureReplaceCachePath", cacheBase.absolutePath).commit()
+
+      runOnUiThread {
+        dialog.dismiss()
+        Toast.makeText(this, "Custom textures ready: $totalSynced textures synced", Toast.LENGTH_SHORT).show()
+        startActivity(Intent(this, MainActivity::class.java))
+        finish()
+      }
+    }.start()
   }
 
   private fun launchGameWithAutoConvert(game: GameEntry) {

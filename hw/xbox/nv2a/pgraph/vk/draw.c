@@ -27,6 +27,7 @@
 #include <math.h>
 
 static bool g_xemu_fast_fences = false;
+static bool g_xemu_skip_occlusion_queries = false;
 static bool g_xemu_draw_reorder = false;
 static bool g_xemu_draw_merge = false;
 static bool g_xemu_async_compile = false;
@@ -174,6 +175,29 @@ static void opt_stats_log_and_reset(void)
                 g_opt_stats.buf_stg_full,
                 g_opt_stats.buf_compute_full,
                 g_opt_stats.buf_vtx_full);
+        __android_log_print(ANDROID_LOG_INFO, "hakuX-rpbrk",
+                "RP:%d(fin%d fb%d qry%d clr%d nd%d srf%d) Bar:%d Tr:%d",
+                g_opt_stats.render_pass_breaks,
+                g_opt_stats.rp_break_finish,
+                g_opt_stats.rp_break_fb_dirty,
+                g_opt_stats.rp_break_query,
+                g_opt_stats.rp_break_clear,
+                g_opt_stats.rp_break_nondraw,
+                g_opt_stats.rp_break_surface,
+                g_opt_stats.barrier_count,
+                g_opt_stats.transition_count);
+        {
+            PGRAPHVkState *r_tex = g_nv2a->pgraph.vk_renderer_state;
+            __android_log_print(ANDROID_LOG_INFO, "hakuX-tex",
+                "TexCache: used:%d/%zu evict:%d upload:%d hashMiss:%d pool:%d/%d",
+                r_tex->texture_cache.num_used,
+                r_tex->texture_cache_target,
+                g_opt_stats.tex_cache_evictions,
+                g_opt_stats.tex_cache_uploads,
+                g_opt_stats.tex_cache_hash_misses,
+                g_opt_stats.tex_pool_hits,
+                g_opt_stats.tex_pool_misses);
+        }
         {
             extern struct FPUProfileCounters {
                 int x87_arith, x87_load_store, x87_transcendental, x87_stack;
@@ -213,6 +237,16 @@ void xemu_set_fast_fences(bool enable)
 bool xemu_get_fast_fences(void)
 {
     return g_xemu_fast_fences;
+}
+
+void xemu_set_skip_occlusion_queries(bool enable)
+{
+    g_xemu_skip_occlusion_queries = enable;
+}
+
+bool xemu_get_skip_occlusion_queries(void)
+{
+    return g_xemu_skip_occlusion_queries;
 }
 
 void xemu_set_draw_reorder(bool enable)
@@ -1814,6 +1848,7 @@ static void sync_staging_buffer(PGRAPHState *pg, VkCommandBuffer cmd,
         .buffer = b_dst->buffer,
         .size = b_src->buffer_offset
     };
+    OPT_STAT_INC(barrier_count);
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, dst_stage_mask, 0,
                          0, NULL, 1, &barrier, 0, NULL);
 
@@ -1848,6 +1883,7 @@ static void flush_memory_buffer(PGRAPHState *pg, VkCommandBuffer cmd)
         .size = size,
     };
 
+    OPT_STAT_INC(barrier_count);
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_HOST_BIT,
                          VK_PIPELINE_STAGE_VERTEX_INPUT_BIT, 0, 0, NULL, 1,
                          &barrier, 0, NULL);
@@ -1921,6 +1957,7 @@ static void begin_render_pass(PGRAPHState *pg)
             .dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
                              VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
         };
+        OPT_STAT_INC(barrier_count);
         vkCmdPipelineBarrier(r->command_buffer,
             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
             VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
@@ -2016,12 +2053,49 @@ static void gpu_ts_readback(PGRAPHVkState *r, int frame)
     g_nv2a_stats.phase_working.gpu_render_ns += render_ns;
     g_nv2a_stats.phase_working.gpu_nonrender_ns += nonrender_ns;
     g_nv2a_stats.phase_working.gpu_rp_count += rp_count;
+
+    /* Gap analysis: measure overhead between render passes */
+    if (rp_count > 0) {
+        /* Pre-RP gap: CB start → first RP start */
+        uint64_t first_rp_start = r->gpu_ts_results[2];
+        int64_t pre_ns = (int64_t)((first_rp_start - cb_start) *
+                                    r->gpu_ts_period_ns);
+        g_nv2a_stats.phase_working.gpu_pre_rp_ns += pre_ns;
+
+        /* Post-RP gap: last RP end → CB end */
+        uint64_t last_rp_end = r->gpu_ts_results[2 + (rp_count - 1) * 2 + 1];
+        int64_t post_ns = (int64_t)((cb_end - last_rp_end) *
+                                     r->gpu_ts_period_ns);
+        g_nv2a_stats.phase_working.gpu_post_rp_ns += post_ns;
+
+        /* Inter-RP gaps: classify by duration */
+        int64_t max_gap = 0;
+        for (int i = 0; i < rp_count - 1; i++) {
+            uint64_t prev_end = r->gpu_ts_results[2 + i * 2 + 1];
+            uint64_t next_start = r->gpu_ts_results[2 + (i + 1) * 2];
+            int64_t gap_ns = (int64_t)((next_start - prev_end) *
+                                        r->gpu_ts_period_ns);
+            if (gap_ns < 0) gap_ns = 0;
+            if (gap_ns > max_gap) max_gap = gap_ns;
+            if (gap_ns < 100000) {        /* < 0.1ms */
+                g_nv2a_stats.phase_working.gpu_gap_count_small++;
+            } else if (gap_ns < 500000) { /* 0.1-0.5ms */
+                g_nv2a_stats.phase_working.gpu_gap_count_medium++;
+            } else {                       /* > 0.5ms */
+                g_nv2a_stats.phase_working.gpu_gap_count_large++;
+            }
+        }
+        if (max_gap > g_nv2a_stats.phase_working.gpu_max_gap_ns) {
+            g_nv2a_stats.phase_working.gpu_max_gap_ns = max_gap;
+        }
+    }
 }
 
 const enum NV2A_PROF_COUNTERS_ENUM finish_reason_to_counter_enum[] = {
     [VK_FINISH_REASON_VERTEX_BUFFER_DIRTY] = NV2A_PROF_FINISH_VERTEX_BUFFER_DIRTY,
     [VK_FINISH_REASON_SURFACE_CREATE] = NV2A_PROF_FINISH_SURFACE_CREATE,
     [VK_FINISH_REASON_SURFACE_DOWN] = NV2A_PROF_FINISH_SURFACE_DOWN,
+    [VK_FINISH_REASON_SURFACE_DOWN_FLUSH] = NV2A_PROF_FINISH_SURFACE_DOWN_FLUSH,
     [VK_FINISH_REASON_NEED_BUFFER_SPACE] = NV2A_PROF_FINISH_NEED_BUFFER_SPACE,
     [VK_FINISH_REASON_FRAMEBUFFER_DIRTY] = NV2A_PROF_FINISH_FRAMEBUFFER_DIRTY,
     [VK_FINISH_REASON_PRESENTING] = NV2A_PROF_FINISH_PRESENTING,
@@ -2076,6 +2150,7 @@ void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
     case VK_FINISH_REASON_VERTEX_BUFFER_DIRTY: OPT_STAT_INC(finish_vtx_dirty); break;
     case VK_FINISH_REASON_SURFACE_CREATE: OPT_STAT_INC(finish_surf_create); break;
     case VK_FINISH_REASON_SURFACE_DOWN: OPT_STAT_INC(finish_surf_down); break;
+    case VK_FINISH_REASON_SURFACE_DOWN_FLUSH: OPT_STAT_INC(finish_surf_down); break;
     case VK_FINISH_REASON_NEED_BUFFER_SPACE: OPT_STAT_INC(finish_buf_space); break;
     case VK_FINISH_REASON_FRAMEBUFFER_DIRTY: OPT_STAT_INC(finish_fb_dirty); break;
     case VK_FINISH_REASON_PRESENTING: OPT_STAT_INC(finish_present); break;
@@ -2098,13 +2173,15 @@ void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
     }
     r_pre->draw_queue.active = false;
 
-    NV2A_PHASE_TIMER_BEGIN(finish);
-    PGRAPHVkState *r = pg->vk_renderer_state;
-
+    /* Log stats before starting the finish timer so the blocking
+     * __android_log_print calls don't inflate the finish measurement. */
     if (finish_reason == VK_FINISH_REASON_FLIP_STALL ||
         finish_reason == VK_FINISH_REASON_PRESENTING) {
         opt_stats_log_and_reset();
     }
+
+    NV2A_PHASE_TIMER_BEGIN(finish);
+    PGRAPHVkState *r = pg->vk_renderer_state;
 
     int desired_frames = g_xemu_submit_frames;
     if (desired_frames != r->num_active_frames) {
@@ -2125,6 +2202,7 @@ void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
         nv2a_profile_inc_counter(finish_reason_to_counter_enum[finish_reason]);
 
         if (r->in_render_pass) {
+            OPT_STAT_INC(rp_break_finish);
             end_render_pass(r);
         }
         if (r->query_in_flight) {
@@ -2152,6 +2230,7 @@ void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
             .dstAccessMask = VK_ACCESS_MEMORY_READ_BIT |
                              VK_ACCESS_MEMORY_WRITE_BIT,
         };
+        OPT_STAT_INC(barrier_count);
         vkCmdPipelineBarrier(
             cmd,
             VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
@@ -2184,6 +2263,7 @@ void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
                              VK_ACCESS_INDEX_READ_BIT |
                              VK_ACCESS_TRANSFER_READ_BIT,
         };
+        OPT_STAT_INC(barrier_count);
         vkCmdPipelineBarrier(cmd,
             VK_PIPELINE_STAGE_TRANSFER_BIT, wait_stage,
             0, 1, &aux_main_barrier, 0, NULL, 0, NULL);
@@ -2207,7 +2287,8 @@ void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
 
         bool deferred = (finish_reason == VK_FINISH_REASON_FLIP_STALL ||
                          finish_reason == VK_FINISH_REASON_PRESENTING ||
-                         finish_reason == VK_FINISH_REASON_STALLED);
+                         finish_reason == VK_FINISH_REASON_STALLED ||
+                         finish_reason == VK_FINISH_REASON_SURFACE_DOWN_FLUSH);
         if (g_xemu_fast_fences) {
             deferred = deferred ||
                 finish_reason == VK_FINISH_REASON_NEED_BUFFER_SPACE ||
@@ -2556,6 +2637,7 @@ VkCommandBuffer pgraph_vk_begin_nondraw_commands(PGRAPHState *pg)
 {
     PGRAPHVkState *r = pg->vk_renderer_state;
     pgraph_vk_ensure_command_buffer(pg);
+    if (r->in_render_pass) { OPT_STAT_INC(rp_break_nondraw); }
     pgraph_vk_ensure_not_in_render_pass(pg);
     return r->command_buffer;
 }
@@ -2890,6 +2972,7 @@ mfp_miss: (void)0;
         bool render_pass_dirty = r->pipeline_binding->render_pass != r->render_pass;
 
         if (r->framebuffer_dirty || render_pass_dirty) {
+            if (r->in_render_pass) { OPT_STAT_INC(rp_break_fb_dirty); }
             pgraph_vk_ensure_not_in_render_pass(pg);
         }
         if (render_pass_dirty) {
@@ -2941,22 +3024,34 @@ static void begin_draw(PGRAPHState *pg)
     assert(r->in_command_buffer);
     r->draws_in_cb++;
 
-    // Visibility testing
-    if (!pg->clearing && pg->zpass_pixel_count_enable) {
-        if (r->new_query_needed && r->query_in_flight) {
+    /* Visibility testing (occlusion queries).
+     * When skip_occlusion_queries is enabled, all query operations are
+     * skipped. This avoids render pass breaks for query begin/end
+     * transitions (~70-80 RP breaks/frame). Games may render extra
+     * geometry that would have been culled, but visuals are not corrupted.
+     * The zpass result is simply never updated, so the game sees the last
+     * valid count (or zero). */
+    if (!g_xemu_skip_occlusion_queries) {
+        if (!pg->clearing && pg->zpass_pixel_count_enable) {
+            if (r->new_query_needed && r->query_in_flight) {
+                if (r->in_render_pass) { OPT_STAT_INC(rp_break_query); }
+                end_render_pass(r);
+                end_query(r);
+            }
+            if (!r->query_in_flight) {
+                if (r->in_render_pass) { OPT_STAT_INC(rp_break_query); }
+                end_render_pass(r);
+                begin_query(r);
+            }
+        } else if (r->query_in_flight) {
+            if (r->in_render_pass) { OPT_STAT_INC(rp_break_query); }
             end_render_pass(r);
             end_query(r);
         }
-        if (!r->query_in_flight) {
-            end_render_pass(r);
-            begin_query(r);
-        }
-    } else if (r->query_in_flight) {
-        end_render_pass(r);
-        end_query(r);
     }
 
     if (pg->clearing) {
+        if (r->in_render_pass) { OPT_STAT_INC(rp_break_clear); }
         end_render_pass(r);
     }
 
@@ -3216,6 +3311,7 @@ static void end_draw(PGRAPHState *pg)
     assert(r->in_render_pass);
 
     if (pg->clearing) {
+        OPT_STAT_INC(rp_break_clear);
         end_render_pass(r);
     }
 
@@ -5515,20 +5611,20 @@ static void copy_remapped_attributes_to_inline_buffer(PGRAPHState *pg,
 
 void pgraph_vk_flush_draw(NV2AState *d)
 {
-    NV2A_PHASE_TIMER_BEGIN(draw_dispatch);
+    NV2A_PHASE_TIMER_BEGIN_EXCL(draw_dispatch);
     PGRAPHState *pg = &d->pgraph;
     PGRAPHVkState *r = pg->vk_renderer_state;
 
     if (!(r->color_binding || r->zeta_binding)) {
         NV2A_VK_DPRINTF("No binding present!!!\n");
-        NV2A_PHASE_TIMER_END(draw_dispatch);
+        NV2A_PHASE_TIMER_END_EXCL(draw_dispatch);
         return;
     }
 
     if (!r->pipeline_binding) {
         /* Pipeline not available (cache exhausted or async compile pending).
          * Skip this draw to avoid crashing in begin_pre_draw/begin_draw. */
-        NV2A_PHASE_TIMER_END(draw_dispatch);
+        NV2A_PHASE_TIMER_END_EXCL(draw_dispatch);
         return;
     }
 
@@ -5907,5 +6003,5 @@ inline_array_done:
            pgraph_vk_reg_r(pg, NV_PGRAPH_SETUPRASTER));
 #endif
 
-    NV2A_PHASE_TIMER_END(draw_dispatch);
+    NV2A_PHASE_TIMER_END_EXCL(draw_dispatch);
 }
