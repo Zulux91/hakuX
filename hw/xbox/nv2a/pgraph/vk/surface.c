@@ -2851,33 +2851,105 @@ static void update_surface_part(NV2AState *d, bool upload, bool color)
                     "incompatible", surface->vram_addr);
                 compare_surfaces(surface, &target);
                 if (surface->draw_dirty) {
-                    if (r->in_command_buffer) {
-                        OPT_STAT_INC(sd_eviction);
-                        /*
-                         * Flush draws so the GPU has correct surface data.
-                         * Deferred: the fence wait is skipped here and
-                         * ordering is preserved via semaphore chaining.
-                         */
-                        pgraph_vk_finish(pg, VK_FINISH_REASON_SURFACE_DOWN_FLUSH);
-                    } else {
-                        OPT_STAT_INC(sd_eviction_nocb);
-                    }
-
                     /*
                      * Record deferred download of GPU-rendered content to
-                     * VRAM. The download is batched with other pending
-                     * downloads and completed in a single GPU finish at
-                     * pgraph_vk_download_surface_complete_deferred() later
-                     * in pgraph_vk_surface_update(), before any upload reads
-                     * VRAM. shelve_surface() preserves the VkImage, so the
-                     * GPU copy commands remain valid until completion.
+                     * VRAM. For color surfaces in GENERAL layout with an
+                     * active command buffer, record the copy directly in the
+                     * main CB (between render passes) — this avoids a
+                     * separate pgraph_vk_finish per eviction. The copy
+                     * executes in-order: after preceding draws, before
+                     * subsequent draws. Multiple evictions per frame are
+                     * carried in a single submit.
                      *
-                     * Falls back to inline download if staging is full.
+                     * Falls back to deferred finish for complex cases
+                     * (depth-stencil, no CB, staging full).
                      */
-                    if (!download_surface_record_deferred(
-                            d, surface,
-                            d->vram_ptr + surface->vram_addr)) {
-                        pgraph_vk_surface_download_if_dirty(d, surface);
+                    bool did_inline = false;
+                    if (r->in_command_buffer && surface->color &&
+                        surface->image_layout == VK_IMAGE_LAYOUT_GENERAL &&
+                        !surface->swizzle &&
+                        pg->surface_scale_factor == 1 &&
+                        r->num_deferred_downloads < MAX_DEFERRED_DOWNLOADS) {
+                        size_t staging_size =
+                            surface->host_fmt.host_bytes_per_pixel *
+                            surface->width * surface->height;
+                        VkDeviceSize aligned_offset =
+                            ROUND_UP(r->staging_dst_offset, 16);
+                        if (aligned_offset + staging_size <=
+                            r->storage_buffers[BUFFER_STAGING_DST].buffer_size) {
+                            OPT_STAT_INC(sd_eviction);
+                            if (r->in_render_pass) {
+                                end_render_pass(r);
+                            }
+                            /* Memory barrier: attachment writes → transfer read */
+                            VkImageMemoryBarrier barrier = {
+                                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                                .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
+                                .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+                                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                .image = surface->image,
+                                .subresourceRange = {
+                                    VK_IMAGE_ASPECT_COLOR_BIT, 0,
+                                    VK_REMAINING_MIP_LEVELS, 0,
+                                    VK_REMAINING_ARRAY_LAYERS },
+                                .srcAccessMask =
+                                    VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                                .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
+                            };
+                            unsigned int scaled_w = surface->width;
+                            unsigned int scaled_h = surface->height;
+                            vkCmdPipelineBarrier(r->command_buffer,
+                                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                0, 0, NULL, 0, NULL, 1, &barrier);
+                            VkBufferImageCopy region = {
+                                .bufferOffset = aligned_offset,
+                                .bufferRowLength = scaled_w,
+                                .bufferImageHeight = scaled_h,
+                                .imageSubresource = {
+                                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                                    .layerCount = 1,
+                                },
+                                .imageExtent = { scaled_w, scaled_h, 1 },
+                            };
+                            vkCmdCopyImageToBuffer(r->command_buffer,
+                                surface->image, VK_IMAGE_LAYOUT_GENERAL,
+                                r->storage_buffers[BUFFER_STAGING_DST].buffer,
+                                1, &region);
+                            /* Track for later VRAM completion */
+                            DeferredSurfaceDownload *dl =
+                                &r->deferred_downloads[r->num_deferred_downloads++];
+                            dl->surface = surface;
+                            dl->dest_ptr =
+                                d->vram_ptr + surface->vram_addr;
+                            dl->staging_offset = aligned_offset;
+                            dl->download_size = staging_size;
+                            dl->width = scaled_w;
+                            dl->height = scaled_h;
+                            dl->pitch = surface->pitch;
+                            dl->bytes_per_pixel =
+                                surface->fmt.bytes_per_pixel;
+                            dl->swizzle = false;
+                            r->staging_dst_offset =
+                                aligned_offset + staging_size;
+                            did_inline = true;
+                        }
+                    }
+                    if (!did_inline) {
+                        /* Fallback: deferred finish + aux CB download */
+                        if (r->in_command_buffer) {
+                            OPT_STAT_INC(sd_eviction);
+                            pgraph_vk_finish(pg,
+                                VK_FINISH_REASON_SURFACE_DOWN_FLUSH);
+                        } else {
+                            OPT_STAT_INC(sd_eviction_nocb);
+                        }
+                        if (!download_surface_record_deferred(
+                                d, surface,
+                                d->vram_ptr + surface->vram_addr)) {
+                            pgraph_vk_surface_download_if_dirty(d, surface);
+                        }
                     }
                 }
                 shelve_surface(d, surface);

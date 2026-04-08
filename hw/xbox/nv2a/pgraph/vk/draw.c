@@ -1999,7 +1999,7 @@ static void begin_render_pass(PGRAPHState *pg)
     }
 }
 
-static void end_render_pass(PGRAPHVkState *r)
+void end_render_pass(PGRAPHVkState *r)
 {
     if (r->in_render_pass) {
         OPT_STAT_INC(render_pass_breaks);

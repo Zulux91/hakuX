@@ -1565,6 +1565,7 @@ void pgraph_vk_draw_begin(NV2AState *d);
 void pgraph_vk_draw_end(NV2AState *d);
 void pgraph_vk_finish(PGRAPHState *pg, FinishReason why);
 void pgraph_vk_flush_all_frames(PGRAPHState *pg);
+void end_render_pass(PGRAPHVkState *r);
 void pgraph_vk_flush_draw(NV2AState *d);
 void pgraph_vk_flush_draw_queue(NV2AState *d);
 void pgraph_vk_flush_reorder_window(NV2AState *d);
