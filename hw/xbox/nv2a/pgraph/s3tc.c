@@ -23,6 +23,7 @@
  */
 
 #include "qemu/osdep.h"
+#include <pthread.h>
 
 #ifdef __aarch64__
 #include <arm_neon.h>
@@ -303,6 +304,50 @@ uint8_t *s3tc_decompress_3d(enum S3TC_DECOMPRESS_FORMAT color_format,
     return converted_data;
 }
 
+/*
+ * Parallel S3TC decompression: split block rows across threads.
+ * Each thread decompresses a contiguous range of block rows, writing
+ * to non-overlapping regions of the output buffer. The per-block
+ * NEON fast path (write_block_to_texture_neon) is thread-safe since
+ * it only writes to pixels within its own 4x4 block region.
+ */
+#define S3TC_MIN_BLOCKS_FOR_MT  128  /* ~32x32 texture = 8x8 blocks */
+#define S3TC_MAX_THREADS        4
+
+typedef struct {
+    enum S3TC_DECOMPRESS_FORMAT color_format;
+    const uint8_t *data;
+    uint8_t *converted_data;
+    unsigned int width, height;
+    int num_blocks_x;
+    int j_start, j_end;
+    int block_size;
+} S3tcWorkerArgs;
+
+static void *s3tc_worker_func(void *opaque)
+{
+    S3tcWorkerArgs *args = (S3tcWorkerArgs *)opaque;
+    for (int j = args->j_start; j < args->j_end; j++) {
+        for (int i = 0; i < args->num_blocks_x; i++) {
+            int block_index = j * args->num_blocks_x + i;
+            if (args->color_format == S3TC_DECOMPRESS_FORMAT_DXT1) {
+                decompress_dxt1_block(args->data + 8 * block_index,
+                                      args->converted_data, i, j,
+                                      args->width, args->height, 0);
+            } else if (args->color_format == S3TC_DECOMPRESS_FORMAT_DXT3) {
+                decompress_dxt3_block(args->data + 16 * block_index,
+                                      args->converted_data, i, j,
+                                      args->width, args->height, 0);
+            } else {
+                decompress_dxt5_block(args->data + 16 * block_index,
+                                      args->converted_data, i, j,
+                                      args->width, args->height, 0);
+            }
+        }
+    }
+    return NULL;
+}
+
 uint8_t *s3tc_decompress_2d(enum S3TC_DECOMPRESS_FORMAT color_format,
                             const uint8_t *data, unsigned int width,
                             unsigned int height)
@@ -312,23 +357,56 @@ uint8_t *s3tc_decompress_2d(enum S3TC_DECOMPRESS_FORMAT color_format,
     unsigned int physical_width = (width + 3) & ~3,
                  physical_height = (height + 3) & ~3;
     int num_blocks_x = physical_width / 4, num_blocks_y = physical_height / 4;
+    int total_blocks = num_blocks_x * num_blocks_y;
     uint8_t *converted_data = (uint8_t *)g_malloc(width * height * 4);
-    for (int j = 0; j < num_blocks_y; j++) {
-        for (int i = 0; i < num_blocks_x; i++) {
-            int block_index = j * num_blocks_x + i;
-            if (color_format == S3TC_DECOMPRESS_FORMAT_DXT1) {
-                decompress_dxt1_block(data + 8 * block_index,
-                                      converted_data, i, j, width, height, 0);
-            } else if (color_format == S3TC_DECOMPRESS_FORMAT_DXT3) {
-                decompress_dxt3_block(data + 16 * block_index,
-                                      converted_data, i, j, width, height, 0);
-            } else if (color_format == S3TC_DECOMPRESS_FORMAT_DXT5) {
-                decompress_dxt5_block(data + 16 * block_index,
-                                      converted_data, i, j, width, height, 0);
-            } else {
-                assert(false);
-            }
+
+    /* For small textures, decompress single-threaded */
+    if (total_blocks < S3TC_MIN_BLOCKS_FOR_MT) {
+        S3tcWorkerArgs args = {
+            .color_format = color_format, .data = data,
+            .converted_data = converted_data,
+            .width = width, .height = height,
+            .num_blocks_x = num_blocks_x,
+            .j_start = 0, .j_end = num_blocks_y,
+        };
+        s3tc_worker_func(&args);
+        return converted_data;
+    }
+
+    /* Split block rows across threads */
+    int num_threads = S3TC_MAX_THREADS;
+    if (num_blocks_y < num_threads) num_threads = num_blocks_y;
+
+    pthread_t threads[S3TC_MAX_THREADS];
+    S3tcWorkerArgs thread_args[S3TC_MAX_THREADS];
+    int rows_per_thread = num_blocks_y / num_threads;
+    int remainder = num_blocks_y % num_threads;
+
+    int j = 0;
+    for (int t = 0; t < num_threads; t++) {
+        int rows = rows_per_thread + (t < remainder ? 1 : 0);
+        thread_args[t] = (S3tcWorkerArgs){
+            .color_format = color_format, .data = data,
+            .converted_data = converted_data,
+            .width = width, .height = height,
+            .num_blocks_x = num_blocks_x,
+            .j_start = j, .j_end = j + rows,
+        };
+        j += rows;
+
+        if (t < num_threads - 1) {
+            pthread_create(&threads[t], NULL, s3tc_worker_func,
+                           &thread_args[t]);
         }
     }
+
+    /* Last chunk runs on current thread */
+    s3tc_worker_func(&thread_args[num_threads - 1]);
+
+    /* Wait for worker threads */
+    for (int t = 0; t < num_threads - 1; t++) {
+        pthread_join(threads[t], NULL);
+    }
+
     return converted_data;
 }
