@@ -110,8 +110,8 @@ static void opt_stats_log_and_reset(void)
                 g_opt_stats.sfp_miss_prog_dirty,
                 g_opt_stats.sfp_miss_vtx_gen,
                 g_opt_stats.sfp_miss_tex_vram);
-        __android_log_print(ANDROID_LOG_INFO, "xemu-rw",
-                "RW:%d/%d/%d Safe:%d(L%d/LE%d) Rej:Bl%d Cw%d Dp%d Zw%d Zf%d St%d Al%d Ak%d Rt%d Fb%d Zp%d ASkip:%d FSkip:%d",
+        __android_log_print(ANDROID_LOG_INFO, "hakuX-rw",
+                "RW:%d/%d/%d Safe:%d(L%d/LE%d) Rej:Bl%d Cw%d Dp%d Zw%d Zf%d St%d Al%d Ak%d Rt%d Fb%d Zp%d ASkip:%d FSkip:%d NoP:%d NullP:%d",
                 g_opt_stats.reorder_windows_flushed,
                 g_opt_stats.reorder_draws_reordered,
                 g_opt_stats.reorder_pipeline_switches_saved,
@@ -130,7 +130,9 @@ static void opt_stats_log_and_reset(void)
                 g_opt_stats.reorder_reject_fb_dirty,
                 g_opt_stats.reorder_reject_zpass,
                 g_opt_stats.draws_skipped_pending,
-                g_opt_stats.draws_skipped_frameskip);
+                g_opt_stats.draws_skipped_frameskip,
+                g_opt_stats.draws_skipped_no_pipeline,
+                g_opt_stats.draws_skipped_null_pipeline);
         __android_log_print(ANDROID_LOG_INFO, "hakuX-stall",
                 "RPBreaks:%d Finish:%d(vtx%d sc%d sd%d buf%d fb%d pres%d flip%d flu%d stl%d stlDef%d stlBat%d) InlClr:%d/%d PreDL:%d sd[ev%d noCb%d dl%d cDef%d cDefC%d pDl%d dDl%d] dlSrc[defFb%d ppdFb%d dirtyIf%d] dif[ovl%d ovlSh%d exp%d expSh%d blt%d flu%d dds%d oth%d]",
                 g_opt_stats.render_pass_breaks,
@@ -168,6 +170,11 @@ static void opt_stats_log_and_reset(void)
                 g_opt_stats.dif_dds_fb,
                 g_opt_stats.dif_other);
         __android_log_print(ANDROID_LOG_INFO, "hakuX-stall",
+                "lazy[skip:%d unshelve:%d dl:%d]",
+                g_opt_stats.sd_eviction_skipped,
+                g_opt_stats.sd_shelved_unshelved,
+                g_opt_stats.sd_shelved_lazy_dl);
+        __android_log_print(ANDROID_LOG_INFO, "hakuX-stall",
                 "buf_detail: ds%d ubo%d fb%d stg%d comp%d vtx%d",
                 g_opt_stats.buf_ds_full,
                 g_opt_stats.buf_ubo_full,
@@ -190,7 +197,7 @@ static void opt_stats_log_and_reset(void)
             PGRAPHVkState *r_tex = g_nv2a->pgraph.vk_renderer_state;
             __android_log_print(ANDROID_LOG_INFO, "hakuX-tex",
                 "TexCache: used:%d/%zu miss:%d upload:%d dirty:%d "
-                "evict:%d(oom:%d) pool:%d/%d",
+                "evict:%d(oom:%d) pool:%d/%d zero:%d->%d",
                 r_tex->texture_cache.num_used,
                 r_tex->texture_cache_target,
                 g_opt_stats.tex_cache_misses,
@@ -199,7 +206,9 @@ static void opt_stats_log_and_reset(void)
                 g_opt_stats.tex_cache_evictions,
                 g_opt_stats.tex_cache_oom_evictions,
                 g_opt_stats.tex_pool_hits,
-                g_opt_stats.tex_pool_misses);
+                g_opt_stats.tex_pool_misses,
+                g_opt_stats.tex_zero_uploads,
+                g_opt_stats.tex_zero_reupload);
         }
         {
             extern struct FPUProfileCounters {
@@ -3079,6 +3088,7 @@ static void begin_draw(PGRAPHState *pg)
     if (must_bind_pipeline) {
         if (!r->pipeline_binding ||
             r->pipeline_binding->pipeline == VK_NULL_HANDLE) {
+            OPT_STAT_INC(draws_skipped_null_pipeline);
             return; /* Pipeline not ready or creation failed */
         }
         nv2a_profile_inc_counter(NV2A_PROF_PIPELINE_BIND);
@@ -5638,6 +5648,7 @@ void pgraph_vk_flush_draw(NV2AState *d)
     if (!r->pipeline_binding) {
         /* Pipeline not available (cache exhausted or async compile pending).
          * Skip this draw to avoid crashing in begin_pre_draw/begin_draw. */
+        OPT_STAT_INC(draws_skipped_no_pipeline);
         NV2A_PHASE_TIMER_END_EXCL(draw_dispatch);
         return;
     }

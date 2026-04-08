@@ -168,6 +168,18 @@ bool pgraph_vk_download_surfaces_in_range_if_dirty(PGRAPHState *pg,
         }
     }
 
+    /* Also check shelved surfaces with undownloaded GPU data */
+    QTAILQ_FOREACH(surface, &r->shelved_surfaces, entry) {
+        if (!surface->shelved_dirty || !surface->draw_dirty) continue;
+        if (!surface->width || !surface->height) continue;
+        if (check_surface_overlaps_range(surface, start, size)) {
+            OPT_STAT_INC(sd_shelved_lazy_dl);
+            download_surface_deferred(d, surface);
+            surface->shelved_dirty = false;
+            found_overlap = true;
+        }
+    }
+
     if (found_overlap && r->num_deferred_downloads > 0) {
         /* Downloads just recorded but not yet submitted — must complete
          * now since the caller needs the data in VRAM. */
@@ -1694,6 +1706,9 @@ static void invalidate_overlapping_surfaces(NV2AState *d,
         }
         if (check_surfaces_overlap(surface, other_surface)) {
             OPT_STAT_INC(dif_overlap_sh);
+            if (other_surface->shelved_dirty) {
+                OPT_STAT_INC(sd_shelved_lazy_dl);
+            }
             pgraph_vk_surface_download_if_dirty(d, other_surface);
             QTAILQ_REMOVE(&r->shelved_surfaces, other_surface, entry);
             deferred_downloads_clear_surface(r, other_surface);
@@ -2094,6 +2109,9 @@ static void expire_old_surfaces(NV2AState *d)
         if (last_used >= max_surface_frame_time_delta ||
             shelved_count >= max_shelved_surfaces) {
             OPT_STAT_INC(dif_expire_sh);
+            if (s->shelved_dirty) {
+                OPT_STAT_INC(sd_shelved_lazy_dl);
+            }
             pgraph_vk_surface_download_if_dirty(d, s);
             QTAILQ_REMOVE(&r->shelved_surfaces, s, entry);
             deferred_downloads_clear_surface(r, s);
@@ -2850,107 +2868,17 @@ static void update_surface_part(NV2AState *d, bool upload, bool color)
                 trace_nv2a_pgraph_surface_evict_reason(
                     "incompatible", surface->vram_addr);
                 compare_surfaces(surface, &target);
+                /*
+                 * Lazy eviction: skip downloading GPU data to VRAM now.
+                 * The shelved VkImage preserves the rendered data. Download
+                 * will happen lazily only when something actually reads the
+                 * VRAM (texture overlap, CPU read, surface expiration).
+                 * If the surface is unshelved (same format re-bound), the
+                 * VkImage is reused directly — no download needed at all.
+                 */
+                surface->shelved_dirty = surface->draw_dirty;
                 if (surface->draw_dirty) {
-                    /*
-                     * Record deferred download of GPU-rendered content to
-                     * VRAM. For color surfaces in GENERAL layout with an
-                     * active command buffer, record the copy directly in the
-                     * main CB (between render passes) — this avoids a
-                     * separate pgraph_vk_finish per eviction. The copy
-                     * executes in-order: after preceding draws, before
-                     * subsequent draws. Multiple evictions per frame are
-                     * carried in a single submit.
-                     *
-                     * Falls back to deferred finish for complex cases
-                     * (depth-stencil, no CB, staging full).
-                     */
-                    bool did_inline = false;
-                    if (r->in_command_buffer && surface->color &&
-                        surface->image_layout == VK_IMAGE_LAYOUT_GENERAL &&
-                        !surface->swizzle &&
-                        pg->surface_scale_factor == 1 &&
-                        r->num_deferred_downloads < MAX_DEFERRED_DOWNLOADS) {
-                        size_t staging_size =
-                            surface->host_fmt.host_bytes_per_pixel *
-                            surface->width * surface->height;
-                        VkDeviceSize aligned_offset =
-                            ROUND_UP(r->staging_dst_offset, 16);
-                        if (aligned_offset + staging_size <=
-                            r->storage_buffers[BUFFER_STAGING_DST].buffer_size) {
-                            OPT_STAT_INC(sd_eviction);
-                            if (r->in_render_pass) {
-                                end_render_pass(r);
-                            }
-                            /* Memory barrier: attachment writes → transfer read */
-                            VkImageMemoryBarrier barrier = {
-                                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-                                .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
-                                .newLayout = VK_IMAGE_LAYOUT_GENERAL,
-                                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                                .image = surface->image,
-                                .subresourceRange = {
-                                    VK_IMAGE_ASPECT_COLOR_BIT, 0,
-                                    VK_REMAINING_MIP_LEVELS, 0,
-                                    VK_REMAINING_ARRAY_LAYERS },
-                                .srcAccessMask =
-                                    VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
-                                .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
-                            };
-                            unsigned int scaled_w = surface->width;
-                            unsigned int scaled_h = surface->height;
-                            vkCmdPipelineBarrier(r->command_buffer,
-                                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                                VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                0, 0, NULL, 0, NULL, 1, &barrier);
-                            VkBufferImageCopy region = {
-                                .bufferOffset = aligned_offset,
-                                .bufferRowLength = scaled_w,
-                                .bufferImageHeight = scaled_h,
-                                .imageSubresource = {
-                                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                                    .layerCount = 1,
-                                },
-                                .imageExtent = { scaled_w, scaled_h, 1 },
-                            };
-                            vkCmdCopyImageToBuffer(r->command_buffer,
-                                surface->image, VK_IMAGE_LAYOUT_GENERAL,
-                                r->storage_buffers[BUFFER_STAGING_DST].buffer,
-                                1, &region);
-                            /* Track for later VRAM completion */
-                            DeferredSurfaceDownload *dl =
-                                &r->deferred_downloads[r->num_deferred_downloads++];
-                            dl->surface = surface;
-                            dl->dest_ptr =
-                                d->vram_ptr + surface->vram_addr;
-                            dl->staging_offset = aligned_offset;
-                            dl->download_size = staging_size;
-                            dl->width = scaled_w;
-                            dl->height = scaled_h;
-                            dl->pitch = surface->pitch;
-                            dl->bytes_per_pixel =
-                                surface->fmt.bytes_per_pixel;
-                            dl->swizzle = false;
-                            r->staging_dst_offset =
-                                aligned_offset + staging_size;
-                            did_inline = true;
-                        }
-                    }
-                    if (!did_inline) {
-                        /* Fallback: deferred finish + aux CB download */
-                        if (r->in_command_buffer) {
-                            OPT_STAT_INC(sd_eviction);
-                            pgraph_vk_finish(pg,
-                                VK_FINISH_REASON_SURFACE_DOWN_FLUSH);
-                        } else {
-                            OPT_STAT_INC(sd_eviction_nocb);
-                        }
-                        if (!download_surface_record_deferred(
-                                d, surface,
-                                d->vram_ptr + surface->vram_addr)) {
-                            pgraph_vk_surface_download_if_dirty(d, surface);
-                        }
-                    }
+                    OPT_STAT_INC(sd_eviction_skipped);
                 }
                 shelve_surface(d, surface);
                 g_nv2a_stats.surf_working.lk_evict_ns += nv2a_clock_ns() - _gt1;
@@ -2985,10 +2913,12 @@ static void update_surface_part(NV2AState *d, bool upload, bool color)
                 /*
                  * The VkImage already contains valid data from the
                  * previous binding, so skip the VRAM upload and mark
-                 * the surface as initialized.
+                 * the surface as initialized. No VRAM download was
+                 * needed — the lazy eviction saved a GPU finish.
                  */
                 surface->upload_pending = false;
                 surface->initialized = true;
+                OPT_STAT_INC(sd_shelved_unshelved);
             }
 
             int64_t _gt3 = nv2a_clock_ns();

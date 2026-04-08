@@ -110,6 +110,13 @@ struct OptBisectStats {
     int tex_cache_uploads;
     int tex_cache_hash_misses;
     int tex_cache_misses;
+    int tex_zero_uploads;
+    int tex_zero_reupload;
+    int draws_skipped_no_pipeline;
+    int draws_skipped_null_pipeline;
+    int sd_eviction_skipped;
+    int sd_shelved_unshelved;
+    int sd_shelved_lazy_dl;
     int sync_range_skip;
     int sync_early_exit;
     int draw_merge_enqueued;
@@ -287,6 +294,7 @@ typedef struct SurfaceBinding {
     int frame_time;
     int draw_time;
     bool draw_dirty;
+    bool shelved_dirty;  /* Shelved without downloading GPU data to VRAM */
     bool download_pending;
     bool upload_pending;
 
