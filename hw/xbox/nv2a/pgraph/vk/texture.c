@@ -37,7 +37,6 @@ static bool image_pool_acquire(PGRAPHVkState *r, const TextureImageConfig *confi
                                VkImage *out_image, VmaAllocation *out_allocation);
 static void image_pool_drain(PGRAPHVkState *r);
 
-
 static const VkImageType dimensionality_to_vk_image_type[] = {
     0,
     VK_IMAGE_TYPE_1D,
@@ -374,18 +373,7 @@ static TextureLayout *get_texture_layout(PGRAPHState *pg, int texture_idx)
                 /* Vulkan does not guarantee BC support for 3D images.
                  * Many GPUs (especially mobile/Adreno) don't support it,
                  * causing corruption. Always CPU-decompress 3D textures. */
-                if (false) {
-                    uint8_t *raw_copy = g_malloc(compressed_size);
-                    memcpy(raw_copy, texture_data_ptr, compressed_size);
-
-                    layout->layers[0].levels[level] = (TextureLevel){
-                        .width = width,
-                        .height = height,
-                        .depth = depth,
-                        .decoded_size = compressed_size,
-                        .decoded_data = raw_copy,
-                    };
-                } else {
+                {
                     size_t converted_size = width * height * depth * 4;
                     uint8_t *converted = s3tc_decompress_3d(
                         kelvin_format_to_s3tc_format(s.color_format),
