@@ -29,8 +29,9 @@ if(CARGO_EXECUTABLE MATCHES "-NOTFOUND$" OR NOT CARGO_EXECUTABLE)
     endif()
   endif()
 endif()
-set(XEMU_XISO_CONVERTER_BUILD_ENABLED ${XEMU_ENABLE_XISO_CONVERTER})
-if(XEMU_XISO_CONVERTER_BUILD_ENABLED AND NOT CARGO_EXECUTABLE)
+# Rust-based converter replaced by extract-xiso (C). Cargo no longer needed.
+set(XEMU_XISO_CONVERTER_BUILD_ENABLED OFF)
+if(FALSE AND XEMU_XISO_CONVERTER_BUILD_ENABLED AND NOT CARGO_EXECUTABLE)
   message(WARNING "cargo not found in PATH; disabling XISO converter")
   set(XEMU_XISO_CONVERTER_BUILD_ENABLED OFF)
 endif()
@@ -1071,18 +1072,22 @@ find_library(glesv3-lib GLESv3)
 find_library(vulkan-lib vulkan)
 find_library(zlib-lib z)
 
-if(XEMU_XISO_CONVERTER_BUILD_ENABLED)
+if(XEMU_ENABLE_XISO_CONVERTER)
+  set(EXTRACT_XISO_DIR "${REPO_ROOT}/android/third_party/extract-xiso")
   add_library(xiso_converter SHARED
     xiso_converter_jni.cpp
+    ${EXTRACT_XISO_DIR}/extract-xiso.c
   )
 
   target_compile_definitions(xiso_converter PRIVATE ANDROID __ANDROID__)
   target_compile_options(xiso_converter PRIVATE -fexceptions -frtti -g1
+    # extract-xiso.c uses some constructs that trigger warnings
+    -Wno-pointer-sign -Wno-incompatible-pointer-types
+    -Wno-implicit-function-declaration -Wno-unused-variable
     $<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>,$<CONFIG:MinSizeRel>>:-UNDEBUG>
   )
 
   target_link_libraries(xiso_converter PRIVATE
-    xiso_converter_rs
     ${log-lib}
   )
 endif()
