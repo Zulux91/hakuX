@@ -1728,24 +1728,32 @@ void pgraph_vk_check_memory_budget(PGRAPHState *pg)
     g_autofree VmaBudget *budgets = g_malloc_n(props->memoryHeapCount, sizeof(VmaBudget));
     vmaGetHeapBudgets(r->allocator, budgets);
 
+    /* Use a high threshold — only trim when genuinely near exhaustion.
+     * The previous 0.6 on Android caused constant trim cycles because
+     * non-texture allocations (surfaces, buffers) alone exceeded 60%. */
 #ifdef __ANDROID__
-    const float budget_threshold = 0.6;
+    const double budget_threshold = 0.85;
 #else
-    const float budget_threshold = 0.8;
+    const double budget_threshold = 0.90;
 #endif
-    bool near_budget = false;
 
+    /* Find the worst over-budget heap and compute excess bytes */
+    size_t max_excess = 0;
     for (uint32_t i = 0; i < props->memoryHeapCount; i++) {
         VmaBudget *b = &budgets[i];
         if (b->budget == 0) {
             continue;
         }
-        float use_to_budget_ratio =
-            (double)b->statistics.allocationBytes / (double)b->budget;
-        near_budget |= use_to_budget_ratio > budget_threshold;
+        size_t target = (size_t)(b->budget * budget_threshold);
+        if (b->statistics.allocationBytes > target) {
+            size_t excess = b->statistics.allocationBytes - target;
+            if (excess > max_excess) {
+                max_excess = excess;
+            }
+        }
     }
 
-    if (near_budget) {
-        pgraph_vk_trim_texture_cache(pg);
+    if (max_excess > 0) {
+        pgraph_vk_trim_texture_cache_bytes(pg, max_excess);
     }
 }

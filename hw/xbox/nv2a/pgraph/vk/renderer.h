@@ -106,8 +106,10 @@ struct OptBisectStats {
     int tex_pool_hits;
     int tex_pool_misses;
     int tex_cache_evictions;
+    int tex_cache_oom_evictions;
     int tex_cache_uploads;
     int tex_cache_hash_misses;
+    int tex_cache_misses;
     int sync_range_skip;
     int sync_early_exit;
     int draw_merge_enqueued;
@@ -1513,6 +1515,7 @@ bool pgraph_vk_check_textures_fast_skip(PGRAPHState *pg);
 void pgraph_vk_mark_textures_possibly_dirty(NV2AState *d, hwaddr addr,
                                             hwaddr size);
 void pgraph_vk_trim_texture_cache(PGRAPHState *pg);
+void pgraph_vk_trim_texture_cache_bytes(PGRAPHState *pg, size_t bytes_to_free);
 
 // compile_worker.c
 #if OPT_ASYNC_COMPILE

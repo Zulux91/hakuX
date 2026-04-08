@@ -189,12 +189,15 @@ static void opt_stats_log_and_reset(void)
         {
             PGRAPHVkState *r_tex = g_nv2a->pgraph.vk_renderer_state;
             __android_log_print(ANDROID_LOG_INFO, "hakuX-tex",
-                "TexCache: used:%d/%zu evict:%d upload:%d hashMiss:%d pool:%d/%d",
+                "TexCache: used:%d/%zu miss:%d upload:%d dirty:%d "
+                "evict:%d(oom:%d) pool:%d/%d",
                 r_tex->texture_cache.num_used,
                 r_tex->texture_cache_target,
-                g_opt_stats.tex_cache_evictions,
+                g_opt_stats.tex_cache_misses,
                 g_opt_stats.tex_cache_uploads,
                 g_opt_stats.tex_cache_hash_misses,
+                g_opt_stats.tex_cache_evictions,
+                g_opt_stats.tex_cache_oom_evictions,
                 g_opt_stats.tex_pool_hits,
                 g_opt_stats.tex_pool_misses);
         }

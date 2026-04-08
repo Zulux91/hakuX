@@ -1585,6 +1585,7 @@ static void create_texture(PGRAPHState *pg, int texture_idx)
     }
 
     NV2A_VK_DPRINTF("Cache miss");
+    OPT_STAT_INC(tex_cache_misses);
 
     memcpy(&snode->key, &key, sizeof(key));
     snode->current_layout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -1697,6 +1698,7 @@ static void create_texture(PGRAPHState *pg, int texture_idx)
 
         for (int evict_pass = 0; evict_pass < 64; evict_pass++) {
             if (!lru_try_evict_one(&r->texture_cache)) break;
+            OPT_STAT_INC(tex_cache_oom_evictions);
         }
         image_pool_drain(r);
 
@@ -2260,12 +2262,63 @@ static void texture_cache_finalize(PGRAPHVkState *r)
     r->texture_cache_entries = NULL;
 }
 
+/* Estimate GPU memory for a texture image from its config. */
+static size_t estimate_texture_image_bytes(const TextureImageConfig *cfg)
+{
+    size_t bpp;
+    switch (cfg->format) {
+    case VK_FORMAT_BC1_RGBA_UNORM_BLOCK: bpp = 8; break;  /* 8 bytes per 4x4 */
+    case VK_FORMAT_BC2_UNORM_BLOCK:
+    case VK_FORMAT_BC3_UNORM_BLOCK:      bpp = 16; break;  /* 16 bytes per 4x4 */
+    default:                             bpp = 4; break;   /* assume RGBA8 */
+    }
+
+    size_t total = 0;
+    uint32_t w = cfg->width, h = cfg->height, d = cfg->depth;
+    bool is_bc = (cfg->format == VK_FORMAT_BC1_RGBA_UNORM_BLOCK ||
+                  cfg->format == VK_FORMAT_BC2_UNORM_BLOCK ||
+                  cfg->format == VK_FORMAT_BC3_UNORM_BLOCK);
+
+    for (uint32_t m = 0; m < cfg->mip_levels; m++) {
+        if (is_bc) {
+            uint32_t bw = (w + 3) / 4, bh = (h + 3) / 4;
+            total += (size_t)bw * bh * d * bpp;
+        } else {
+            total += (size_t)w * h * d * bpp;
+        }
+        w = w > 1 ? w / 2 : 1;
+        h = h > 1 ? h / 2 : 1;
+        d = d > 1 ? d / 2 : 1;
+    }
+    return total * cfg->array_layers;
+}
+
+void pgraph_vk_trim_texture_cache_bytes(PGRAPHState *pg, size_t bytes_to_free)
+{
+    PGRAPHVkState *r = pg->vk_renderer_state;
+    size_t freed = 0;
+    int num_evicted = 0;
+
+    while (freed < bytes_to_free) {
+        LruNode *node = lru_try_evict_one(&r->texture_cache);
+        if (!node) break;
+        TextureBinding *snode = container_of(node, TextureBinding, node);
+        if (snode->image != VK_NULL_HANDLE) {
+            freed += estimate_texture_image_bytes(&snode->image_config);
+        }
+        num_evicted++;
+    }
+
+    if (num_evicted > 0) {
+        NV2A_VK_DPRINTF("Trimmed %d textures (~%zuKB), %d remain",
+                         num_evicted, freed >> 10,
+                         r->texture_cache.num_used);
+    }
+}
+
 void pgraph_vk_trim_texture_cache(PGRAPHState *pg)
 {
     PGRAPHVkState *r = pg->vk_renderer_state;
-
-    // FIXME: Allow specifying some amount to trim by
-
     int num_to_evict = r->texture_cache.num_used / 4;
     int num_evicted = 0;
 
