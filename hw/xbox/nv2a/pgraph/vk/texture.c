@@ -37,6 +37,7 @@ static bool image_pool_acquire(PGRAPHVkState *r, const TextureImageConfig *confi
                                VkImage *out_image, VmaAllocation *out_allocation);
 static void image_pool_drain(PGRAPHVkState *r);
 
+
 static const VkImageType dimensionality_to_vk_image_type[] = {
     0,
     VK_IMAGE_TYPE_1D,
@@ -99,10 +100,7 @@ static VkFormat kelvin_format_to_native_bc(int color_format)
     case NV097_SET_TEXTURE_FORMAT_COLOR_L_DXT23_A8R8G8B8:
         return VK_FORMAT_BC2_UNORM_BLOCK;
     case NV097_SET_TEXTURE_FORMAT_COLOR_L_DXT45_A8R8G8B8:
-        /* BC3 disabled: produces block corruption on Adreno 730+.
-         * Root cause unknown — BC1/BC2 work correctly with identical
-         * upload logic. Falls back to CPU decompression for DXT5. */
-        return (VkFormat)0;
+        return VK_FORMAT_BC3_UNORM_BLOCK;
     default:
         return (VkFormat)0;
     }
@@ -274,8 +272,9 @@ static TextureLayout *get_texture_layout(PGRAPHState *pg, int texture_idx)
                     size_t compressed_size =
                         (size_t)(physical_width / 4) * (physical_height / 4) * block_size;
 
-                    if (r->texture_compression_bc_supported &&
-                        kelvin_format_to_native_bc(s.color_format)) {
+                    VkFormat _bc_fmt = r->texture_compression_bc_supported
+                        ? kelvin_format_to_native_bc(s.color_format) : (VkFormat)0;
+                    if (_bc_fmt) {
                         /* Native BC path: upload compressed blocks directly.
                          * DXT blocks are already in linear order (L_ prefix).
                          * No decompression needed. */
@@ -372,8 +371,10 @@ static TextureLayout *get_texture_layout(PGRAPHState *pg, int texture_idx)
                 size_t compressed_size =
                     (size_t)(physical_width / 4) * (physical_height / 4) * depth * block_size;
 
-                if (r->texture_compression_bc_supported &&
-                    kelvin_format_to_native_bc(s.color_format)) {
+                /* Vulkan does not guarantee BC support for 3D images.
+                 * Many GPUs (especially mobile/Adreno) don't support it,
+                 * causing corruption. Always CPU-decompress 3D textures. */
+                if (false) {
                     uint8_t *raw_copy = g_malloc(compressed_size);
                     memcpy(raw_copy, texture_data_ptr, compressed_size);
 
@@ -527,8 +528,10 @@ static void upload_texture_image(PGRAPHState *pg, int texture_idx,
     TextureShape *state = &binding->key.state;
     VkColorFormatInfo vkf = kelvin_color_format_vk_map[state->color_format];
 
-    /* Override format for native BC upload */
-    VkFormat native_bc = r->texture_compression_bc_supported
+    /* Override format for native BC upload.
+     * Skip for 3D textures — Vulkan doesn't guarantee BC for VK_IMAGE_TYPE_3D. */
+    VkFormat native_bc = (r->texture_compression_bc_supported &&
+                          state->dimensionality != 3)
                          ? kelvin_format_to_native_bc(state->color_format)
                          : (VkFormat)0;
     if (native_bc) {
@@ -1466,7 +1469,8 @@ static void create_texture(PGRAPHState *pg, int texture_idx)
      * a surface_to_texture frame vs BC3 when no surface overlaps), the
      * cached image cannot be reused — treat it as a miss. */
     VkFormat expected_fmt = kelvin_color_format_vk_map[state.color_format].vk_format;
-    if (!surface_to_texture && r->texture_compression_bc_supported) {
+    if (!surface_to_texture && r->texture_compression_bc_supported &&
+        state.dimensionality != 3) {
         VkFormat bc = kelvin_format_to_native_bc(state.color_format);
         if (bc) expected_fmt = bc;
     }
@@ -1607,7 +1611,8 @@ static void create_texture(PGRAPHState *pg, int texture_idx)
     bool has_replacement = pgraph_vk_texture_replace_is_enabled() &&
         pgraph_vk_texture_replace_lookup(content_hash, NULL, NULL, NULL) != NULL;
     VkFormat native_bc = (!surface_to_texture && !has_replacement &&
-                          r->texture_compression_bc_supported)
+                          r->texture_compression_bc_supported &&
+                          state.dimensionality != 3)
                          ? kelvin_format_to_native_bc(state.color_format)
                          : (VkFormat)0;
     if (native_bc) {
