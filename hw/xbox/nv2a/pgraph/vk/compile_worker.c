@@ -200,6 +200,41 @@ void pgraph_vk_compile_worker_init(PGRAPHVkState *r)
                        compile_worker_func, r, QEMU_THREAD_JOINABLE);
 }
 
+void pgraph_vk_compile_worker_wait_idle(PGRAPHVkState *r,
+                                        int total_jobs,
+                                        void (*progress_cb)(int current,
+                                                            int total))
+{
+    if (total_jobs <= 0) {
+        return;
+    }
+
+    if (progress_cb) {
+        progress_cb(0, total_jobs);
+    }
+
+    while (true) {
+        qemu_mutex_lock(&r->compile_worker.lock);
+        int remaining = r->compile_worker.queue_depth;
+        qemu_mutex_unlock(&r->compile_worker.lock);
+
+        if (remaining <= 0) {
+            break;
+        }
+
+        int completed = total_jobs - remaining;
+        if (progress_cb) {
+            progress_cb(completed, total_jobs);
+        }
+
+        g_usleep(50 * 1000); /* 50ms poll interval */
+    }
+
+    if (progress_cb) {
+        progress_cb(total_jobs, total_jobs);
+    }
+}
+
 void pgraph_vk_compile_worker_shutdown(PGRAPHVkState *r)
 {
     qemu_mutex_lock(&r->compile_worker.lock);

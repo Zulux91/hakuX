@@ -1519,6 +1519,10 @@ void pgraph_vk_trim_texture_cache(PGRAPHState *pg);
 void pgraph_vk_compile_worker_init(PGRAPHVkState *r);
 void pgraph_vk_compile_worker_shutdown(PGRAPHVkState *r);
 void pgraph_vk_compile_worker_enqueue(PGRAPHVkState *r, CompileJob *job);
+void pgraph_vk_compile_worker_wait_idle(PGRAPHVkState *r,
+                                        int total_jobs,
+                                        void (*progress_cb)(int current,
+                                                            int total));
 #endif
 
 // submit_worker.c

@@ -2949,16 +2949,27 @@ mfp_miss: (void)0;
 #if OPT_ASYNC_COMPILE
     r->async_draw_skip = false;
     if (!pg->clearing && xemu_get_async_compile() && r->pipeline_binding) {
-        bool skip = false;
         if (!qatomic_read(&r->shader_binding->ready)) {
-            skip = true;
-        } else if (r->pipeline_binding->pending) {
-            skip = true;
-        } else if (r->pipeline_binding->pipeline == VK_NULL_HANDLE) {
-            skip = true;
-        }
-        if (skip) {
+            /* Shader modules still compiling — skip draw */
             OPT_STAT_INC(draws_skipped_pending);
+            r->async_draw_skip = true;
+            r->pre_draw_skipped = true;
+            pgraph_vk_ensure_command_buffer(pg);
+            return;
+        }
+        if (r->pipeline_binding->pending) {
+            /*
+             * Shader modules ready but pipeline creation still in progress.
+             * Wait for it rather than skipping — pipeline creation is fast
+             * (especially with VK driver cache warm) and skipping causes
+             * permanently missing textures on screens that only draw once.
+             */
+            while (qatomic_read(&r->pipeline_binding->pending)) {
+                g_usleep(100);
+            }
+        }
+        if (r->pipeline_binding->pipeline == VK_NULL_HANDLE) {
+            /* Pipeline creation failed */
             r->async_draw_skip = true;
             r->pre_draw_skipped = true;
             pgraph_vk_ensure_command_buffer(pg);
