@@ -335,6 +335,91 @@ void nv2a_dbg_set_rt_dump_path(const char *dir)
     snprintf(rt_dump_dir, sizeof(rt_dump_dir), "%s", dir);
 }
 
+/* Download a surface's VkImage to VRAM using a standalone command buffer.
+ * This is safe to call after pgraph_vk_finish when in_command_buffer is false,
+ * unlike the normal download path which relies on nondraw commands + finish. */
+static void diag_download_surface(NV2AState *d, PGRAPHState *pg,
+                                  SurfaceBinding *surface)
+{
+    PGRAPHVkState *r = pg->vk_renderer_state;
+    if (!surface || !surface->width || !surface->height) return;
+
+    /* Only handle simple color surfaces (4bpp, no swizzle, no depth/stencil) */
+    if (!surface->color || surface->swizzle) return;
+
+    VkCommandBuffer cmd = pgraph_vk_begin_single_time_commands(pg);
+
+    /* Transition to TRANSFER_SRC */
+    pgraph_vk_transition_image_layout(
+        pg, cmd, surface->image, surface->host_fmt.vk_format,
+        surface->image_layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+
+    /* Copy image to staging buffer */
+    StorageBuffer *staging = &r->storage_buffers[BUFFER_STAGING_DST];
+    VkBufferImageCopy region = {
+        .bufferOffset = 0,
+        .bufferRowLength = surface->width,
+        .bufferImageHeight = surface->height,
+        .imageSubresource = {
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .layerCount = 1,
+        },
+        .imageExtent = { surface->width, surface->height, 1 },
+    };
+    unsigned int scaled_w = surface->width, scaled_h = surface->height;
+    pgraph_apply_scaling_factor(pg, &scaled_w, &scaled_h);
+    region.imageExtent.width = scaled_w;
+    region.imageExtent.height = scaled_h;
+    region.bufferRowLength = scaled_w;
+    region.bufferImageHeight = scaled_h;
+    vkCmdCopyImageToBuffer(cmd, surface->image,
+                           VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                           staging->buffer, 1, &region);
+
+    /* Transition back to GENERAL */
+    pgraph_vk_transition_image_layout(
+        pg, cmd, surface->image, surface->host_fmt.vk_format,
+        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL);
+    surface->image_layout = VK_IMAGE_LAYOUT_GENERAL;
+
+    /* Barrier: transfer writes visible to host reads */
+    VkBufferMemoryBarrier barrier = {
+        .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+        .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+        .dstAccessMask = VK_ACCESS_HOST_READ_BIT,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .buffer = staging->buffer,
+        .size = (VkDeviceSize)scaled_w * scaled_h * surface->fmt.bytes_per_pixel,
+    };
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_HOST_BIT, 0, 0, NULL, 1,
+                         &barrier, 0, NULL);
+
+    pgraph_vk_end_single_time_commands(pg, cmd);
+
+    /* Invalidate and copy to VRAM */
+    size_t dl_size = (size_t)scaled_w * scaled_h * surface->fmt.bytes_per_pixel;
+    vmaInvalidateAllocation(r->allocator, staging->allocation, 0, dl_size);
+
+    uint8_t *dst = d->vram_ptr + surface->vram_addr;
+    const uint8_t *src = staging->mapped;
+    if (pg->surface_scale_factor == 1) {
+        for (unsigned int y = 0; y < surface->height; y++) {
+            memcpy(dst + y * surface->pitch,
+                   src + y * surface->width * surface->fmt.bytes_per_pixel,
+                   surface->width * surface->fmt.bytes_per_pixel);
+        }
+    } else {
+        /* Downscale: just copy row by row from scaled dims */
+        for (unsigned int y = 0; y < surface->height && y < scaled_h; y++) {
+            memcpy(dst + y * surface->pitch,
+                   src + y * scaled_w * surface->fmt.bytes_per_pixel,
+                   surface->width * surface->fmt.bytes_per_pixel);
+        }
+    }
+}
+
 static void dump_surface_ppm(NV2AState *d, SurfaceBinding *surface,
                              const char *path)
 {
@@ -1143,9 +1228,31 @@ void nv2a_diag_log_draw_call(NV2AState *d, PGRAPHState *pg,
         const char *addru_name = addru < 6 ? addr_names[addru] : "?";
         const char *addrv_name = addrv < 6 ? addr_names[addrv] : "?";
 
+        /* Report actual VkFormat and whether native BC was used */
+        const char *vk_fmt_name = "RGBA8";
+        bool is_native_bc = false;
+        TextureBinding *tb = r->texture_bindings[i];
+        if (tb && tb->image != VK_NULL_HANDLE) {
+            VkFormat fmt = tb->image_config.format;
+            if (fmt == VK_FORMAT_BC1_RGBA_UNORM_BLOCK) {
+                vk_fmt_name = "BC1"; is_native_bc = true;
+            } else if (fmt == VK_FORMAT_BC2_UNORM_BLOCK) {
+                vk_fmt_name = "BC2"; is_native_bc = true;
+            } else if (fmt == VK_FORMAT_BC3_UNORM_BLOCK) {
+                vk_fmt_name = "BC3"; is_native_bc = true;
+            } else if (fmt == VK_FORMAT_B8G8R8A8_UNORM) {
+                vk_fmt_name = "BGRA8";
+            }
+        }
+
+        unsigned int mip_levels = GET_MASK(tex_fmt,
+                                           NV_PGRAPH_TEXFMT0_MIPMAP_LEVELS);
+
         diag_json_append(
             "%s{\"stage\": %d, \"enabled\": %s, \"color_format\": %u, "
             "\"dim\": %u, \"width\": %u, \"height\": %u, "
+            "\"levels\": %u, "
+            "\"vk_format\": \"%s\", \"native_bc\": %s, "
             "\"addru\": \"%s\", \"addrv\": \"%s\", "
             "\"border_color\": \"0x%08x\"}",
             i > 0 ? ", " : "",
@@ -1154,6 +1261,8 @@ void nv2a_diag_log_draw_call(NV2AState *d, PGRAPHState *pg,
             color_format,
             dimensionality,
             1u << log_w, 1u << log_h,
+            mip_levels,
+            vk_fmt_name, is_native_bc ? "true" : "false",
             addru_name, addrv_name,
             border_color
         );
@@ -1184,15 +1293,23 @@ void nv2a_diag_log_draw_call(NV2AState *d, PGRAPHState *pg,
     }
     diag_json_append("],\n");
 
-    /* Per-draw surface dumps */
+    /* Per-draw surface dumps.
+     *
+     * After pgraph_vk_finish, in_command_buffer is false. The normal
+     * download path (download_surface_to_buffer) records into nondraw
+     * commands then calls pgraph_vk_finish again, but that second finish
+     * is a no-op when in_command_buffer is false — the copy never submits.
+     *
+     * Use diag_download_surface which creates a standalone single-time
+     * command buffer, independent of the main rendering flow. */
     pgraph_vk_finish(pg, VK_FINISH_REASON_SURFACE_DOWN);
 
     {
         char color_fname[128] = "";
         char depth_fname[128] = "";
 
-        if (r->color_binding && r->color_binding->draw_dirty) {
-            pgraph_vk_surface_download_if_dirty(d, r->color_binding);
+        if (r->color_binding) {
+            diag_download_surface(d, pg, r->color_binding);
             snprintf(color_fname, sizeof(color_fname),
                      "f%d_draw%d_color.ppm", diag_current_frame_index, idx);
             char path[800];
@@ -1200,13 +1317,11 @@ void nv2a_diag_log_draw_call(NV2AState *d, PGRAPHState *pg,
             dump_surface_ppm(d, r->color_binding, path);
         }
 
-        if (r->zeta_binding && r->zeta_binding->draw_dirty) {
-            pgraph_vk_surface_download_if_dirty(d, r->zeta_binding);
-            snprintf(depth_fname, sizeof(depth_fname),
-                     "f%d_draw%d_depth.ppm", diag_current_frame_index, idx);
-            char path[800];
-            snprintf(path, sizeof(path), "%s/%s", diag_session_dir, depth_fname);
-            dump_surface_ppm(d, r->zeta_binding, path);
+        /* Depth surfaces use complex formats (D24S8, etc.) that need
+         * compute shader conversion — skip per-draw depth dumps for now
+         * to keep the diagnostic path simple and reliable. */
+        if (r->zeta_binding) {
+            /* TODO: implement depth download via diag path */
         }
 
         if (color_fname[0]) {
@@ -1383,11 +1498,17 @@ static void pgraph_vk_flip_stall(NV2AState *d)
                     }
                     if (changed) {
                         changed_count++;
+                        size_t prev_len = cl_len;
                         int n = snprintf(changed_list + cl_len,
                                          sizeof(changed_list) - cl_len,
                                          "%s%d", cl_len > 0 ? ", " : "", di);
                         if (n > 0 && cl_len + n < sizeof(changed_list)) {
                             cl_len += n;
+                        } else {
+                            /* Overflowed — revert to last good position */
+                            changed_list[prev_len] = '\0';
+                            cl_len = prev_len;
+                            break;
                         }
                     }
                 }
