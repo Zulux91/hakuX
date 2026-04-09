@@ -896,19 +896,9 @@ class GameLibraryActivity : AppCompatActivity() {
       .putBoolean("skip_game_picker", false)
       .commit()
 
-    // Check if texture replacement needs syncing before launch
-    val texReplaceEnabled = prefs.getString(
-      PerGameSettingsManager.runtimeKey("texture_replace_enabled"), null
-    )?.let { it == "true" } ?: prefs.getBoolean("texture_replace_enabled", false)
-
-    val replaceUri = prefs.getString("textureReplaceFolderUri", null)
-
-    if (texReplaceEnabled && replaceUri != null) {
-      syncTexturesAndLaunch(uri, replaceUri)
-    } else {
-      startActivity(Intent(this, MainActivity::class.java))
-      finish()
-    }
+    // Texture replacement disabled pending fixes
+    startActivity(Intent(this, MainActivity::class.java))
+    finish()
   }
 
   private fun syncTexturesAndLaunch(gameUri: Uri, replaceFolderUri: String) {

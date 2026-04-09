@@ -1566,6 +1566,10 @@ static void create_texture(PGRAPHState *pg, int texture_idx)
 
             if (vram_changed || needs_replace) {
                 OPT_STAT_INC(tex_cache_hash_misses);
+                /* Detect zero→nonzero transitions (DMA data arriving) */
+                if (vram_changed && snode->hash == 0 && content_hash != 0) {
+                    OPT_STAT_INC(tex_zero_reupload);
+                }
                 if (snode->submit_time + r->num_active_frames > r->submit_count) {
                     pgraph_vk_flush_all_frames(pg);
                 }
@@ -1586,6 +1590,19 @@ static void create_texture(PGRAPHState *pg, int texture_idx)
 
     NV2A_VK_DPRINTF("Cache miss");
     OPT_STAT_INC(tex_cache_misses);
+
+    /* Detect if texture VRAM is all zeros (DMA hasn't delivered data yet) */
+    {
+        const uint64_t *p = (const uint64_t *)texture_data;
+        size_t nwords = MIN(texture_length, 256) / 8;
+        bool all_zero = true;
+        for (size_t i = 0; i < nwords; i++) {
+            if (p[i] != 0) { all_zero = false; break; }
+        }
+        if (all_zero && texture_length >= 64) {
+            OPT_STAT_INC(tex_zero_uploads);
+        }
+    }
 
     memcpy(&snode->key, &key, sizeof(key));
     snode->current_layout = VK_IMAGE_LAYOUT_UNDEFINED;

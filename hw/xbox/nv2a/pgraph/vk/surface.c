@@ -180,6 +180,17 @@ bool pgraph_vk_download_surfaces_in_range_if_dirty(PGRAPHState *pg,
         }
     }
 
+    /* Also check invalidated surfaces with undownloaded GPU data */
+    QTAILQ_FOREACH(surface, &r->invalid_surfaces, entry) {
+        if (!surface->draw_dirty) continue;
+        if (!surface->width || !surface->height) continue;
+        if (check_surface_overlaps_range(surface, start, size)) {
+            OPT_STAT_INC(sd_shelved_lazy_dl);
+            download_surface_deferred(d, surface);
+            found_overlap = true;
+        }
+    }
+
     if (found_overlap && r->num_deferred_downloads > 0) {
         /* Downloads just recorded but not yet submitted — must complete
          * now since the caller needs the data in VRAM. */
@@ -1687,12 +1698,15 @@ static void invalidate_overlapping_surfaces(NV2AState *d,
                 other_surface->vram_addr, other_surface->width,
                 other_surface->height, other_surface->pitch);
             OPT_STAT_INC(dif_overlap);
+            /*
+             * Lazy overlap: skip download now. The invalidated surface's
+             * VkImage is preserved in the invalid_surfaces list. If a
+             * texture later reads from this VRAM range, the overlap check
+             * in pgraph_vk_download_surfaces_in_range_if_dirty will
+             * download it then. Otherwise the data is never needed.
+             */
             if (other_surface->draw_dirty) {
-                if (!download_surface_record_deferred(
-                        d, other_surface,
-                        d->vram_ptr + other_surface->vram_addr)) {
-                    pgraph_vk_surface_download_if_dirty(d, other_surface);
-                }
+                OPT_STAT_INC(sd_eviction_skipped);
             }
             invalidate_surface(d, other_surface);
         }
