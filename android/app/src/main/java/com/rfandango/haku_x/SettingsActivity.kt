@@ -901,31 +901,43 @@ class SettingsActivity : AppCompatActivity() {
     Toast.makeText(this, getString(R.string.settings_dump_logs_saving), Toast.LENGTH_SHORT).show()
     Thread {
       try {
-        val pid = android.os.Process.myPid()
         val timestamp = java.text.SimpleDateFormat(
           "yyyy-MM-dd_HHmmss", java.util.Locale.US
         ).format(java.util.Date())
-        val fileName = "hakux_log_${timestamp}.txt"
-
         val dir = androidx.documentfile.provider.DocumentFile.fromTreeUri(this, treeUri)
-        val file = dir?.createFile("text/plain", fileName)
-        if (file == null) {
-          runOnUiThread { Toast.makeText(this, getString(R.string.settings_dump_logs_failed), Toast.LENGTH_LONG).show() }
-          return@Thread
+        var exported = 0
+
+        val current = HakuXApplication.currentLogFile(this)
+        if (current.exists() && current.length() > 0) {
+          val name = "hakux_current_${timestamp}.log"
+          val outFile = dir?.createFile("text/plain", name)
+          if (outFile != null) {
+            contentResolver.openOutputStream(outFile.uri)?.use { out ->
+              current.inputStream().use { it.copyTo(out) }
+            }
+            exported++
+          }
         }
 
-        val process = Runtime.getRuntime().exec(arrayOf("logcat", "-d", "--pid=$pid"))
-        val output = contentResolver.openOutputStream(file.uri)
-        if (output == null) {
-          runOnUiThread { Toast.makeText(this, getString(R.string.settings_dump_logs_failed), Toast.LENGTH_LONG).show() }
-          return@Thread
+        val previous = HakuXApplication.previousLogFile(this)
+        if (previous.exists() && previous.length() > 0) {
+          val name = "hakux_previous_${timestamp}.log"
+          val outFile = dir?.createFile("text/plain", name)
+          if (outFile != null) {
+            contentResolver.openOutputStream(outFile.uri)?.use { out ->
+              previous.inputStream().use { it.copyTo(out) }
+            }
+            exported++
+          }
         }
-
-        process.inputStream.use { input -> output.use { out -> input.copyTo(out) } }
-        process.waitFor()
 
         runOnUiThread {
-          Toast.makeText(this, getString(R.string.settings_dump_logs_success, fileName), Toast.LENGTH_LONG).show()
+          if (exported > 0) {
+            Toast.makeText(this, getString(R.string.settings_dump_logs_success,
+              "$exported file(s)"), Toast.LENGTH_LONG).show()
+          } else {
+            Toast.makeText(this, getString(R.string.settings_dump_logs_failed), Toast.LENGTH_LONG).show()
+          }
         }
       } catch (e: Exception) {
         runOnUiThread {
