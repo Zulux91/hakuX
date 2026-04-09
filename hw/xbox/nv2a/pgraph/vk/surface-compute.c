@@ -165,113 +165,6 @@ static const char *unswizzle_main_glsl =
     "    dst_data[idx] = src_data[swizzle_addr(idx % width, idx / width)];\n"
     "}\n";
 
-static const char *bc3_decompress_glsl =
-    "layout(push_constant) uniform PushConstants {\n"
-    "    uint blocks_wide, blocks_high, out_width, out_height;\n"
-    "};\n"
-    "layout(std430, set = 0, binding = 0) writeonly buffer DstBuf { uint dst_data[]; };\n"
-    "layout(std430, set = 0, binding = 1) buffer Unused { uint unused[]; };\n"
-    "layout(std430, set = 0, binding = 2) readonly buffer SrcBuf { uint src_data[]; };\n"
-    "\n"
-    "void main() {\n"
-    "    uint block_idx = gl_GlobalInvocationID.x;\n"
-    "    if (block_idx >= blocks_wide * blocks_high) return;\n"
-    "\n"
-    "    uint bx = block_idx % blocks_wide;\n"
-    "    uint by = block_idx / blocks_wide;\n"
-    "\n"
-    "    // Read 16 bytes (4 uint32) of BC3 block data\n"
-    "    uint d0 = src_data[block_idx * 4u + 0u];\n"
-    "    uint d1 = src_data[block_idx * 4u + 1u];\n"
-    "    uint d2 = src_data[block_idx * 4u + 2u];\n"
-    "    uint d3 = src_data[block_idx * 4u + 3u];\n"
-    "\n"
-    "    // --- Alpha (bytes 0-7) ---\n"
-    "    uint alpha0 = d0 & 0xFFu;\n"
-    "    uint alpha1 = (d0 >> 8u) & 0xFFu;\n"
-    "\n"
-    "    uint a_pal[8];\n"
-    "    a_pal[0] = alpha0;\n"
-    "    a_pal[1] = alpha1;\n"
-    "    if (alpha0 > alpha1) {\n"
-    "        a_pal[2] = (6u * alpha0 + 1u * alpha1) / 7u;\n"
-    "        a_pal[3] = (5u * alpha0 + 2u * alpha1) / 7u;\n"
-    "        a_pal[4] = (4u * alpha0 + 3u * alpha1) / 7u;\n"
-    "        a_pal[5] = (3u * alpha0 + 4u * alpha1) / 7u;\n"
-    "        a_pal[6] = (2u * alpha0 + 5u * alpha1) / 7u;\n"
-    "        a_pal[7] = (1u * alpha0 + 6u * alpha1) / 7u;\n"
-    "    } else {\n"
-    "        a_pal[2] = (4u * alpha0 + 1u * alpha1) / 5u;\n"
-    "        a_pal[3] = (3u * alpha0 + 2u * alpha1) / 5u;\n"
-    "        a_pal[4] = (2u * alpha0 + 3u * alpha1) / 5u;\n"
-    "        a_pal[5] = (1u * alpha0 + 4u * alpha1) / 5u;\n"
-    "        a_pal[6] = 0u;\n"
-    "        a_pal[7] = 255u;\n"
-    "    }\n"
-    "\n"
-    "    // 48-bit alpha index: bits [31:16] of d0 + all of d1\n"
-    "    uint alpha_lo = d0 >> 16u;\n"
-    "    uint alpha_hi = d1;\n"
-    "\n"
-    "    // --- Color (bytes 8-15) ---\n"
-    "    uint c0_raw = d2 & 0xFFFFu;\n"
-    "    uint c1_raw = (d2 >> 16u) & 0xFFFFu;\n"
-    "\n"
-    "    uint r0 = ((c0_raw >> 11u) & 0x1Fu) * 255u / 31u;\n"
-    "    uint g0 = ((c0_raw >>  5u) & 0x3Fu) * 255u / 63u;\n"
-    "    uint b0 = ( c0_raw         & 0x1Fu) * 255u / 31u;\n"
-    "    uint r1 = ((c1_raw >> 11u) & 0x1Fu) * 255u / 31u;\n"
-    "    uint g1 = ((c1_raw >>  5u) & 0x3Fu) * 255u / 63u;\n"
-    "    uint b1 = ( c1_raw         & 0x1Fu) * 255u / 31u;\n"
-    "\n"
-    "    uint r_pal[4], g_pal[4], b_pal[4];\n"
-    "    r_pal[0] = r0; g_pal[0] = g0; b_pal[0] = b0;\n"
-    "    r_pal[1] = r1; g_pal[1] = g1; b_pal[1] = b1;\n"
-    "    r_pal[2] = (2u*r0 + r1) / 3u;\n"
-    "    g_pal[2] = (2u*g0 + g1) / 3u;\n"
-    "    b_pal[2] = (2u*b0 + b1) / 3u;\n"
-    "    r_pal[3] = (r0 + 2u*r1) / 3u;\n"
-    "    g_pal[3] = (g0 + 2u*g1) / 3u;\n"
-    "    b_pal[3] = (b0 + 2u*b1) / 3u;\n"
-    "\n"
-    "    uint color_indices = d3;\n"
-    "\n"
-    "    for (uint py = 0u; py < 4u; py++) {\n"
-    "        uint oy = by * 4u + py;\n"
-    "        if (oy >= out_height) break;\n"
-    "        for (uint px = 0u; px < 4u; px++) {\n"
-    "            uint ox = bx * 4u + px;\n"
-    "            if (ox >= out_width) continue;\n"
-    "            uint pixel_idx = py * 4u + px;\n"
-    "\n"
-    "            // Color lookup\n"
-    "            uint ci = (color_indices >> (pixel_idx * 2u)) & 3u;\n"
-    "\n"
-    "            // Alpha lookup: 3-bit index from 48-bit table\n"
-    "            uint abit = pixel_idx * 3u;\n"
-    "            uint ai;\n"
-    "            if (abit + 3u <= 16u) {\n"
-    "                ai = (alpha_lo >> abit) & 7u;\n"
-    "            } else if (abit >= 16u) {\n"
-    "                ai = (alpha_hi >> (abit - 16u)) & 7u;\n"
-    "            } else {\n"
-    "                ai = ((alpha_lo >> abit) | (alpha_hi << (16u - abit))) & 7u;\n"
-    "            }\n"
-    "\n"
-    "            uint rgba = r_pal[ci] | (g_pal[ci] << 8u) | (b_pal[ci] << 16u) | (a_pal[ai] << 24u);\n"
-    "            dst_data[oy * out_width + ox] = rgba;\n"
-    "        }\n"
-    "    }\n"
-    "}\n";
-
-static gchar *get_bc3_decompress_shader_glsl(int workgroup_size)
-{
-    return g_strdup_printf(
-        "#version 450\n"
-        "layout(local_size_x = %d, local_size_y = 1, local_size_z = 1) in;\n"
-        "%s", workgroup_size, bc3_decompress_glsl);
-}
-
 static gchar *get_swizzle_shader_glsl(ComputeType type, int workgroup_size)
 {
     const char *main_body = (type == COMPUTE_TYPE_SWIZZLE) ?
@@ -872,56 +765,6 @@ void pgraph_vk_compute_swizzle(PGRAPHState *pg, VkCommandBuffer cmd,
     pgraph_vk_end_debug_marker(r, cmd);
 }
 
-void pgraph_vk_compute_bc3_decompress(PGRAPHState *pg, VkCommandBuffer cmd,
-                                       VkBuffer src, VkDeviceSize src_offset,
-                                       size_t src_size,
-                                       VkBuffer dst, VkDeviceSize dst_offset,
-                                       size_t dst_size,
-                                       unsigned int width,
-                                       unsigned int height)
-{
-    PGRAPHVkState *r = pg->vk_renderer_state;
-
-    unsigned int blocks_wide = (width + 3) / 4;
-    unsigned int blocks_high = (height + 3) / 4;
-    size_t num_blocks = (size_t)blocks_wide * blocks_high;
-
-    VkDescriptorBufferInfo buffers[] = {
-        { .buffer = dst, .offset = dst_offset, .range = dst_size },
-        { .buffer = dst, .offset = dst_offset, .range = dst_size },
-        { .buffer = src, .offset = src_offset, .range = src_size },
-    };
-    update_descriptor_sets(pg, buffers, ARRAY_SIZE(buffers));
-
-    ComputePipelineKey key;
-    memset(&key, 0, sizeof(key));
-    key.compute_type = COMPUTE_TYPE_BC3_DECOMPRESS;
-    key.workgroup_size = get_workgroup_size_for_output_units(r, num_blocks);
-
-    LruNode *node = lru_lookup(&r->compute.pipeline_cache,
-                      fast_hash((void *)&key, sizeof(key)), &key);
-    ComputePipeline *pipeline = container_of(node, ComputePipeline, node);
-    assert(pipeline);
-
-    size_t group_count = (num_blocks + pipeline->key.workgroup_size - 1)
-                         / pipeline->key.workgroup_size;
-
-    pgraph_vk_begin_debug_marker(r, cmd, RGBA_PINK, __func__);
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline->pipeline);
-    vkCmdBindDescriptorSets(
-        cmd, VK_PIPELINE_BIND_POINT_COMPUTE, r->compute.pipeline_layout, 0, 1,
-        &r->compute.descriptor_sets[r->compute.descriptor_set_index - 1], 0,
-        NULL);
-
-    uint32_t push_constants[4] = { blocks_wide, blocks_high, width, height };
-    vkCmdPushConstants(cmd, r->compute.pipeline_layout,
-                       VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push_constants),
-                       push_constants);
-
-    vkCmdDispatch(cmd, group_count, 1, 1);
-    pgraph_vk_end_debug_marker(r, cmd);
-}
-
 static void pipeline_cache_entry_init(Lru *lru, LruNode *node,
                                       const void *state)
 {
@@ -950,10 +793,6 @@ static void pipeline_cache_entry_init(Lru *lru, LruNode *node,
             "layout(local_size_x = %d, local_size_y = 1, local_size_z = 1) in;\n"
             "%s", snode->key.workgroup_size, pack_depth_stencil_direct_glsl);
         layout = r->compute.direct_pipeline_layout;
-        break;
-    case COMPUTE_TYPE_BC3_DECOMPRESS:
-        glsl = get_bc3_decompress_shader_glsl(snode->key.workgroup_size);
-        layout = r->compute.pipeline_layout;
         break;
     default:
         glsl = get_compute_shader_glsl(snode->key.host_fmt, snode->key.pack,

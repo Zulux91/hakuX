@@ -196,6 +196,57 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
     }
   }
 
+  // Shader warmup progress dialog - called from native renderer init via JNI
+  private var warmupDialog: android.app.AlertDialog? = null
+  private var warmupProgressBar: android.widget.ProgressBar? = null
+  private var warmupMessageView: android.widget.TextView? = null
+
+  @Suppress("unused") // Called from native code via JNI
+  fun onShaderWarmupProgress(current: Int, total: Int) {
+    uiHandler.post {
+      if (current == 0 && total > 0) {
+        val pad = (24 * resources.displayMetrics.density).toInt()
+        val layout = android.widget.LinearLayout(this).apply {
+          orientation = android.widget.LinearLayout.VERTICAL
+          setPadding(pad, pad, pad, pad)
+        }
+        val msg = android.widget.TextView(this).apply {
+          text = "Compiling shader 0 / $total..."
+          setTextColor(android.graphics.Color.WHITE)
+        }
+        val bar = android.widget.ProgressBar(this, null,
+          android.R.attr.progressBarStyleHorizontal).apply {
+          max = total
+          progress = 0
+          val lp = android.widget.LinearLayout.LayoutParams(
+            android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+            android.widget.LinearLayout.LayoutParams.WRAP_CONTENT)
+          lp.topMargin = pad / 2
+          layoutParams = lp
+        }
+        layout.addView(msg)
+        layout.addView(bar)
+        warmupProgressBar = bar
+        warmupMessageView = msg
+
+        warmupDialog = android.app.AlertDialog.Builder(this)
+          .setTitle("Loading Shaders")
+          .setView(layout)
+          .setCancelable(false)
+          .create()
+        warmupDialog?.show()
+      } else if (current >= total) {
+        warmupDialog?.dismiss()
+        warmupDialog = null
+        warmupProgressBar = null
+        warmupMessageView = null
+      } else {
+        warmupProgressBar?.progress = current
+        warmupMessageView?.text = "Compiling shader $current / $total..."
+      }
+    }
+  }
+
   private fun flushShaderCaches() {
     val baseDir = filesDir
     val spvDir = java.io.File(baseDir, "spv_cache")

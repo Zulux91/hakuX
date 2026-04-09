@@ -913,6 +913,7 @@ static bool shader_cache_entry_compare(Lru *lru, LruNode *node, const void *key)
 }
 
 static bool shader_module_warmup_in_progress;
+static void (*shader_warmup_progress_cb)(int current, int total);
 
 void shader_module_key_persist(const ShaderModuleCacheKey *key)
 {
@@ -1090,12 +1091,23 @@ static void shader_cache_init(PGRAPHState *pg)
             }
             shader_module_warmup_in_progress = false;
 
-            VK_LOG_ERROR("Shader module warm-up: %d/%zu modules pre-compiled",
+            VK_LOG_ERROR("Shader module warm-up: %d/%zu modules enqueued",
                          warmed, num_keys);
+
+            if (warmed > 0) {
+                pgraph_vk_compile_worker_wait_idle(
+                    r, warmed, shader_warmup_progress_cb);
+                VK_LOG_ERROR("Shader module warm-up: compilation complete");
+            }
         }
         g_free(data);
         g_free(path);
     }
+}
+
+void pgraph_vk_set_shader_warmup_progress_cb(void (*cb)(int current, int total))
+{
+    shader_warmup_progress_cb = cb;
 }
 
 static void shader_cache_finalize(PGRAPHState *pg)
@@ -1293,6 +1305,12 @@ void pgraph_vk_init_shaders(PGRAPHState *pg)
     create_push_descriptor_resources(pg);
 #if OPT_ASYNC_COMPILE
     pgraph_vk_compile_worker_init(r);
+#ifdef __ANDROID__
+    {
+        extern void install_shader_warmup_progress_callback(void);
+        install_shader_warmup_progress_callback();
+    }
+#endif
 #endif
     shader_cache_init(pg);
 

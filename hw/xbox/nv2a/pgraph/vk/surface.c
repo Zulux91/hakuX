@@ -29,6 +29,18 @@
 #include "ui/xemu-settings.h"
 #include "renderer.h"
 
+/* Lightweight surface sub-timers — compiled out when profiling is off */
+#if NV2A_PERF_LOG
+#define SURF_TIMER_INIT(name)  int64_t name = nv2a_clock_ns()
+#define SURF_TIMER_SPLIT(name) name = nv2a_clock_ns()
+#define SURF_TIMER_ACC(field, since) \
+    g_nv2a_stats.surf_working.field += nv2a_clock_ns() - (since)
+#else
+#define SURF_TIMER_INIT(name)  ((void)0)
+#define SURF_TIMER_SPLIT(name) ((void)0)
+#define SURF_TIMER_ACC(field, since) ((void)0)
+#endif
+
 const int num_invalid_surfaces_to_keep = 10;  // FIXME: Make automatic
 const int max_surface_frame_time_delta = 5;
 
@@ -165,6 +177,29 @@ bool pgraph_vk_download_surfaces_in_range_if_dirty(PGRAPHState *pg,
                 OPT_STAT_INC(dif_other);
                 download_surface_deferred(d, surface);
             }
+        }
+    }
+
+    /* Also check shelved surfaces with undownloaded GPU data */
+    QTAILQ_FOREACH(surface, &r->shelved_surfaces, entry) {
+        if (!surface->shelved_dirty || !surface->draw_dirty) continue;
+        if (!surface->width || !surface->height) continue;
+        if (check_surface_overlaps_range(surface, start, size)) {
+            OPT_STAT_INC(sd_shelved_lazy_dl);
+            download_surface_deferred(d, surface);
+            surface->shelved_dirty = false;
+            found_overlap = true;
+        }
+    }
+
+    /* Also check invalidated surfaces with undownloaded GPU data */
+    QTAILQ_FOREACH(surface, &r->invalid_surfaces, entry) {
+        if (!surface->draw_dirty) continue;
+        if (!surface->width || !surface->height) continue;
+        if (check_surface_overlaps_range(surface, start, size)) {
+            OPT_STAT_INC(sd_shelved_lazy_dl);
+            download_surface_deferred(d, surface);
+            found_overlap = true;
         }
     }
 
@@ -588,7 +623,8 @@ void pgraph_vk_download_surface_complete_deferred(NV2AState *d)
         return;
     }
 
-    int64_t _t0 = nv2a_clock_ns();
+    int64_t _t0 = 0, _t1 = 0;
+    if (NV2A_PERF_LOG) _t0 = nv2a_clock_ns();
 
     if (r->display_predownload_pending) {
         /*
@@ -612,7 +648,7 @@ void pgraph_vk_download_surface_complete_deferred(NV2AState *d)
         pgraph_vk_finish(pg, VK_FINISH_REASON_SURFACE_DOWN);
     }
 
-    int64_t _t1 = nv2a_clock_ns();
+    if (NV2A_PERF_LOG) _t1 = nv2a_clock_ns();
 
     pgraph_vk_complete_staged_downloads(d, r);
 
@@ -634,8 +670,10 @@ void pgraph_vk_download_surface_complete_deferred(NV2AState *d)
         r->display_predownload_surface = NULL;
     }
 
-    g_nv2a_stats.surf_working.df_flush_ns += _t1 - _t0;
-    g_nv2a_stats.surf_working.df_read_ns += nv2a_clock_ns() - _t1;
+    if (NV2A_PERF_LOG) {
+        g_nv2a_stats.surf_working.df_flush_ns += _t1 - _t0;
+        g_nv2a_stats.surf_working.df_read_ns += nv2a_clock_ns() - _t1;
+    }
 }
 
 static void download_surface_to_buffer(NV2AState *d, SurfaceBinding *surface,
@@ -1675,12 +1713,15 @@ static void invalidate_overlapping_surfaces(NV2AState *d,
                 other_surface->vram_addr, other_surface->width,
                 other_surface->height, other_surface->pitch);
             OPT_STAT_INC(dif_overlap);
+            /*
+             * Lazy overlap: skip download now. The invalidated surface's
+             * VkImage is preserved in the invalid_surfaces list. If a
+             * texture later reads from this VRAM range, the overlap check
+             * in pgraph_vk_download_surfaces_in_range_if_dirty will
+             * download it then. Otherwise the data is never needed.
+             */
             if (other_surface->draw_dirty) {
-                if (!download_surface_record_deferred(
-                        d, other_surface,
-                        d->vram_ptr + other_surface->vram_addr)) {
-                    pgraph_vk_surface_download_if_dirty(d, other_surface);
-                }
+                OPT_STAT_INC(sd_eviction_skipped);
             }
             invalidate_surface(d, other_surface);
         }
@@ -1694,6 +1735,9 @@ static void invalidate_overlapping_surfaces(NV2AState *d,
         }
         if (check_surfaces_overlap(surface, other_surface)) {
             OPT_STAT_INC(dif_overlap_sh);
+            if (other_surface->shelved_dirty) {
+                OPT_STAT_INC(sd_shelved_lazy_dl);
+            }
             pgraph_vk_surface_download_if_dirty(d, other_surface);
             QTAILQ_REMOVE(&r->shelved_surfaces, other_surface, entry);
             deferred_downloads_clear_surface(r, other_surface);
@@ -2094,6 +2138,9 @@ static void expire_old_surfaces(NV2AState *d)
         if (last_used >= max_surface_frame_time_delta ||
             shelved_count >= max_shelved_surfaces) {
             OPT_STAT_INC(dif_expire_sh);
+            if (s->shelved_dirty) {
+                OPT_STAT_INC(sd_shelved_lazy_dl);
+            }
             pgraph_vk_surface_download_if_dirty(d, s);
             QTAILQ_REMOVE(&r->shelved_surfaces, s, entry);
             deferred_downloads_clear_surface(r, s);
@@ -2713,16 +2760,16 @@ static void update_surface_part(NV2AState *d, bool upload, bool color)
 
     g_nv2a_stats.surf_working.update_calls++;
 
-    int64_t _st0 = nv2a_clock_ns();
+    SURF_TIMER_INIT(_st0);
     SurfaceBinding target;
     memset(&target, 0, sizeof(target));
     target.invalidation_frame = -1;
     populate_surface_binding_target(d, color, &target);
-    g_nv2a_stats.surf_working.populate_ns += nv2a_clock_ns() - _st0;
+    SURF_TIMER_ACC(populate_ns, _st0);
 
     Surface *pg_surface = color ? &pg->surface_color : &pg->surface_zeta;
 
-    int64_t _st1 = nv2a_clock_ns();
+    SURF_TIMER_INIT(_st1);
     bool mem_dirty = false;
     if (!tcg_enabled()) {
         ram_addr_t start = r->vram_ram_addr + target.vram_addr;
@@ -2744,23 +2791,23 @@ static void update_surface_part(NV2AState *d, bool upload, bool color)
             page += num;
         }
     }
-    g_nv2a_stats.surf_working.dirty_ns += nv2a_clock_ns() - _st1;
+    SURF_TIMER_ACC(dirty_ns, _st1);
 
     SurfaceBinding *current_binding = color ? r->color_binding
                                             : r->zeta_binding;
 
     if (!current_binding ||
         (upload && (pg_surface->buffer_dirty || mem_dirty))) {
-        int64_t _gt0 = nv2a_clock_ns();
+        SURF_TIMER_INIT(_gt0);
         // FIXME: We don't need to be so aggressive flushing the command list
         // pgraph_vk_finish(pg, VK_FINISH_REASON_SURFACE_CREATE);
         if (r->in_render_pass) { OPT_STAT_INC(rp_break_surface); }
         pgraph_vk_ensure_not_in_render_pass(pg);
 
         unbind_surface(d, color);
-        g_nv2a_stats.surf_working.enrp_ns += nv2a_clock_ns() - _gt0;
+        SURF_TIMER_ACC(enrp_ns, _gt0);
 
-        int64_t _gt1 = nv2a_clock_ns();
+        SURF_TIMER_INIT(_gt1);
         SurfaceBinding *surface = pgraph_vk_surface_get(d, target.vram_addr);
         if (surface != NULL) {
             // FIXME: Support same color/zeta surface target? In the mean time,
@@ -2845,51 +2892,33 @@ static void update_surface_part(NV2AState *d, bool upload, bool color)
                 surface->upload_pending |= mem_dirty;
                 pg->surface_zeta.buffer_dirty |= color;
                 should_create = false;
-                g_nv2a_stats.surf_working.lk_hit_ns += nv2a_clock_ns() - _gt1;
+                SURF_TIMER_ACC(lk_hit_ns, _gt1);
             } else {
                 trace_nv2a_pgraph_surface_evict_reason(
                     "incompatible", surface->vram_addr);
                 compare_surfaces(surface, &target);
+                /*
+                 * Lazy eviction: skip downloading GPU data to VRAM now.
+                 * The shelved VkImage preserves the rendered data. Download
+                 * will happen lazily only when something actually reads the
+                 * VRAM (texture overlap, CPU read, surface expiration).
+                 * If the surface is unshelved (same format re-bound), the
+                 * VkImage is reused directly — no download needed at all.
+                 */
+                surface->shelved_dirty = surface->draw_dirty;
                 if (surface->draw_dirty) {
-                    if (r->in_command_buffer) {
-                        OPT_STAT_INC(sd_eviction);
-                        /*
-                         * Flush draws so the GPU has correct surface data.
-                         * Deferred: the fence wait is skipped here and
-                         * ordering is preserved via semaphore chaining.
-                         */
-                        pgraph_vk_finish(pg, VK_FINISH_REASON_SURFACE_DOWN_FLUSH);
-                    } else {
-                        OPT_STAT_INC(sd_eviction_nocb);
-                    }
-
-                    /*
-                     * Record deferred download of GPU-rendered content to
-                     * VRAM. The download is batched with other pending
-                     * downloads and completed in a single GPU finish at
-                     * pgraph_vk_download_surface_complete_deferred() later
-                     * in pgraph_vk_surface_update(), before any upload reads
-                     * VRAM. shelve_surface() preserves the VkImage, so the
-                     * GPU copy commands remain valid until completion.
-                     *
-                     * Falls back to inline download if staging is full.
-                     */
-                    if (!download_surface_record_deferred(
-                            d, surface,
-                            d->vram_ptr + surface->vram_addr)) {
-                        pgraph_vk_surface_download_if_dirty(d, surface);
-                    }
+                    OPT_STAT_INC(sd_eviction_skipped);
                 }
                 shelve_surface(d, surface);
-                g_nv2a_stats.surf_working.lk_evict_ns += nv2a_clock_ns() - _gt1;
+                SURF_TIMER_ACC(lk_evict_ns, _gt1);
                 g_nv2a_stats.surf_working.evict_count++;
             }
         } else {
-            g_nv2a_stats.surf_working.lk_nosurf_ns += nv2a_clock_ns() - _gt1;
+            SURF_TIMER_ACC(lk_nosurf_ns, _gt1);
         }
 
         if (should_create) {
-            int64_t _gt2 = nv2a_clock_ns();
+            SURF_TIMER_INIT(_gt2);
             bool unshelved = false;
             surface = get_shelved_surface(r, target.vram_addr, &target);
             if (surface) {
@@ -2904,7 +2933,7 @@ static void update_surface_part(NV2AState *d, bool upload, bool color)
                     create_surface_image(pg, &target);
                 }
             }
-            g_nv2a_stats.surf_working.create_ns += nv2a_clock_ns() - _gt2;
+            SURF_TIMER_ACC(create_ns, _gt2);
 
             *surface = target;
             set_surface_label(pg, surface);
@@ -2913,15 +2942,17 @@ static void update_surface_part(NV2AState *d, bool upload, bool color)
                 /*
                  * The VkImage already contains valid data from the
                  * previous binding, so skip the VRAM upload and mark
-                 * the surface as initialized.
+                 * the surface as initialized. No VRAM download was
+                 * needed — the lazy eviction saved a GPU finish.
                  */
                 surface->upload_pending = false;
                 surface->initialized = true;
+                OPT_STAT_INC(sd_shelved_unshelved);
             }
 
-            int64_t _gt3 = nv2a_clock_ns();
+            SURF_TIMER_INIT(_gt3);
             surface_put(d, surface);
-            g_nv2a_stats.surf_working.put_ns += nv2a_clock_ns() - _gt3;
+            SURF_TIMER_ACC(put_ns, _gt3);
 
             // FIXME: Refactor
             pg->surface_binding_dim.width = target.width;
@@ -2951,9 +2982,9 @@ static void update_surface_part(NV2AState *d, bool upload, bool color)
                  surface->shape.clip_x, surface->shape.clip_width,
                  surface->shape.clip_y, surface->shape.clip_height, surface->pitch);
 
-        int64_t _gt4 = nv2a_clock_ns();
+        SURF_TIMER_INIT(_gt4);
         bind_surface(r, surface);
-        g_nv2a_stats.surf_working.bind_ns += nv2a_clock_ns() - _gt4;
+        SURF_TIMER_ACC(bind_ns, _gt4);
 
         pg_surface->buffer_dirty = false;
         if (should_create) {
@@ -2966,7 +2997,7 @@ static void update_surface_part(NV2AState *d, bool upload, bool color)
     }
 
     if (!upload && pg_surface->draw_dirty) {
-        int64_t _st3 = nv2a_clock_ns();
+        SURF_TIMER_INIT(_st3);
         if (!tcg_enabled()) {
             // FIXME: Cannot monitor for reads/writes; flush now
             // Use deferred path to batch downloads across color/zeta.
@@ -2978,7 +3009,7 @@ static void update_surface_part(NV2AState *d, bool upload, bool color)
 
         pg_surface->write_enabled_cache = false;
         pg_surface->draw_dirty = false;
-        g_nv2a_stats.surf_working.download_ns += nv2a_clock_ns() - _st3;
+        SURF_TIMER_ACC(download_ns, _st3);
         g_nv2a_stats.surf_working.download_count++;
     }
 }
@@ -3048,7 +3079,7 @@ void pgraph_vk_surface_update(NV2AState *d, bool upload, bool color_write,
     bool swizzle = (pg->surface_type == NV097_SET_SURFACE_FORMAT_TYPE_SWIZZLE);
 
     {
-        int64_t _su0 = nv2a_clock_ns();
+        SURF_TIMER_INIT(_su0);
         if (r->color_binding) {
             r->color_binding->frame_time = pg->frame_time;
             if (upload) {
@@ -3068,7 +3099,7 @@ void pgraph_vk_surface_update(NV2AState *d, bool upload, bool color_write,
                 g_nv2a_stats.surf_working.upload_count++;
             }
         }
-        g_nv2a_stats.surf_working.upload_ns += nv2a_clock_ns() - _su0;
+        SURF_TIMER_ACC(upload_ns, _su0);
     }
 
     // Sanity check color and zeta dimensions match
@@ -3078,10 +3109,10 @@ void pgraph_vk_surface_update(NV2AState *d, bool upload, bool color_write,
     }
 
     {
-        int64_t _se0 = nv2a_clock_ns();
+        SURF_TIMER_INIT(_se0);
         expire_old_surfaces(d);
         prune_invalid_surfaces(r, num_invalid_surfaces_to_keep);
-        g_nv2a_stats.surf_working.expire_ns += nv2a_clock_ns() - _se0;
+        SURF_TIMER_ACC(expire_ns, _se0);
     }
 
     NV2A_PHASE_TIMER_END_EXCL(surface_update);

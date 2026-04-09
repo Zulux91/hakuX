@@ -106,8 +106,17 @@ struct OptBisectStats {
     int tex_pool_hits;
     int tex_pool_misses;
     int tex_cache_evictions;
+    int tex_cache_oom_evictions;
     int tex_cache_uploads;
     int tex_cache_hash_misses;
+    int tex_cache_misses;
+    int tex_zero_uploads;
+    int tex_zero_reupload;
+    int draws_skipped_no_pipeline;
+    int draws_skipped_null_pipeline;
+    int sd_eviction_skipped;
+    int sd_shelved_unshelved;
+    int sd_shelved_lazy_dl;
     int sync_range_skip;
     int sync_early_exit;
     int draw_merge_enqueued;
@@ -285,6 +294,7 @@ typedef struct SurfaceBinding {
     int frame_time;
     int draw_time;
     bool draw_dirty;
+    bool shelved_dirty;  /* Shelved without downloading GPU data to VRAM */
     bool download_pending;
     bool upload_pending;
 
@@ -831,7 +841,6 @@ typedef enum {
     COMPUTE_TYPE_SWIZZLE = 1,
     COMPUTE_TYPE_UNSWIZZLE = 2,
     COMPUTE_TYPE_DEPTH_STENCIL_DIRECT = 3,
-    COMPUTE_TYPE_BC3_DECOMPRESS = 4,
 } ComputeType;
 
 typedef struct ComputePipelineKey {
@@ -1498,13 +1507,6 @@ void pgraph_vk_compute_swizzle(PGRAPHState *pg, VkCommandBuffer cmd,
                                 VkBuffer dst, size_t dst_size,
                                 unsigned int width, unsigned int height,
                                 bool unswizzle);
-void pgraph_vk_compute_bc3_decompress(PGRAPHState *pg, VkCommandBuffer cmd,
-                                       VkBuffer src, VkDeviceSize src_offset,
-                                       size_t src_size,
-                                       VkBuffer dst, VkDeviceSize dst_offset,
-                                       size_t dst_size,
-                                       unsigned int width,
-                                       unsigned int height);
 
 // display.c
 void pgraph_vk_init_display(PGRAPHState *pg);
@@ -1521,12 +1523,17 @@ bool pgraph_vk_check_textures_fast_skip(PGRAPHState *pg);
 void pgraph_vk_mark_textures_possibly_dirty(NV2AState *d, hwaddr addr,
                                             hwaddr size);
 void pgraph_vk_trim_texture_cache(PGRAPHState *pg);
+void pgraph_vk_trim_texture_cache_bytes(PGRAPHState *pg, size_t bytes_to_free);
 
 // compile_worker.c
 #if OPT_ASYNC_COMPILE
 void pgraph_vk_compile_worker_init(PGRAPHVkState *r);
 void pgraph_vk_compile_worker_shutdown(PGRAPHVkState *r);
 void pgraph_vk_compile_worker_enqueue(PGRAPHVkState *r, CompileJob *job);
+void pgraph_vk_compile_worker_wait_idle(PGRAPHVkState *r,
+                                        int total_jobs,
+                                        void (*progress_cb)(int current,
+                                                            int total));
 #endif
 
 // submit_worker.c
@@ -1566,6 +1573,7 @@ void pgraph_vk_draw_begin(NV2AState *d);
 void pgraph_vk_draw_end(NV2AState *d);
 void pgraph_vk_finish(PGRAPHState *pg, FinishReason why);
 void pgraph_vk_flush_all_frames(PGRAPHState *pg);
+void end_render_pass(PGRAPHVkState *r);
 void pgraph_vk_flush_draw(NV2AState *d);
 void pgraph_vk_flush_draw_queue(NV2AState *d);
 void pgraph_vk_flush_reorder_window(NV2AState *d);
